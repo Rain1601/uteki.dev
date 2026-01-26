@@ -57,10 +57,11 @@ pnpm dev
 
 ### 📚 详细文档
 
-- [完整部署指南](docs/DEPLOYMENT_GUIDE.md) - Linux服务器部署、生产环境配置
-- [数据库策略](docs/DATABASE_STRATEGY.md) - 多数据库架构、降级方案
-- [常见问题](docs/FAQ.md) - 数据库配置、API密钥管理
-- [数据分发策略](docs/DATA_DISTRIBUTION.md) - 首次使用数据获取方案
+- **[在线文档站点](https://uteki-open.vercel.app)** (推荐)
+- [快速启动](QUICKSTART.md) - 5分钟本地部署
+- [贡献指南](CONTRIBUTING.md) - 代码规范和提交流程
+- [架构设计](docs/ARCHITECTURE.md) - Agent扩展策略
+- [完整部署指南](docs/DEPLOYMENT_GUIDE.md) - 生产环境配置
 
 ## Configuration
 
