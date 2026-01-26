@@ -11,64 +11,56 @@ Open-source AI-powered quantitative trading platform for individual traders.
 - **Enterprise-Grade Evaluation**: OpenAI Evals + Anthropic alignment testing
 - **One-Command Deployment**: Docker Compose for local setup
 
-## Quick Start
+## Quick Start (5分钟)
 
-### Prerequisites
+### 🎯 一键部署
 
-- Python 3.10+
-- Poetry
-- Docker & Docker Compose
-- Node.js 18+ (for frontend)
+```bash
+# 1. 克隆项目
+git clone https://github.com/yourusername/uteki.open.git
+cd uteki.open
 
-### Installation
+# 2. 启动所有数据库 (PostgreSQL, Redis, ClickHouse, Qdrant, MinIO)
+./scripts/start-full.sh
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/uteki.open.git
-   cd uteki.open
-   ```
+# 3. 初始化数据库表
+cd backend
+poetry install
+poetry run python ../scripts/init_database.py
 
-2. **Start all services**
-   ```bash
-   docker compose up -d
-   ```
+# 4. 启动后端
+poetry run python -m uteki.main
 
-3. **Install backend dependencies**
-   ```bash
-   cd backend
-   poetry install --all-extras
-   ```
+# 5. 在新终端启动前端
+cd frontend
+pnpm install
+pnpm dev
+```
 
-4. **Run database migrations**
-   ```bash
-   poetry run alembic upgrade head
-   ```
+### 🔍 验证系统
 
-5. **Seed initial data** (optional)
-   ```bash
-   poetry run python scripts/seed_data.py
-   ```
+```bash
+# 运行完整性验证脚本
+./scripts/verify_system.sh
+```
 
-6. **Start backend server**
-   ```bash
-   poetry run uvicorn uteki.main:app --reload
-   ```
+### 📍 访问地址
 
-7. **Install frontend dependencies**
-   ```bash
-   cd ../frontend
-   npm install
-   ```
+- **后端API文档**: http://localhost:8000/docs
+- **后端健康检查**: http://localhost:8000/health
+- **前端界面**: http://localhost:5173
+- **MinIO控制台**: http://localhost:9001 (uteki / uteki_dev_pass)
 
-8. **Start frontend dev server**
-   ```bash
-   npm run dev
-   ```
+### ❓ 关于数据库"注册"
 
-9. **Access the application**
-   - Frontend: http://localhost:5173
-   - Backend API: http://localhost:8000
-   - API Docs: http://localhost:8000/docs
+**重要**: PostgreSQL、ClickHouse、Redis等数据库**无需注册或申请账号**。它们是开源软件，通过Docker本地运行，配置信息都在`docker-compose.yml`中预定义。详见 [FAQ.md](docs/FAQ.md)
+
+### 📚 详细文档
+
+- [完整部署指南](docs/DEPLOYMENT_GUIDE.md) - Linux服务器部署、生产环境配置
+- [数据库策略](docs/DATABASE_STRATEGY.md) - 多数据库架构、降级方案
+- [常见问题](docs/FAQ.md) - 数据库配置、API密钥管理
+- [数据分发策略](docs/DATA_DISTRIBUTION.md) - 首次使用数据获取方案
 
 ## Configuration
 
@@ -142,11 +134,11 @@ poetry run ruff format .
 
 ## Documentation
 
-- [Installation Guide](docs/INSTALL.md)
-- [Configuration Guide](docs/CONFIGURATION.md)
-- [User Guide](docs/USER_GUIDE.md)
-- [Developer Guide](docs/DEVELOPMENT.md)
-- [API Reference](http://localhost:8000/docs)
+- [部署指南 Deployment Guide](docs/DEPLOYMENT_GUIDE.md) - 完整部署文档（macOS/Linux）
+- [常见问题 FAQ](docs/FAQ.md) - 数据库配置、注册说明
+- [数据库策略 Database Strategy](docs/DATABASE_STRATEGY.md) - 多数据库架构
+- [数据分发 Data Distribution](docs/DATA_DISTRIBUTION.md) - 数据获取方案
+- [API Reference](http://localhost:8000/docs) - 在线API文档
 
 ## License
 

@@ -33,6 +33,15 @@ class DatabaseManager:
         self.redis_available = False
         self.minio_available = False
 
+        # Database clients
+        self.postgres_engine = None
+        self.postgres_session_factory = None
+        self.redis_pool = None
+        self.redis_client = None
+        self.clickhouse_client = None
+        self.qdrant_client = None
+        self.minio_client = None
+
         # Fallback flags
         self.use_postgres_for_analytics = False  # Fallback when ClickHouse down
         self.disable_agent_memory = False  # Fallback when Qdrant down
@@ -88,51 +97,124 @@ class DatabaseManager:
     async def _init_postgres(self) -> bool:
         """Initialize PostgreSQL connection"""
         try:
-            # TODO: Actual connection logic
-            logger.info("PostgreSQL connection established")
+            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+            from sqlalchemy.orm import sessionmaker
+            from uteki.common.config import settings
+
+            # 创建异步引擎
+            self.postgres_engine = create_async_engine(
+                settings.postgres_url,
+                echo=settings.debug,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True
+            )
+
+            # 创建会话工厂
+            self.postgres_session_factory = sessionmaker(
+                self.postgres_engine,
+                class_=AsyncSession,
+                expire_on_commit=False
+            )
+
+            # 测试连接
+            async with self.postgres_engine.begin() as conn:
+                await conn.execute("SELECT 1")
+
+            logger.info("✓ PostgreSQL connection established")
             return True
         except Exception as e:
-            logger.error(f"PostgreSQL connection failed: {e}")
+            logger.error(f"✗ PostgreSQL connection failed: {e}")
             return False
 
     async def _init_redis(self) -> bool:
         """Initialize Redis connection"""
         try:
-            # TODO: Actual connection logic
-            logger.info("Redis connection established")
+            import redis.asyncio as redis
+            from uteki.common.config import settings
+
+            # 创建Redis连接池
+            self.redis_pool = redis.ConnectionPool.from_url(
+                settings.redis_url,
+                max_connections=10,
+                decode_responses=True
+            )
+            self.redis_client = redis.Redis(connection_pool=self.redis_pool)
+
+            # 测试连接
+            await self.redis_client.ping()
+
+            logger.info("✓ Redis connection established")
             return True
         except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
+            logger.error(f"✗ Redis connection failed: {e}")
             return False
 
     async def _init_clickhouse(self) -> bool:
         """Initialize ClickHouse connection"""
         try:
-            # TODO: Actual connection logic
-            logger.info("ClickHouse connection established")
+            from clickhouse_driver import Client
+            from uteki.common.config import settings
+
+            # 创建ClickHouse客户端
+            self.clickhouse_client = Client(
+                host=settings.clickhouse_host,
+                port=settings.clickhouse_port,
+                database=settings.clickhouse_db
+            )
+
+            # 测试连接
+            self.clickhouse_client.execute("SELECT 1")
+
+            logger.info("✓ ClickHouse connection established")
             return True
         except Exception as e:
-            logger.error(f"ClickHouse connection failed: {e}")
+            logger.error(f"✗ ClickHouse connection failed: {e}")
             return False
 
     async def _init_qdrant(self) -> bool:
         """Initialize Qdrant connection"""
         try:
-            # TODO: Actual connection logic
-            logger.info("Qdrant connection established")
+            from qdrant_client import QdrantClient
+            from uteki.common.config import settings
+
+            # 创建Qdrant客户端
+            self.qdrant_client = QdrantClient(
+                host=settings.qdrant_host,
+                port=settings.qdrant_port,
+                timeout=5.0
+            )
+
+            # 测试连接
+            self.qdrant_client.get_collections()
+
+            logger.info("✓ Qdrant connection established")
             return True
         except Exception as e:
-            logger.error(f"Qdrant connection failed: {e}")
+            logger.error(f"✗ Qdrant connection failed: {e}")
             return False
 
     async def _init_minio(self) -> bool:
         """Initialize MinIO connection"""
         try:
-            # TODO: Actual connection logic
-            logger.info("MinIO connection established")
+            from minio import Minio
+            from uteki.common.config import settings
+
+            # 创建MinIO客户端
+            self.minio_client = Minio(
+                settings.minio_endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                secure=settings.minio_secure
+            )
+
+            # 测试连接
+            self.minio_client.list_buckets()
+
+            logger.info("✓ MinIO connection established")
             return True
         except Exception as e:
-            logger.error(f"MinIO connection failed: {e}")
+            logger.error(f"✗ MinIO connection failed: {e}")
             return False
 
     def _log_status(self):
@@ -174,6 +256,74 @@ class DatabaseManager:
             )
 
     @asynccontextmanager
+    async def get_postgres_session(self):
+        """
+        Get PostgreSQL session
+
+        Usage:
+            async with db_manager.get_postgres_session() as session:
+                result = await session.execute(stmt)
+        """
+        if not self.postgres_available:
+            raise RuntimeError("PostgreSQL is not available")
+
+        async with self.postgres_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    async def get_redis(self):
+        """
+        Get Redis client
+
+        Usage:
+            redis = await db_manager.get_redis()
+            await redis.set("key", "value")
+        """
+        if not self.redis_available:
+            raise RuntimeError("Redis is not available")
+        return self.redis_client
+
+    def get_clickhouse(self):
+        """
+        Get ClickHouse client
+
+        Usage:
+            ch = db_manager.get_clickhouse()
+            result = ch.execute("SELECT ...")
+        """
+        if not self.clickhouse_available:
+            raise RuntimeError("ClickHouse is not available")
+        return self.clickhouse_client
+
+    def get_qdrant(self):
+        """
+        Get Qdrant client
+
+        Usage:
+            qdrant = db_manager.get_qdrant()
+            qdrant.search(...)
+        """
+        if not self.qdrant_available:
+            raise RuntimeError("Qdrant is not available")
+        return self.qdrant_client
+
+    def get_minio(self):
+        """
+        Get MinIO client
+
+        Usage:
+            minio = db_manager.get_minio()
+            minio.put_object(...)
+        """
+        if not self.minio_available:
+            raise RuntimeError("MinIO is not available")
+        return self.minio_client
+
+    @asynccontextmanager
     async def get_analytics_db(self):
         """
         Get analytics database connection (ClickHouse or PostgreSQL fallback)
@@ -183,12 +333,11 @@ class DatabaseManager:
                 results = await db.query("SELECT ...")
         """
         if self.clickhouse_available:
-            # TODO: Return ClickHouse connection
-            yield None  # Placeholder
+            yield self.clickhouse_client
         elif self.use_postgres_for_analytics:
             logger.warning("Using PostgreSQL for analytics (slower performance)")
-            # TODO: Return PostgreSQL connection
-            yield None  # Placeholder
+            async with self.get_postgres_session() as session:
+                yield session
         else:
             raise RuntimeError("No analytics database available")
 
