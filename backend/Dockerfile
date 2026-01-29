@@ -23,5 +23,5 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-# 启动服务 - 使用最小化测试应用进行首次部署测试
-CMD uvicorn test_main:app --host 0.0.0.0 --port $PORT
+# 启动服务（数据库表自动创建在应用启动时）
+CMD uvicorn uteki.main:app --host 0.0.0.0 --port $PORT
