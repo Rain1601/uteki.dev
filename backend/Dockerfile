@@ -14,7 +14,7 @@ COPY pyproject.toml poetry.lock* ./
 # 安装 Poetry 和依赖
 RUN pip install poetry && \
     poetry config virtualenvs.create false && \
-    poetry install --without dev --no-interaction --no-ansi
+    poetry install --without dev --no-root --no-interaction --no-ansi
 
 # 复制应用代码
 COPY . .
