@@ -29,19 +29,19 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCP
-        run: gcloud auth configure-docker
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker $GCP_REGION-docker.pkg.dev
 
       - name: Build Docker image
         run: |
           cd backend
-          docker build -t gcr.io/$GCP_PROJECT_ID/$BACKEND_SERVICE:$GITHUB_SHA .
-          docker push gcr.io/$GCP_PROJECT_ID/$BACKEND_SERVICE:$GITHUB_SHA
+          docker build -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$BACKEND_SERVICE/$BACKEND_SERVICE:$GITHUB_SHA .
+          docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$BACKEND_SERVICE/$BACKEND_SERVICE:$GITHUB_SHA
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy $BACKEND_SERVICE \
-            --image gcr.io/$GCP_PROJECT_ID/$BACKEND_SERVICE:$GITHUB_SHA \
+            --image $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$BACKEND_SERVICE/$BACKEND_SERVICE:$GITHUB_SHA \
             --region $GCP_REGION \
             --platform managed \
             --allow-unauthenticated \
@@ -82,8 +82,8 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCP
-        run: gcloud auth configure-docker
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker $GCP_REGION-docker.pkg.dev
 
       - name: Get Backend URL
         id: get-backend-url
@@ -98,13 +98,13 @@ jobs:
             --build-arg VITE_API_URL=${{ steps.get-backend-url.outputs.backend_url }} \
             --build-arg VITE_GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }} \
             --build-arg VITE_GITHUB_CLIENT_ID=${{ secrets.GH_CLIENT_ID }} \
-            -t gcr.io/$GCP_PROJECT_ID/$FRONTEND_SERVICE:$GITHUB_SHA .
-          docker push gcr.io/$GCP_PROJECT_ID/$FRONTEND_SERVICE:$GITHUB_SHA
+            -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$FRONTEND_SERVICE/$FRONTEND_SERVICE:$GITHUB_SHA .
+          docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$FRONTEND_SERVICE/$FRONTEND_SERVICE:$GITHUB_SHA
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy $FRONTEND_SERVICE \
-            --image gcr.io/$GCP_PROJECT_ID/$FRONTEND_SERVICE:$GITHUB_SHA \
+            --image $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$FRONTEND_SERVICE/$FRONTEND_SERVICE:$GITHUB_SHA \
             --region $GCP_REGION \
             --platform managed \
             --allow-unauthenticated \
