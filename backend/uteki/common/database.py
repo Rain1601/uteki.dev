@@ -1,9 +1,12 @@
 """
 Database connection management with graceful degradation.
 
-Tier 1 (Critical): PostgreSQL, Redis
-Tier 2 (Important): ClickHouse
+Tier 1 (Critical): PostgreSQL
+Tier 2 (Important): Redis, ClickHouse
 Tier 3 (Optional): Qdrant, MinIO
+
+Note: Admin Domain currently only requires PostgreSQL.
+Redis will be used for caching and task queues in future domains.
 """
 
 from typing import Optional
@@ -18,10 +21,11 @@ class DatabaseManager:
     Manages database connections with fallback strategies.
 
     Degradation Tiers:
-    - Tier 1 (Critical): PostgreSQL + Redis
-      - Without these: System cannot start
-    - Tier 2 (Important): ClickHouse
-      - Fallback: Use PostgreSQL for analytics (slower, but functional)
+    - Tier 1 (Critical): PostgreSQL
+      - Without it: System cannot start
+    - Tier 2 (Important): Redis, ClickHouse
+      - Redis Fallback: Use in-memory cache, synchronous task execution
+      - ClickHouse Fallback: Use PostgreSQL for analytics (slower, but functional)
     - Tier 3 (Optional): Qdrant, MinIO
       - Fallback: Disable agent memory, file uploads
     """
@@ -49,20 +53,22 @@ class DatabaseManager:
 
     async def initialize(self):
         """Initialize all database connections and determine availability"""
-        # Try PostgreSQL (Critical - Tier 1)
+        # Try database (Critical - Tier 1) - SQLite or PostgreSQL
         self.postgres_available = await self._init_postgres()
         if not self.postgres_available:
+            from uteki.common.config import settings
+            db_type = "SQLite" if settings.database_type == "sqlite" else "PostgreSQL"
             raise RuntimeError(
-                "PostgreSQL is not available. This is a critical dependency. "
-                "Please start PostgreSQL with: docker compose up -d postgres"
+                f"{db_type} is not available. This is a critical dependency. "
+                f"Check your configuration and database setup."
             )
 
-        # Try Redis (Critical - Tier 1)
+        # Try Redis (Important - Tier 2)
         self.redis_available = await self._init_redis()
         if not self.redis_available:
-            raise RuntimeError(
-                "Redis is not available. This is a critical dependency. "
-                "Please start Redis with: docker compose up -d redis"
+            logger.warning(
+                "Redis is not available. Caching and async tasks will be degraded. "
+                "For better performance, start Redis with: docker compose up -d redis"
             )
 
         # Try ClickHouse (Important - Tier 2)
@@ -95,20 +101,31 @@ class DatabaseManager:
         self._log_status()
 
     async def _init_postgres(self) -> bool:
-        """Initialize PostgreSQL connection"""
+        """Initialize database connection (PostgreSQL or SQLite)"""
         try:
             from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
             from sqlalchemy.orm import sessionmaker
             from uteki.common.config import settings
 
+            # 根据配置选择数据库类型
+            database_url = settings.database_url
+            is_sqlite = settings.database_type == "sqlite"
+
             # 创建异步引擎
-            self.postgres_engine = create_async_engine(
-                settings.postgres_url,
-                echo=settings.debug,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True
-            )
+            engine_kwargs = {
+                "echo": settings.debug,
+            }
+
+            # SQLite和PostgreSQL的配置不同
+            if not is_sqlite:
+                engine_kwargs.update({
+                    "pool_size": 10,
+                    "max_overflow": 20,
+                    "pool_pre_ping": True,
+                    "connect_args": {"ssl": "require"}  # Supabase需要SSL连接
+                })
+
+            self.postgres_engine = create_async_engine(database_url, **engine_kwargs)
 
             # 创建会话工厂
             self.postgres_session_factory = sessionmaker(
@@ -118,13 +135,16 @@ class DatabaseManager:
             )
 
             # 测试连接
+            from sqlalchemy import text
             async with self.postgres_engine.begin() as conn:
-                await conn.execute("SELECT 1")
+                await conn.execute(text("SELECT 1"))
 
-            logger.info("✓ PostgreSQL connection established")
+            db_type = "SQLite" if is_sqlite else "PostgreSQL"
+            logger.info(f"✓ {db_type} connection established")
             return True
         except Exception as e:
-            logger.error(f"✗ PostgreSQL connection failed: {e}")
+            db_type = "SQLite" if settings.database_type == "sqlite" else "PostgreSQL"
+            logger.error(f"✗ {db_type} connection failed: {e}")
             return False
 
     async def _init_redis(self) -> bool:
