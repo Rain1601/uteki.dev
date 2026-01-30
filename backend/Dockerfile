@@ -23,5 +23,8 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
+# 添加启动脚本执行权限
+RUN chmod +x start.sh
+
 # 启动服务（数据库表自动创建在应用启动时）
-CMD uvicorn uteki.main:app --host 0.0.0.0 --port $PORT
+CMD ["./start.sh"]
