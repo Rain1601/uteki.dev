@@ -32,12 +32,19 @@ async def lifespan(app: FastAPI):
 
 async def initialize_databases():
     """后台初始化数据库连接"""
+    global db_init_error
     try:
         await db_manager.initialize()
         logger.info("Database initialization completed")
+        db_init_error = None
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
+        db_init_error = str(e)
         # Don't crash the app, continue with degraded functionality
+
+
+# Global variable to store initialization error
+db_init_error = "Not initialized yet"
 
 
 # 创建FastAPI应用
@@ -83,6 +90,18 @@ async def startup_probe():
     Returns immediately to satisfy Cloud Run startup requirements
     """
     return {"status": "ok"}
+
+
+@app.get("/debug/db-init")
+async def debug_db_init():
+    """
+    Debug endpoint to check database initialization status and errors
+    """
+    return {
+        "db_init_error": db_init_error,
+        "postgres_available": db_manager.postgres_available,
+        "redis_available": db_manager.redis_available
+    }
 
 
 @app.get("/health")
