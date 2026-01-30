@@ -118,11 +118,16 @@ class DatabaseManager:
 
             # SQLite和PostgreSQL的配置不同
             if not is_sqlite:
+                import ssl
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
                 engine_kwargs.update({
                     "pool_size": 10,
                     "max_overflow": 20,
                     "pool_pre_ping": True,
-                    "connect_args": {"ssl": "require"}  # Supabase需要SSL连接
+                    "connect_args": {"ssl": ssl_context}  # Supabase需要SSL连接
                 })
 
             self.postgres_engine = create_async_engine(database_url, **engine_kwargs)
