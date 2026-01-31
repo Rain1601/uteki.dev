@@ -174,10 +174,9 @@ async def api_status():
 
 
 # 导入domain路由
-# NOTE: Refactored to use FastAPI dependency injection (Depends) pattern
-# All service instances are now created per-request instead of at module level
-# This avoids slow module imports and startup timeout issues on Cloud Run
-from uteki.domains.admin.api import router as admin_router
+# NOTE: Testing agent router only first (fewer endpoints, faster startup)
+# Admin router has 37 endpoints which may still cause slow imports due to Pydantic schema validation
+# from uteki.domains.admin.api import router as admin_router
 from uteki.domains.agent.api import router as agent_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
@@ -185,7 +184,7 @@ from uteki.domains.agent.api import router as agent_router
 # from uteki.domains.dashboard.api import router as dashboard_router  # 待实现
 
 # 注册domain路由
-app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+# app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
