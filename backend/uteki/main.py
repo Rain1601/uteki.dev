@@ -174,19 +174,18 @@ async def api_status():
 
 
 # 导入domain路由
-# NOTE: Domain routers temporarily disabled due to Cloud Run startup timeout
-# The issue: service instances are created at module level, causing slow imports
-# TODO: Refactor services to use lazy initialization or dependency injection
-# from uteki.domains.admin.api import router as admin_router
-# from uteki.domains.agent.api import router as agent_router
+# NOTE: Database initialization moved to background to avoid blocking startup
+# Re-enabling admin and agent routers to test with background DB init
+from uteki.domains.admin.api import router as admin_router
+from uteki.domains.agent.api import router as agent_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
 # from uteki.domains.dashboard.api import router as dashboard_router  # 待实现
 
 # 注册domain路由
-# app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
-# app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现
