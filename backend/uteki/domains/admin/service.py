@@ -8,12 +8,23 @@ from cryptography.fernet import Fernet
 import base64
 import os
 
-from uteki.domains.admin.models import APIKey, User, SystemConfig, AuditLog
+from uteki.domains.admin.models import (
+    APIKey,
+    User,
+    SystemConfig,
+    AuditLog,
+    LLMProvider,
+    ExchangeConfig,
+    DataSourceConfig,
+)
 from uteki.domains.admin.repository import (
     APIKeyRepository,
     UserRepository,
     SystemConfigRepository,
     AuditLogRepository,
+    LLMProviderRepository,
+    ExchangeConfigRepository,
+    DataSourceConfigRepository,
 )
 from uteki.domains.admin import schemas
 
@@ -286,9 +297,230 @@ class AuditLogService:
         return await AuditLogRepository.list_all(session, skip, limit)
 
 
-# 全局服务实例
-encryption_service = EncryptionService()
-api_key_service = APIKeyService(encryption_service)
-user_service = UserService()
-system_config_service = SystemConfigService()
-audit_log_service = AuditLogService()
+class LLMProviderService:
+    """LLM提供商服务"""
+
+    async def create_provider(
+        self, session: AsyncSession, data: schemas.LLMProviderCreate
+    ) -> LLMProvider:
+        """创建LLM提供商配置"""
+        provider = LLMProvider(
+            provider=data.provider,
+            model=data.model,
+            api_key_id=data.api_key_id,
+            display_name=data.display_name,
+            config=data.config,
+            is_default=data.is_default,
+            is_active=data.is_active,
+            priority=data.priority,
+            description=data.description,
+        )
+        return await LLMProviderRepository.create(session, provider)
+
+    async def get_provider(
+        self, session: AsyncSession, provider_id: str
+    ) -> Optional[LLMProvider]:
+        """获取LLM提供商"""
+        return await LLMProviderRepository.get_by_id(session, provider_id)
+
+    async def get_default_provider(
+        self, session: AsyncSession
+    ) -> Optional[LLMProvider]:
+        """获取默认LLM提供商"""
+        return await LLMProviderRepository.get_default_provider(session)
+
+    async def list_providers(
+        self, session: AsyncSession, skip: int = 0, limit: int = 100
+    ) -> Tuple[List[LLMProvider], int]:
+        """列出所有LLM提供商"""
+        return await LLMProviderRepository.list_all(session, skip, limit)
+
+    async def list_active_providers(
+        self, session: AsyncSession
+    ) -> List[LLMProvider]:
+        """列出激活的LLM提供商"""
+        return await LLMProviderRepository.list_active_providers(session)
+
+    async def update_provider(
+        self, session: AsyncSession, provider_id: str, data: schemas.LLMProviderUpdate
+    ) -> Optional[LLMProvider]:
+        """更新LLM提供商"""
+        update_data = data.dict(exclude_unset=True)
+        return await LLMProviderRepository.update(session, provider_id, **update_data)
+
+    async def delete_provider(
+        self, session: AsyncSession, provider_id: str
+    ) -> bool:
+        """删除LLM提供商"""
+        return await LLMProviderRepository.delete(session, provider_id)
+
+
+class ExchangeConfigService:
+    """交易所配置服务"""
+
+    async def create_exchange(
+        self, session: AsyncSession, data: schemas.ExchangeConfigCreate
+    ) -> ExchangeConfig:
+        """创建交易所配置"""
+        exchange = ExchangeConfig(
+            exchange=data.exchange,
+            api_key_id=data.api_key_id,
+            display_name=data.display_name,
+            trading_enabled=data.trading_enabled,
+            spot_enabled=data.spot_enabled,
+            futures_enabled=data.futures_enabled,
+            max_position_size=data.max_position_size,
+            risk_config=data.risk_config,
+            exchange_config=data.exchange_config,
+            is_active=data.is_active,
+            description=data.description,
+        )
+        return await ExchangeConfigRepository.create(session, exchange)
+
+    async def get_exchange(
+        self, session: AsyncSession, config_id: str
+    ) -> Optional[ExchangeConfig]:
+        """获取交易所配置"""
+        return await ExchangeConfigRepository.get_by_id(session, config_id)
+
+    async def get_exchange_by_name(
+        self, session: AsyncSession, exchange: str
+    ) -> Optional[ExchangeConfig]:
+        """根据交易所名称获取配置"""
+        return await ExchangeConfigRepository.get_by_exchange(session, exchange)
+
+    async def list_exchanges(
+        self, session: AsyncSession, skip: int = 0, limit: int = 100
+    ) -> Tuple[List[ExchangeConfig], int]:
+        """列出所有交易所配置"""
+        return await ExchangeConfigRepository.list_all(session, skip, limit)
+
+    async def list_active_exchanges(
+        self, session: AsyncSession
+    ) -> List[ExchangeConfig]:
+        """列出激活的交易所配置"""
+        return await ExchangeConfigRepository.list_active_exchanges(session)
+
+    async def update_exchange(
+        self, session: AsyncSession, config_id: str, data: schemas.ExchangeConfigUpdate
+    ) -> Optional[ExchangeConfig]:
+        """更新交易所配置"""
+        update_data = data.dict(exclude_unset=True)
+        return await ExchangeConfigRepository.update(session, config_id, **update_data)
+
+    async def delete_exchange(
+        self, session: AsyncSession, config_id: str
+    ) -> bool:
+        """删除交易所配置"""
+        return await ExchangeConfigRepository.delete(session, config_id)
+
+
+class DataSourceConfigService:
+    """数据源配置服务"""
+
+    async def create_data_source(
+        self, session: AsyncSession, data: schemas.DataSourceConfigCreate
+    ) -> DataSourceConfig:
+        """创建数据源配置"""
+        data_source = DataSourceConfig(
+            source_type=data.source_type,
+            api_key_id=data.api_key_id,
+            display_name=data.display_name,
+            data_types=data.data_types,
+            refresh_interval=data.refresh_interval,
+            priority=data.priority,
+            source_config=data.source_config,
+            is_active=data.is_active,
+            description=data.description,
+        )
+        return await DataSourceConfigRepository.create(session, data_source)
+
+    async def get_data_source(
+        self, session: AsyncSession, config_id: str
+    ) -> Optional[DataSourceConfig]:
+        """获取数据源配置"""
+        return await DataSourceConfigRepository.get_by_id(session, config_id)
+
+    async def get_data_source_by_type(
+        self, session: AsyncSession, source_type: str
+    ) -> Optional[DataSourceConfig]:
+        """根据数据源类型获取配置"""
+        return await DataSourceConfigRepository.get_by_source_type(session, source_type)
+
+    async def list_data_sources(
+        self, session: AsyncSession, skip: int = 0, limit: int = 100
+    ) -> Tuple[List[DataSourceConfig], int]:
+        """列出所有数据源配置"""
+        return await DataSourceConfigRepository.list_all(session, skip, limit)
+
+    async def list_active_data_sources(
+        self, session: AsyncSession
+    ) -> List[DataSourceConfig]:
+        """列出激活的数据源配置"""
+        return await DataSourceConfigRepository.list_active_sources(session)
+
+    async def list_by_data_type(
+        self, session: AsyncSession, data_type: str
+    ) -> List[DataSourceConfig]:
+        """根据数据类型列出数据源"""
+        return await DataSourceConfigRepository.list_by_data_type(session, data_type)
+
+    async def update_data_source(
+        self, session: AsyncSession, config_id: str, data: schemas.DataSourceConfigUpdate
+    ) -> Optional[DataSourceConfig]:
+        """更新数据源配置"""
+        update_data = data.dict(exclude_unset=True)
+        return await DataSourceConfigRepository.update(session, config_id, **update_data)
+
+    async def delete_data_source(
+        self, session: AsyncSession, config_id: str
+    ) -> bool:
+        """删除数据源配置"""
+        return await DataSourceConfigRepository.delete(session, config_id)
+
+
+# 依赖注入工厂函数（用于 FastAPI Depends）
+# 这些函数在请求时才创建服务实例，避免模块导入时的性能开销
+
+def get_encryption_service() -> EncryptionService:
+    """获取加密服务实例"""
+    return EncryptionService()
+
+
+def get_api_key_service(
+    encryption_service: EncryptionService = None
+) -> APIKeyService:
+    """获取 API Key 服务实例"""
+    if encryption_service is None:
+        encryption_service = get_encryption_service()
+    return APIKeyService(encryption_service)
+
+
+def get_user_service() -> UserService:
+    """获取用户服务实例"""
+    return UserService()
+
+
+def get_system_config_service() -> SystemConfigService:
+    """获取系统配置服务实例"""
+    return SystemConfigService()
+
+
+def get_audit_log_service() -> AuditLogService:
+    """获取审计日志服务实例"""
+    return AuditLogService()
+
+
+def get_llm_provider_service() -> LLMProviderService:
+    """获取 LLM Provider 服务实例"""
+    return LLMProviderService()
+
+
+def get_exchange_config_service() -> ExchangeConfigService:
+    """获取交易所配置服务实例"""
+    return ExchangeConfigService()
+
+
+def get_data_source_config_service() -> DataSourceConfigService:
+    """获取数据源配置服务实例"""
+    return DataSourceConfigService()
