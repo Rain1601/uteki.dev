@@ -38,6 +38,14 @@ jobs:
           docker build -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$BACKEND_SERVICE/$BACKEND_SERVICE:$GITHUB_SHA .
           docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$BACKEND_SERVICE/$BACKEND_SERVICE:$GITHUB_SHA
 
+      - name: Get Backend URL for OAuth
+        id: backend-url
+        run: |
+          # First deployment may not have URL yet, use placeholder
+          URL=$(gcloud run services describe $BACKEND_SERVICE --region $GCP_REGION --format 'value(status.url)' 2>/dev/null || echo "https://$BACKEND_SERVICE-placeholder.run.app")
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "Backend URL: $URL"
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy $BACKEND_SERVICE \
@@ -45,7 +53,7 @@ jobs:
             --region $GCP_REGION \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT=production,DATABASE_TYPE=postgresql,POSTGRES_HOST=db.iyxaqxfrwklmpwhkdbug.supabase.co,POSTGRES_PORT=5432,POSTGRES_USER=postgres,POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }},POSTGRES_DB=postgres,DEBUG=false,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }},GITHUB_CLIENT_ID=${{ secrets.GH_CLIENT_ID }},GITHUB_CLIENT_SECRET=${{ secrets.GH_CLIENT_SECRET }},SECRET_KEY=${{ secrets.SECRET_KEY }},ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }},DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }},DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }},MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }},GOOGLE_SEARCH_API_KEY=${{ secrets.GOOGLE_SEARCH_API_KEY }},GOOGLE_SEARCH_ENGINE_ID=${{ secrets.GOOGLE_SEARCH_ENGINE_ID }},LLM_PROVIDER=anthropic,LLM_MODEL=claude-sonnet-4-20250514" \
+            --set-env-vars="ENVIRONMENT=production,DATABASE_TYPE=postgresql,POSTGRES_HOST=db.iyxaqxfrwklmpwhkdbug.supabase.co,POSTGRES_PORT=5432,POSTGRES_USER=postgres,POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }},POSTGRES_DB=postgres,DEBUG=false,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }},GITHUB_CLIENT_ID=${{ secrets.GH_CLIENT_ID }},GITHUB_CLIENT_SECRET=${{ secrets.GH_CLIENT_SECRET }},SECRET_KEY=${{ secrets.SECRET_KEY }},OAUTH_REDIRECT_BASE=${{ steps.backend-url.outputs.url }},ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }},DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }},DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }},MINIMAX_GROUP_ID=${{ secrets.MINIMAX_GROUP_ID }},GOOGLE_SEARCH_API_KEY=${{ secrets.GOOGLE_SEARCH_API_KEY }},GOOGLE_SEARCH_ENGINE_ID=${{ secrets.GOOGLE_SEARCH_ENGINE_ID }},LLM_PROVIDER=anthropic,LLM_MODEL=claude-sonnet-4-20250514" \
             --memory 1Gi \
             --cpu 2 \
             --cpu-boost \
@@ -54,11 +62,9 @@ jobs:
             --timeout 300 \
             --port 8080
 
-      - name: Get Backend URL
-        id: backend-url
+      - name: Get Final Backend URL
         run: |
           URL=$(gcloud run services describe $BACKEND_SERVICE --region $GCP_REGION --format 'value(status.url)')
-          echo "url=$URL" >> $GITHUB_OUTPUT
           echo "Backend deployed to: $URL"
 
   deploy-frontend:

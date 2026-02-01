@@ -184,6 +184,7 @@ async def api_status():
 # 导入domain路由
 from uteki.domains.admin.api import router as admin_router
 from uteki.domains.agent.api import router as agent_router
+from uteki.domains.auth.api import router as auth_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
@@ -192,6 +193,7 @@ from uteki.domains.agent.api import router as agent_router
 # 注册domain路由
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现

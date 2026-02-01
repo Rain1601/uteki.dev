@@ -122,6 +122,14 @@ class Settings(BaseSettings):
 
     # 安全配置
     encryption_key: Optional[str] = None
+    secret_key: str = "your-secret-key-here-change-in-production"
+
+    # OAuth配置
+    github_client_id: Optional[str] = None
+    github_client_secret: Optional[str] = None
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    oauth_redirect_base: str = "http://localhost:8888"  # 后端基础URL，用于OAuth回调
 
     @property
     def database_url(self) -> str:

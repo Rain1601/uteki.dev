@@ -25,9 +25,11 @@ import {
   Error,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import { useResponsive } from '../hooks/useResponsive';
 
 export default function DemoPage() {
   const { theme } = useTheme();
+  const { isMobile } = useResponsive();
 
   const statsData = [
     { label: '总市值', value: '$50.00万亿', change: '+1.20%', positive: true },
@@ -157,10 +159,10 @@ export default function DemoPage() {
           <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mt: 3 }}>
             输入框
           </Typography>
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-            <TextField label="标准输入" variant="outlined" />
-            <TextField label="密码" type="password" variant="outlined" />
-            <TextField label="禁用状态" disabled variant="outlined" />
+          <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 2, flexWrap: 'wrap' }}>
+            <TextField label="标准输入" variant="outlined" fullWidth={isMobile} />
+            <TextField label="密码" type="password" variant="outlined" fullWidth={isMobile} />
+            <TextField label="禁用状态" disabled variant="outlined" fullWidth={isMobile} />
           </Box>
         </CardContent>
       </Card>
@@ -171,7 +173,7 @@ export default function DemoPage() {
           <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
             交易记录（无缝线设计）
           </Typography>
-          <TableContainer component={Paper} elevation={0}>
+          <TableContainer component={Paper} elevation={0} sx={{ overflowX: 'auto' }}>
             <Table>
               <TableHead>
                 <TableRow>

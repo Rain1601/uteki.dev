@@ -10,6 +10,9 @@ import {
   Typography,
   Tooltip,
   Switch,
+  Drawer,
+  IconButton,
+  SwipeableDrawer,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -20,8 +23,12 @@ import {
   SmartToy as SmartToyIcon,
   Brightness4 as DarkModeIcon,
   Brightness7 as LightModeIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import { useResponsive } from '../hooks/useResponsive';
+import { useSidebar } from '../contexts/SidebarContext';
+import UserMenu from './UserMenu';
 
 // Gemini风格的配置
 const SIDEBAR_COLLAPSED_WIDTH = 54;
@@ -62,31 +69,284 @@ const menuItems: MenuCategory[] = [
 export default function HoverSidebar() {
   const { theme, isDark, toggleTheme } = useTheme();
   const location = useLocation();
+  const { isMobile, isSmallScreen } = useResponsive();
+  const { sidebarOpen, setSidebarOpen, toggleSidebar } = useSidebar();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeoutRef = useRef<number | null>(null);
 
   const handleMouseEnter = useCallback(() => {
+    if (isMobile || isSmallScreen) return;
     if (hoverTimeoutRef.current) {
       clearTimeout(hoverTimeoutRef.current);
     }
     hoverTimeoutRef.current = window.setTimeout(() => {
       setIsHovered(true);
     }, HOVER_DELAY_IN);
-  }, []);
+  }, [isMobile, isSmallScreen]);
 
   const handleMouseLeave = useCallback(() => {
+    if (isMobile || isSmallScreen) return;
     if (hoverTimeoutRef.current) {
       clearTimeout(hoverTimeoutRef.current);
     }
     hoverTimeoutRef.current = window.setTimeout(() => {
       setIsHovered(false);
     }, HOVER_DELAY_OUT);
-  }, []);
+  }, [isMobile, isSmallScreen]);
+
+  const handleDrawerClose = useCallback(() => {
+    setSidebarOpen(false);
+  }, [setSidebarOpen]);
+
+  const handleDrawerOpen = useCallback(() => {
+    setSidebarOpen(true);
+  }, [setSidebarOpen]);
+
+  const handleNavClick = useCallback(() => {
+    if (isMobile || isSmallScreen) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, isSmallScreen, setSidebarOpen]);
 
   const isPathActive = (path: string) => {
     return location.pathname === path;
   };
 
+  // 移动端使用 SwipeableDrawer
+  if (isMobile || isSmallScreen) {
+    return (
+      <>
+        {/* 汉堡菜单按钮 - 仅在移动端显示 */}
+        <IconButton
+          onClick={toggleSidebar}
+          sx={{
+            position: 'fixed',
+            top: 8,
+            left: 8,
+            zIndex: 1200,
+            color: theme.text.primary,
+            bgcolor: theme.background.secondary,
+            '&:hover': {
+              bgcolor: theme.background.tertiary,
+            },
+            // 增加触摸区域
+            minWidth: 48,
+            minHeight: 48,
+          }}
+        >
+          <MenuIcon />
+        </IconButton>
+
+        <SwipeableDrawer
+          anchor="left"
+          open={sidebarOpen}
+          onClose={handleDrawerClose}
+          onOpen={handleDrawerOpen}
+          disableBackdropTransition={false}
+          disableDiscovery={false}
+          swipeAreaWidth={20}
+          sx={{
+            '& .MuiDrawer-paper': {
+              width: SIDEBAR_EXPANDED_WIDTH,
+              background: theme.background.deepest,
+              borderRight: `1px solid ${theme.border.default}`,
+            },
+          }}
+        >
+          {/* 抽屉头部 */}
+          <Box
+            sx={{
+              p: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              borderBottom: `1px solid ${theme.border.subtle}`,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box
+                sx={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '8px',
+                  background: `linear-gradient(135deg, ${theme.brand.primary} 0%, ${theme.brand.accent} 100%)`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: '1.2rem',
+                }}
+              >
+                U
+              </Box>
+              <Typography variant="h6" sx={{ fontWeight: 600, color: theme.text.primary }}>
+                uteki.open
+              </Typography>
+            </Box>
+            <IconButton
+              onClick={handleDrawerClose}
+              sx={{
+                color: theme.text.secondary,
+                minWidth: 44,
+                minHeight: 44,
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Box>
+
+          {/* 菜单列表 */}
+          <Box
+            sx={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              py: 1,
+            }}
+          >
+            {menuItems.map((category, index) => (
+              <Box key={category.category}>
+                {index > 0 && (
+                  <Divider
+                    sx={{
+                      margin: '12px 16px',
+                      borderColor: theme.border.subtle,
+                    }}
+                  />
+                )}
+                <Typography
+                  sx={{
+                    padding: '8px 16px',
+                    color: theme.text.muted,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '1px',
+                    opacity: 0.8,
+                  }}
+                >
+                  {category.category}
+                </Typography>
+                <List component="div" disablePadding>
+                  {category.items.map((item) => {
+                    const isActive = isPathActive(item.path);
+                    return (
+                      <ListItemButton
+                        key={item.text}
+                        component={Link}
+                        to={item.path}
+                        disabled={item.disabled}
+                        onClick={handleNavClick}
+                        sx={{
+                          margin: '4px 8px',
+                          borderRadius: '8px',
+                          transition: 'all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1)',
+                          color: theme.text.primary,
+                          backgroundColor: isActive
+                            ? 'rgba(100, 149, 237, 0.15)'
+                            : 'transparent',
+                          border: `1px solid ${
+                            isActive ? 'rgba(100, 149, 237, 0.3)' : 'transparent'
+                          }`,
+                          // 增加触摸区域
+                          minHeight: 48,
+                          position: 'relative',
+                          ...(isActive && {
+                            '&::before': {
+                              content: '""',
+                              position: 'absolute',
+                              left: 0,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              width: '3px',
+                              height: '20px',
+                              backgroundColor: theme.brand.primary,
+                              borderRadius: '0 2px 2px 0',
+                            },
+                          }),
+                        }}
+                      >
+                        <ListItemIcon
+                          sx={{
+                            minWidth: '40px',
+                            color: isActive ? theme.brand.primary : theme.text.secondary,
+                          }}
+                        >
+                          {item.icon}
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={item.text}
+                          secondary={item.disabled ? '开发中' : null}
+                          primaryTypographyProps={{
+                            sx: {
+                              fontSize: '0.9rem',
+                              fontWeight: 500,
+                            },
+                          }}
+                        />
+                      </ListItemButton>
+                    );
+                  })}
+                </List>
+              </Box>
+            ))}
+          </Box>
+
+          {/* 底部区域：用户菜单和主题切换 */}
+          <Box
+            sx={{
+              borderTop: `1px solid ${theme.border.subtle}`,
+              p: 2,
+            }}
+          >
+            {/* 用户菜单 */}
+            <Box sx={{ mb: 2 }}>
+              <UserMenu collapsed={false} />
+            </Box>
+
+            {/* 主题切换 */}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                px: 1,
+              }}
+            >
+              <Box sx={{ color: theme.text.secondary }}>
+                {isDark ? <DarkModeIcon /> : <LightModeIcon />}
+              </Box>
+              <Typography
+                sx={{
+                  flex: 1,
+                  fontSize: '0.9rem',
+                  color: theme.text.secondary,
+                }}
+              >
+                {isDark ? '深色模式' : '浅色模式'}
+              </Typography>
+              <Switch
+                checked={isDark}
+                onChange={toggleTheme}
+                size="small"
+                sx={{
+                  '& .MuiSwitch-switchBase.Mui-checked': {
+                    color: theme.brand.primary,
+                  },
+                  '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                    backgroundColor: theme.brand.primary,
+                  },
+                }}
+              />
+            </Box>
+          </Box>
+        </SwipeableDrawer>
+      </>
+    );
+  }
+
+  // 桌面端使用原有的悬浮侧边栏
   return (
     <Box
       onMouseEnter={handleMouseEnter}
@@ -224,7 +484,7 @@ export default function HoverSidebar() {
         {/* 菜单列表 */}
         <Box
           sx={{
-            height: 'calc(100% - 140px)',
+            height: 'calc(100% - 200px)',
             overflowY: 'auto',
             overflowX: 'hidden',
             py: 1,
@@ -346,7 +606,7 @@ export default function HoverSidebar() {
           ))}
         </Box>
 
-        {/* 底部主题切换 */}
+        {/* 底部区域：用户菜单和主题切换 */}
         <Box
           sx={{
             position: 'absolute',
@@ -357,6 +617,12 @@ export default function HoverSidebar() {
             p: 2,
           }}
         >
+          {/* 用户菜单 */}
+          <Box sx={{ mb: 2 }}>
+            <UserMenu collapsed={false} />
+          </Box>
+
+          {/* 主题切换 */}
           <Box
             sx={{
               display: 'flex',

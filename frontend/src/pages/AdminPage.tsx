@@ -31,6 +31,7 @@ import {
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import { useResponsive } from '../hooks/useResponsive';
 import { useToast } from '../components/Toast';
 import {
   useAPIKeys,
@@ -46,6 +47,7 @@ import {
 
 export default function AdminPage() {
   const { theme } = useTheme();
+  const { isMobile } = useResponsive();
   const { showToast } = useToast();
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
   const [llmDialogOpen, setLlmDialogOpen] = useState(false);
@@ -186,22 +188,33 @@ export default function AdminPage() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 1 : 0, mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>
                   API Keys 管理
                 </Typography>
-                <Box>
-                  <IconButton size="small" onClick={() => refetchApiKeys()}>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <IconButton size="small" onClick={() => refetchApiKeys()} sx={{ minWidth: 44, minHeight: 44 }}>
                     <RefreshIcon />
                   </IconButton>
-                  <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
-                    size="small"
-                    onClick={() => setApiKeyDialogOpen(true)}
-                  >
-                    添加密钥
-                  </Button>
+                  {isMobile ? (
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={() => setApiKeyDialogOpen(true)}
+                      sx={{ minWidth: 44, minHeight: 44, bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
+                    >
+                      <AddIcon />
+                    </IconButton>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      startIcon={<AddIcon />}
+                      size="small"
+                      onClick={() => setApiKeyDialogOpen(true)}
+                    >
+                      添加密钥
+                    </Button>
+                  )}
                 </Box>
               </Box>
 
@@ -210,7 +223,7 @@ export default function AdminPage() {
                   <CircularProgress size={24} />
                 </Box>
               ) : apiKeysData && apiKeysData.items.length > 0 ? (
-                <TableContainer component={Paper} elevation={0}>
+                <TableContainer component={Paper} elevation={0} sx={{ overflowX: 'auto' }}>
                   <Table size="small">
                     <TableHead>
                       <TableRow>
@@ -237,6 +250,7 @@ export default function AdminPage() {
                               size="small"
                               color="error"
                               onClick={() => handleDeleteApiKey(key.id)}
+                              sx={{ minWidth: 44, minHeight: 44 }}
                             >
                               <DeleteIcon fontSize="small" />
                             </IconButton>
@@ -257,22 +271,33 @@ export default function AdminPage() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 1 : 0, mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>
                   LLM Providers
                 </Typography>
-                <Box>
-                  <IconButton size="small" onClick={() => refetchLLM()}>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <IconButton size="small" onClick={() => refetchLLM()} sx={{ minWidth: 44, minHeight: 44 }}>
                     <RefreshIcon />
                   </IconButton>
-                  <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
-                    size="small"
-                    onClick={() => setLlmDialogOpen(true)}
-                  >
-                    添加 Provider
-                  </Button>
+                  {isMobile ? (
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={() => setLlmDialogOpen(true)}
+                      sx={{ minWidth: 44, minHeight: 44, bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
+                    >
+                      <AddIcon />
+                    </IconButton>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      startIcon={<AddIcon />}
+                      size="small"
+                      onClick={() => setLlmDialogOpen(true)}
+                    >
+                      添加 Provider
+                    </Button>
+                  )}
                 </Box>
               </Box>
 
@@ -281,7 +306,7 @@ export default function AdminPage() {
                   <CircularProgress size={24} />
                 </Box>
               ) : llmProvidersData && llmProvidersData.items.length > 0 ? (
-                <TableContainer component={Paper} elevation={0}>
+                <TableContainer component={Paper} elevation={0} sx={{ overflowX: 'auto' }}>
                   <Table size="small">
                     <TableHead>
                       <TableRow>
@@ -308,6 +333,7 @@ export default function AdminPage() {
                               size="small"
                               color="error"
                               onClick={() => handleDeleteLLMProvider(provider.id)}
+                              sx={{ minWidth: 44, minHeight: 44 }}
                             >
                               <DeleteIcon fontSize="small" />
                             </IconButton>
@@ -449,7 +475,7 @@ export default function AdminPage() {
       </Grid>
 
       {/* 添加API Key对话框 */}
-      <Dialog open={apiKeyDialogOpen} onClose={() => setApiKeyDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={apiKeyDialogOpen} onClose={() => setApiKeyDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>添加 API 密钥</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -483,11 +509,13 @@ export default function AdminPage() {
             />
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setApiKeyDialogOpen(false)}>取消</Button>
+        <DialogActions sx={{ p: isMobile ? 2 : 1, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 1 : 0 }}>
+          <Button onClick={() => setApiKeyDialogOpen(false)} fullWidth={isMobile} sx={{ minHeight: isMobile ? 44 : 'auto' }}>取消</Button>
           <Button
             onClick={handleCreateApiKey}
             variant="contained"
+            fullWidth={isMobile}
+            sx={{ minHeight: isMobile ? 44 : 'auto' }}
             disabled={!apiKeyForm.service_name || !apiKeyForm.key_name || !apiKeyForm.api_key}
           >
             创建
@@ -496,7 +524,7 @@ export default function AdminPage() {
       </Dialog>
 
       {/* 添加LLM Provider对话框 */}
-      <Dialog open={llmDialogOpen} onClose={() => setLlmDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={llmDialogOpen} onClose={() => setLlmDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>添加 LLM Provider</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -533,11 +561,13 @@ export default function AdminPage() {
             />
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setLlmDialogOpen(false)}>取消</Button>
+        <DialogActions sx={{ p: isMobile ? 2 : 1, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 1 : 0 }}>
+          <Button onClick={() => setLlmDialogOpen(false)} fullWidth={isMobile} sx={{ minHeight: isMobile ? 44 : 'auto' }}>取消</Button>
           <Button
             onClick={handleCreateLLMProvider}
             variant="contained"
+            fullWidth={isMobile}
+            sx={{ minHeight: isMobile ? 44 : 'auto' }}
             disabled={!llmForm.provider_name || !llmForm.model_name || !llmForm.api_key_id}
           >
             创建

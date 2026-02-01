@@ -16,6 +16,7 @@ import {
   Chip,
   CircularProgress,
   Tooltip,
+  SwipeableDrawer,
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -28,6 +29,7 @@ import {
   TrendingUp as TrendingUpIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import { useResponsive, useKeyboardVisibility } from '../hooks/useResponsive';
 import ChatMessage from '../components/ChatMessage';
 import {
   EnhancedMessage,
@@ -122,7 +124,9 @@ const getProviderColor = (provider: string): { bg: string; hover: string; text: 
 };
 
 export default function AgentChatPage() {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
+  const { isMobile, isSmallScreen } = useResponsive();
+  const { isKeyboardVisible, keyboardHeight } = useKeyboardVisibility();
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -541,22 +545,22 @@ export default function AgentChatPage() {
       <Box
         sx={{
           position: 'fixed',
-          top: 16,
-          right: 16,
+          top: isMobile || isSmallScreen ? 8 : 16,
+          right: isMobile || isSmallScreen ? 8 : 16,
           display: 'flex',
-          gap: 1.5,
+          gap: isMobile || isSmallScreen ? 0.5 : 1.5,
           zIndex: 1000,
         }}
       >
-        <Button
+        <IconButton
           onClick={() => setHistoryDrawerOpen(true)}
           sx={{
-            minWidth: 'auto',
-            padding: '12px 20px',
+            minWidth: isMobile || isSmallScreen ? 44 : 'auto',
+            minHeight: isMobile || isSmallScreen ? 44 : 'auto',
+            padding: isMobile || isSmallScreen ? '10px' : '12px 20px',
             fontSize: '0.9rem',
             fontWeight: 500,
-            borderRadius: '12px',
-            textTransform: 'none',
+            borderRadius: isMobile || isSmallScreen ? '50%' : '12px',
             transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
             backdropFilter: 'blur(12px)',
             border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -566,36 +570,34 @@ export default function AgentChatPage() {
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
               borderColor: 'rgba(255, 255, 255, 0.15)',
               color: 'rgba(255, 255, 255, 0.9)',
-              transform: 'translateY(-1px)',
-              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.15), 0 3px 10px rgba(0, 0, 0, 0.1)',
-            },
-            '&:active': {
-              transform: 'translateY(0)',
             },
           }}
         >
-          <HistoryIcon sx={{ fontSize: '20px', mr: 1 }} />
-          <Box
-            component="span"
-            sx={{
-              '@media (max-width: 1400px)': {
-                display: 'none',
-              },
-            }}
-          >
-            历史记录
-          </Box>
-        </Button>
+          <HistoryIcon sx={{ fontSize: '20px' }} />
+          {!(isMobile || isSmallScreen) && (
+            <Box
+              component="span"
+              sx={{
+                ml: 1,
+                '@media (max-width: 1400px)': {
+                  display: 'none',
+                },
+              }}
+            >
+              历史记录
+            </Box>
+          )}
+        </IconButton>
 
-        <Button
+        <IconButton
           onClick={handleNewConversation}
           sx={{
-            minWidth: 'auto',
-            padding: '12px 20px',
+            minWidth: isMobile || isSmallScreen ? 44 : 'auto',
+            minHeight: isMobile || isSmallScreen ? 44 : 'auto',
+            padding: isMobile || isSmallScreen ? '10px' : '12px 20px',
             fontSize: '0.9rem',
             fontWeight: 500,
-            borderRadius: '12px',
-            textTransform: 'none',
+            borderRadius: isMobile || isSmallScreen ? '50%' : '12px',
             transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
             backdropFilter: 'blur(12px)',
             border: '1px solid rgba(255, 255, 255, 0.12)',
@@ -605,26 +607,24 @@ export default function AgentChatPage() {
               backgroundColor: 'rgba(255, 255, 255, 0.1)',
               borderColor: 'rgba(255, 255, 255, 0.2)',
               color: 'rgba(255, 255, 255, 0.95)',
-              transform: 'translateY(-1px)',
-              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.15), 0 3px 10px rgba(0, 0, 0, 0.1)',
-            },
-            '&:active': {
-              transform: 'translateY(0)',
             },
           }}
         >
-          <AddIcon sx={{ fontSize: '20px', mr: 1 }} />
-          <Box
-            component="span"
-            sx={{
-              '@media (max-width: 1400px)': {
-                display: 'none',
-              },
-            }}
-          >
-            新对话
-          </Box>
-        </Button>
+          <AddIcon sx={{ fontSize: '20px' }} />
+          {!(isMobile || isSmallScreen) && (
+            <Box
+              component="span"
+              sx={{
+                ml: 1,
+                '@media (max-width: 1400px)': {
+                  display: 'none',
+                },
+              }}
+            >
+              新对话
+            </Box>
+          )}
+        </IconButton>
       </Box>
 
       {/* 中心内容区域 */}
@@ -635,9 +635,9 @@ export default function AgentChatPage() {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: isEmpty ? 'center' : 'flex-start',
-          px: 3,
-          pt: isEmpty ? 0 : 10,
-          pb: 3,
+          px: isMobile || isSmallScreen ? 1.5 : 3,
+          pt: isEmpty ? 0 : isMobile || isSmallScreen ? 6 : 10,
+          pb: isMobile || isSmallScreen ? 1 : 3,
           overflow: 'hidden',
         }}
       >
@@ -656,11 +656,12 @@ export default function AgentChatPage() {
             {/* 标题 */}
             <Typography
               sx={{
-                fontSize: '2.5rem',
+                fontSize: isMobile || isSmallScreen ? '1.5rem' : '2.5rem',
                 fontWeight: 400,
                 textAlign: 'center',
                 color: theme.text.primary,
                 letterSpacing: '0.02em',
+                px: isMobile || isSmallScreen ? 2 : 0,
               }}
             >
               What do you want to know today?
@@ -831,7 +832,11 @@ export default function AgentChatPage() {
                             height: '28px',
                             borderRadius: '6px',
                             objectFit: 'contain',
-                            filter: model.available ? 'none' : 'grayscale(100%)',
+                            filter: !model.available
+                              ? 'grayscale(100%)'
+                              : model.provider === 'OpenAI' && isDark
+                              ? 'invert(1)'
+                              : 'none',
                           }}
                           onError={(e: any) => {
                             e.target.style.display = 'none';
@@ -850,11 +855,14 @@ export default function AgentChatPage() {
             sx={{
               flex: 1,
               width: '100%',
-              maxWidth: '900px',
+              maxWidth: isMobile || isSmallScreen ? '100%' : '900px',
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              gap: 3,
+              gap: isMobile || isSmallScreen ? 2 : 3,
+              px: isMobile || isSmallScreen ? 0 : 0,
+              // 移动端底部留出空间给固定的输入框
+              pb: isMobile || isSmallScreen ? 16 : 0,
             }}
           >
             {messages.map((msg) => {
@@ -891,12 +899,20 @@ export default function AgentChatPage() {
       {!isEmpty && (
         <Box
           sx={{
+            position: isMobile || isSmallScreen ? 'fixed' : 'relative',
+            // 键盘弹出时调整底部位置
+            bottom: isKeyboardVisible ? keyboardHeight : 0,
+            left: 0,
+            right: 0,
             borderTop: `1px solid ${theme.border.subtle}`,
             bgcolor: theme.background.primary,
-            p: 2,
+            p: isMobile || isSmallScreen ? 1.5 : 2,
+            zIndex: 100,
+            // 平滑过渡
+            transition: 'bottom 0.2s ease-out',
           }}
         >
-          <Box sx={{ maxWidth: '900px', mx: 'auto' }}>
+          <Box sx={{ maxWidth: isMobile || isSmallScreen ? '100%' : '900px', mx: 'auto' }}>
             {/* Bottom Controls - Research & Model Selector */}
             <Box
               sx={{
@@ -1005,7 +1021,11 @@ export default function AgentChatPage() {
                           height: '28px',
                           borderRadius: '6px',
                           objectFit: 'contain',
-                          filter: model.available ? 'none' : 'grayscale(100%)',
+                          filter: !model.available
+                            ? 'grayscale(100%)'
+                            : model.provider === 'OpenAI' && isDark
+                            ? 'invert(1)'
+                            : 'none',
                         }}
                         onError={(e: any) => {
                           e.target.style.display = 'none';
@@ -1060,13 +1080,17 @@ export default function AgentChatPage() {
       )}
 
       {/* 历史记录侧边栏 */}
-      <Drawer
+      <SwipeableDrawer
         anchor="right"
         open={historyDrawerOpen}
         onClose={() => setHistoryDrawerOpen(false)}
+        onOpen={() => setHistoryDrawerOpen(true)}
+        disableBackdropTransition={false}
+        disableDiscovery={false}
         sx={{
           '& .MuiDrawer-paper': {
-            width: 320,
+            width: isMobile || isSmallScreen ? '85%' : 320,
+            maxWidth: 360,
             bgcolor: theme.background.secondary,
             borderLeft: `1px solid ${theme.border.subtle}`,
           },
@@ -1085,6 +1109,7 @@ export default function AgentChatPage() {
                   sx={{
                     borderRadius: 1,
                     mb: 0.5,
+                    minHeight: 48, // 增加触摸区域
                     '&.Mui-selected': {
                       bgcolor: `rgba(100, 149, 237, 0.12)`,
                       borderLeft: `3px solid ${theme.brand.primary}`,
@@ -1107,7 +1132,7 @@ export default function AgentChatPage() {
             ))}
           </List>
         </Box>
-      </Drawer>
+      </SwipeableDrawer>
     </Box>
   );
 }

@@ -13,6 +13,50 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  /* 移动端触摸优化 */
+  @media (hover: none) and (pointer: coarse) {
+    /* 增加按钮和可点击元素的最小触摸区域 */
+    button,
+    [role="button"],
+    a,
+    input[type="checkbox"],
+    input[type="radio"],
+    .MuiIconButton-root,
+    .MuiListItemButton-root {
+      min-height: 44px;
+      min-width: 44px;
+    }
+
+    /* 确保列表项有足够的触摸区域 */
+    .MuiListItem-root,
+    .MuiMenuItem-root {
+      min-height: 48px;
+    }
+
+    /* 禁用文本选择防止长按误触 */
+    .no-select {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* 增加点击反馈 */
+    .touch-feedback:active {
+      opacity: 0.7;
+      transform: scale(0.98);
+    }
+  }
+
+  /* 减少动画 - 尊重用户偏好 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 /* 自定义滚动条样式 */

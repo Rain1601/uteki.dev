@@ -1,6 +1,7 @@
 import { Box, Avatar, Typography } from '@mui/material';
 import { Person as PersonIcon, SmartToy as SmartToyIcon } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import { useResponsive } from '../hooks/useResponsive';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -18,21 +19,23 @@ interface ChatMessageProps {
 
 export default function ChatMessage({ message }: ChatMessageProps) {
   const { theme } = useTheme();
+  const { isMobile, isSmallScreen } = useResponsive();
   const isUser = message.role === 'user';
 
   return (
     <Box
       sx={{
         display: 'flex',
-        gap: 2,
+        gap: isMobile || isSmallScreen ? 1.5 : 2,
         alignItems: 'flex-start',
+        px: isMobile || isSmallScreen ? 1 : 0,
       }}
     >
       {/* 头像 */}
       <Avatar
         sx={{
-          width: 36,
-          height: 36,
+          width: isMobile || isSmallScreen ? 32 : 36,
+          height: isMobile || isSmallScreen ? 32 : 36,
           bgcolor: isUser ? theme.brand.primary : theme.brand.accent,
           flexShrink: 0,
         }}

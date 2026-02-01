@@ -369,3 +369,16 @@ class DatabaseManager:
 
 # Global database manager instance
 db_manager = DatabaseManager()
+
+
+async def get_session():
+    """
+    FastAPI dependency for database session.
+
+    Usage:
+        @router.get("/")
+        async def endpoint(session: AsyncSession = Depends(get_session)):
+            ...
+    """
+    async with db_manager.get_postgres_session() as session:
+        yield session

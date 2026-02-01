@@ -19,6 +19,7 @@ from uteki.domains.agent.llm_adapter import (
     LLMConfig,
 )
 from uteki.common.config import settings
+from uteki.domains.auth.deps import get_current_user_optional
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -50,14 +51,18 @@ async def create_conversation(
     data: schemas.ChatConversationCreate,
     session: AsyncSession = Depends(get_db_session),
     chat_svc: ChatService = Depends(get_chat_service),
+    current_user: dict = Depends(get_current_user_optional),
 ):
     """
     创建新的聊天会话
 
     - **title**: 会话标题
     - **mode**: 会话模式 (chat, analysis, trading)
-    - **user_id**: 用户ID (可选)
     """
+    # 使用当前登录用户ID，未登录则使用 default
+    user_id = current_user.get("user_id") if current_user else "default"
+    # 覆盖 data 中的 user_id
+    data.user_id = user_id
     conversation = await chat_svc.create_conversation(session, data)
 
     return schemas.ChatConversationResponse(
@@ -77,14 +82,16 @@ async def create_conversation(
     summary="列出聊天会话",
 )
 async def list_conversations(
-    user_id: str = Query(None, description="用户ID过滤"),
     include_archived: bool = Query(False, description="是否包含归档会话"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     session: AsyncSession = Depends(get_db_session),
     chat_svc: ChatService = Depends(get_chat_service),
+    current_user: dict = Depends(get_current_user_optional),
 ):
-    """列出所有聊天会话"""
+    """列出当前用户的聊天会话"""
+    # 使用当前登录用户ID，未登录则使用 default
+    user_id = current_user.get("user_id") if current_user else "default"
     items, total = await chat_svc.list_conversations(
         session, user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
     )
