@@ -783,69 +783,69 @@ async def delete_data_source_config(
 # ============================================================================
 
 
-@router.post("/debug/migrate-users-table", summary="迁移用户表添加OAuth字段")
-async def migrate_users_table(session: AsyncSession = Depends(get_db_session)):
+@router.post("/debug/create-admin-tables", summary="创建Admin域所有表")
+async def create_admin_tables(session: AsyncSession = Depends(get_db_session)):
     """
-    迁移用户表，添加OAuth相关字段
-    - oauth_provider
-    - oauth_id
-    - avatar_url
+    创建Admin域的所有数据库表
     """
     from sqlalchemy import text
 
-    migrations = [
-        # 添加 oauth_provider 列（如果不存在）
+    sqls = [
+        # 创建 admin schema
+        "CREATE SCHEMA IF NOT EXISTS admin;",
+        # 创建 users 表
         """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                          WHERE table_schema = 'admin' AND table_name = 'users'
-                          AND column_name = 'oauth_provider') THEN
-                ALTER TABLE admin.users ADD COLUMN oauth_provider VARCHAR(50) DEFAULT 'local';
-            END IF;
-        END $$;
+        CREATE TABLE IF NOT EXISTS admin.users (
+            id VARCHAR(36) PRIMARY KEY,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            username VARCHAR(100) NOT NULL,
+            oauth_provider VARCHAR(50) NOT NULL DEFAULT 'local',
+            oauth_id VARCHAR(255),
+            avatar_url VARCHAR(500),
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+            preferences JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
         """,
-        # 添加 oauth_id 列（如果不存在）
+        # 创建索引
+        "CREATE INDEX IF NOT EXISTS idx_users_email ON admin.users (email);",
+        "CREATE INDEX IF NOT EXISTS idx_users_oauth ON admin.users (oauth_provider, oauth_id);",
+        # 创建 api_keys 表
         """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                          WHERE table_schema = 'admin' AND table_name = 'users'
-                          AND column_name = 'oauth_id') THEN
-                ALTER TABLE admin.users ADD COLUMN oauth_id VARCHAR(255);
-            END IF;
-        END $$;
+        CREATE TABLE IF NOT EXISTS admin.api_keys (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL DEFAULT 'default',
+            provider VARCHAR(50) NOT NULL,
+            display_name VARCHAR(200) NOT NULL,
+            api_key VARCHAR(500) NOT NULL,
+            api_secret VARCHAR(500),
+            extra_config JSONB,
+            environment VARCHAR(20) NOT NULL DEFAULT 'production',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            description VARCHAR(500),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
         """,
-        # 添加 avatar_url 列（如果不存在）
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                          WHERE table_schema = 'admin' AND table_name = 'users'
-                          AND column_name = 'avatar_url') THEN
-                ALTER TABLE admin.users ADD COLUMN avatar_url VARCHAR(500);
-            END IF;
-        END $$;
-        """,
-        # 创建索引（如果不存在）
-        """
-        CREATE INDEX IF NOT EXISTS idx_users_oauth ON admin.users (oauth_provider, oauth_id);
-        """,
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_provider_env ON admin.api_keys (provider, environment);",
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON admin.api_keys (user_id);",
     ]
 
     results = []
-    for sql in migrations:
+    for sql in sqls:
         try:
             await session.execute(text(sql))
-            results.append({"sql": sql[:50] + "...", "status": "success"})
+            await session.commit()
+            results.append({"sql": sql[:60] + "...", "status": "success"})
         except Exception as e:
-            results.append({"sql": sql[:50] + "...", "status": "error", "error": str(e)})
-
-    await session.commit()
+            await session.rollback()
+            results.append({"sql": sql[:60] + "...", "status": "error", "error": str(e)})
 
     return {
         "status": "completed",
-        "message": "Users table migration completed",
+        "message": "Admin tables creation completed",
         "results": results
     }
 
