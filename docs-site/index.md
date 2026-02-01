@@ -74,7 +74,7 @@ pnpm install && pnpm dev
 ./scripts/verify_system.sh
 
 # 访问API文档
-open http://localhost:8000/docs
+open http://localhost:8888/docs
 
 # 访问前端
 open http://localhost:5173
@@ -84,7 +84,7 @@ open http://localhost:5173
 
 ### 配置API密钥
 
-访问 `http://localhost:8000/docs`，在 `/api/admin/api-keys` 端点添加：
+访问 `http://localhost:8888/docs`，在 `/api/admin/api-keys` 端点添加：
 
 - **交易所**: OKX、Binance、Interactive Brokers
 - **LLM**: OpenAI、Claude、DeepSeek、Qwen

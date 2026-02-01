@@ -38,8 +38,8 @@ pnpm dev
 ```
 
 访问:
-- **后端API**: http://localhost:8000
-- **API文档**: http://localhost:8000/docs
+- **后端API**: http://localhost:8888
+- **API文档**: http://localhost:8888/docs
 - **前端**: http://localhost:5173
 
 ---
@@ -328,8 +328,8 @@ CREATE TABLE admin.audit_logs (...)
 
 Next steps:
   1. Start the backend: cd backend && poetry run python -m uteki.main
-  2. Visit http://localhost:8000/docs for API documentation
-  3. Check health: http://localhost:8000/health
+  2. Visit http://localhost:8888/docs for API documentation
+  3. Check health: http://localhost:8888/health
 ```
 
 #### 4.4 启动后端服务
@@ -354,7 +354,7 @@ INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 
 ```bash
 # 健康检查
-curl http://localhost:8000/health
+curl http://localhost:8888/health
 
 # 预期输出:
 {
@@ -384,7 +384,7 @@ curl http://localhost:8000/health
 }
 ```
 
-访问API文档: http://localhost:8000/docs
+访问API文档: http://localhost:8888/docs
 
 ---
 
@@ -420,7 +420,7 @@ pnpm dev
 
 #### 方式1: 使用API文档 (推荐)
 
-访问 http://localhost:8000/docs，测试以下API:
+访问 http://localhost:8888/docs，测试以下API:
 
 1. **创建API密钥** (POST `/api/admin/api-keys`)
    ```json
@@ -444,7 +444,7 @@ pnpm dev
 
 ```bash
 # 创建API密钥
-curl -X POST "http://localhost:8000/api/admin/api-keys" \
+curl -X POST "http://localhost:8888/api/admin/api-keys" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "okx",
@@ -454,10 +454,10 @@ curl -X POST "http://localhost:8000/api/admin/api-keys" \
   }'
 
 # 列出所有API密钥
-curl "http://localhost:8000/api/admin/api-keys"
+curl "http://localhost:8888/api/admin/api-keys"
 
 # 查看健康状态
-curl "http://localhost:8000/health"
+curl "http://localhost:8888/health"
 ```
 
 #### 方式3: 直接连接PostgreSQL验证
@@ -574,7 +574,7 @@ server {
 
     # 后端API
     location /api {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://localhost:8888;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -583,7 +583,7 @@ server {
 
     # API文档
     location /docs {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://localhost:8888;
     }
 }
 EOF
@@ -685,7 +685,7 @@ docker exec uteki-clickhouse clickhouse-client --query="SELECT * FROM uteki.klin
 现在你已经完成了uteki.open的完整部署:
 
 ✅ **数据库**: 5个数据库服务运行中，**无需注册或额外配置**
-✅ **后端**: FastAPI服务运行在 http://localhost:8000
+✅ **后端**: FastAPI服务运行在 http://localhost:8888
 ✅ **前端**: React应用运行在 http://localhost:5173
 ✅ **CRUD**: 数据库读写操作正常
 ✅ **Linux兼容**: 完全支持Linux服务器部署

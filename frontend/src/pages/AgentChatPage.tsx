@@ -26,12 +26,29 @@ import {
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import ChatMessage from '../components/ChatMessage';
+import {
+  EnhancedMessage,
+  ThoughtProcessCard,
+  ResearchStatusCard,
+  SourcesList,
+  TypingIndicator,
+} from '../components/chat';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  research_data?: {
+    thoughts?: string[];
+    sources?: Record<string, number>;
+    sourceUrls?: Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      source: string;
+    }>;
+  };
 }
 
 interface Conversation {
@@ -50,39 +67,56 @@ const chatModes = [
   { id: 'creative', label: 'Creative', icon: <AutoAwesomeIcon />, color: '#f48fb1' },
 ];
 
-// 模型选项配置
-const modelOptions = [
-  {
-    id: 'claude-sonnet-4-20250514',
-    name: 'Claude 4.5 Sonnet',
-    provider: 'Claude',
-    icon: 'https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png',
-  },
-  {
-    id: 'deepseek-chat',
-    name: 'DeepSeek V3.2',
-    provider: 'DeepSeek',
-    icon: 'https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png',
-  },
-  {
-    id: 'gemini-2.0-flash-exp',
-    name: 'Gemini 2.0 Flash',
-    provider: 'Google',
-    icon: 'https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png',
-  },
-  {
-    id: 'gpt-4-turbo',
-    name: 'GPT-4 Turbo',
-    provider: 'OpenAI',
-    icon: 'https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png',
-  },
-  {
-    id: 'qwen-plus',
-    name: 'Qwen Plus',
-    provider: 'Qwen',
-    icon: 'https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png',
-  },
-];
+// 模型选项接口
+interface ModelOption {
+  id: string;
+  name: string;
+  provider: string;
+  icon: string;
+  available: boolean;
+}
+
+// 定义每个提供商的品牌颜色
+const getProviderColor = (provider: string): { bg: string; hover: string; text: string } => {
+  const colors: Record<string, { bg: string; hover: string; text: string }> = {
+    Claude: {
+      bg: 'rgba(204, 143, 104, 0.15)',      // 温暖的橙棕色
+      hover: 'rgba(204, 143, 104, 0.25)',
+      text: '#CC8F68',
+    },
+    OpenAI: {
+      bg: 'rgba(16, 163, 127, 0.15)',       // OpenAI 品牌青色
+      hover: 'rgba(16, 163, 127, 0.25)',
+      text: '#10A37F',
+    },
+    DeepSeek: {
+      bg: 'rgba(59, 130, 246, 0.15)',       // 蓝色
+      hover: 'rgba(59, 130, 246, 0.25)',
+      text: '#3B82F6',
+    },
+    Qwen: {
+      bg: 'rgba(168, 85, 247, 0.15)',       // 紫色
+      hover: 'rgba(168, 85, 247, 0.25)',
+      text: '#A855F7',
+    },
+    Google: {
+      bg: 'rgba(244, 143, 177, 0.15)',      // 粉色
+      hover: 'rgba(244, 143, 177, 0.25)',
+      text: '#F48FB1',
+    },
+    MiniMax: {
+      bg: 'rgba(255, 183, 77, 0.15)',       // 橙黄色
+      hover: 'rgba(255, 183, 77, 0.25)',
+      text: '#FFB74D',
+    },
+  };
+
+  return colors[provider] || {
+    bg: 'rgba(144, 202, 249, 0.15)',
+    hover: 'rgba(144, 202, 249, 0.25)',
+    text: '#90CAF9',
+  };
+};
 
 export default function AgentChatPage() {
   const { theme } = useTheme();
@@ -93,9 +127,19 @@ export default function AgentChatPage() {
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedMode, setSelectedMode] = useState('research');
-  const [selectedModelId, setSelectedModelId] = useState('deepseek-chat'); // 默认选择DeepSeek
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4-20250514'); // 默认选择Claude
   const [modelSelectorHovered, setModelSelectorHovered] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Deep Research state
+  const [researchMode, setResearchMode] = useState(false);
+  const [researchStatus, setResearchStatus] = useState('');
+  const [researchThoughts, setResearchThoughts] = useState<string[]>([]);
+  const [researchSources, setResearchSources] = useState<Record<string, number>>({});
+  const [researchSourceUrls, setResearchSourceUrls] = useState<any[]>([]);
+  const [researchInProgress, setResearchInProgress] = useState(false);
+  const [currentSourceReading, setCurrentSourceReading] = useState('');
 
   // 滚动到底部
   const scrollToBottom = () => {
@@ -106,10 +150,32 @@ export default function AgentChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  // 加载会话列表
+  // 加载会话列表和可用模型
   useEffect(() => {
     loadConversations();
+    loadAvailableModels();
   }, []);
+
+  // 加载可用模型
+  const loadAvailableModels = async () => {
+    try {
+      console.log('🔄 Loading available models...');
+      const response = await fetch('http://localhost:8888/api/agent/models/available');
+      console.log('📡 API Response status:', response.status);
+      const data = await response.json();
+      console.log('📦 Models data:', data);
+      // 显示所有模型（包括未配置的）
+      setModelOptions(data.models || []);
+      console.log('✅ Model options set:', data.models?.length || 0, 'models');
+      // 设置默认模型（只能选择available的）
+      if (data.default_model && data.models.length > 0) {
+        setSelectedModelId(data.default_model);
+        console.log('🎯 Default model selected:', data.default_model);
+      }
+    } catch (error) {
+      console.error('❌ Failed to load available models:', error);
+    }
+  };
 
   const loadConversations = async () => {
     try {
@@ -121,9 +187,203 @@ export default function AgentChatPage() {
     }
   };
 
+  // Deep Research 发送处理
+  const handleDeepResearchSend = async () => {
+    if (!message.trim() || isStreaming) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: message,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setMessage('');
+    setIsStreaming(true);
+    setResearchInProgress(true);
+
+    // Reset research state
+    setResearchThoughts([]);
+    setResearchSources({});
+    setResearchSourceUrls([]);
+    setResearchStatus('Initializing research...');
+
+    // Create assistant message placeholder
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      research_data: {
+        thoughts: [],
+        sources: {},
+        sourceUrls: [],
+      },
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+
+    try {
+      const response = await fetch('http://localhost:8888/api/agent/research/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: userMessage.content,
+          max_sources: 20,
+          max_scrape: 10,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to start research');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      let accumulatedContent = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const eventData = JSON.parse(line.slice(6));
+
+            switch (eventData.type) {
+              case 'research_start':
+                setResearchStatus('Research started...');
+                break;
+
+              case 'thought':
+                if (eventData.data.thoughts) {
+                  setResearchThoughts(eventData.data.thoughts);
+                  setMessages((prev) =>
+                    prev.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? {
+                            ...msg,
+                            research_data: {
+                              ...msg.research_data,
+                              thoughts: eventData.data.thoughts,
+                            },
+                          }
+                        : msg
+                    )
+                  );
+                }
+                break;
+
+              case 'status':
+                setResearchStatus(eventData.data.message);
+                break;
+
+              case 'plan_created':
+                setResearchStatus('Research plan created');
+                break;
+
+              case 'sources_update':
+                setResearchStatus(
+                  `Found ${eventData.data.count} sources (${eventData.data.current_subtask}/${eventData.data.total_subtasks})`
+                );
+                break;
+
+              case 'sources_complete':
+                setResearchSources(eventData.data.sources || {});
+                setResearchSourceUrls(eventData.data.sourceUrls || []);
+                setResearchStatus('Sources collected, reading content...');
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? {
+                          ...msg,
+                          research_data: {
+                            ...msg.research_data,
+                            sources: eventData.data.sources,
+                            sourceUrls: eventData.data.sourceUrls,
+                          },
+                        }
+                      : msg
+                  )
+                );
+                break;
+
+              case 'source_read':
+                const urlParts = eventData.data.url.split('/');
+                const domain = urlParts[2] || eventData.data.url;
+                setCurrentSourceReading(domain);
+                setResearchStatus(
+                  `Reading: ${domain} (${eventData.data.current}/${eventData.data.total})`
+                );
+                break;
+
+              case 'content_chunk':
+                accumulatedContent += eventData.data.content;
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: accumulatedContent }
+                      : msg
+                  )
+                );
+                break;
+
+              case 'research_complete':
+                setResearchInProgress(false);
+                setResearchStatus('');
+                setCurrentSourceReading('');
+                setIsStreaming(false);
+                break;
+
+              case 'error':
+                console.error('Research error:', eventData.data.message);
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: `Error: ${eventData.data.message}` }
+                      : msg
+                  )
+                );
+                setResearchInProgress(false);
+                setIsStreaming(false);
+                break;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Research error:', error);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, content: 'Sorry, an error occurred during research.' }
+            : msg
+        )
+      );
+      setResearchInProgress(false);
+      setIsStreaming(false);
+    }
+  };
+
   // 发送消息（SSE流式）
   const handleSendMessage = async () => {
     if (!message.trim() || isStreaming) return;
+
+    // Use Deep Research if research mode is enabled
+    if (researchMode) {
+      return handleDeepResearchSend();
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -157,6 +417,7 @@ export default function AgentChatPage() {
           message: userMessage.content,
           mode: selectedMode,
           stream: true,
+          model_id: selectedModelId, // 传递用户选择的模型
         }),
       });
 
@@ -273,50 +534,94 @@ export default function AgentChatPage() {
         position: 'relative',
       }}
     >
-      {/* 顶部导航 */}
+      {/* 右上角固定按钮 */}
       <Box
         sx={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
+          position: 'fixed',
+          top: 16,
+          right: 16,
           display: 'flex',
-          justifyContent: 'flex-end',
-          p: 2,
-          zIndex: 10,
+          gap: 1.5,
+          zIndex: 1000,
         }}
       >
-        {/* 右侧按钮组 */}
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            startIcon={<HistoryIcon />}
-            onClick={() => setHistoryDrawerOpen(true)}
+        <Button
+          onClick={() => setHistoryDrawerOpen(true)}
+          sx={{
+            minWidth: 'auto',
+            padding: '12px 20px',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+            borderRadius: '12px',
+            textTransform: 'none',
+            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            backgroundColor: 'rgba(255, 255, 255, 0.04)',
+            color: 'rgba(255, 255, 255, 0.7)',
+            '&:hover': {
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              color: 'rgba(255, 255, 255, 0.9)',
+              transform: 'translateY(-1px)',
+              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.15), 0 3px 10px rgba(0, 0, 0, 0.1)',
+            },
+            '&:active': {
+              transform: 'translateY(0)',
+            },
+          }}
+        >
+          <HistoryIcon sx={{ fontSize: '20px', mr: 1 }} />
+          <Box
+            component="span"
             sx={{
-              color: theme.text.secondary,
-              textTransform: 'none',
-              '&:hover': {
-                color: theme.text.primary,
-                bgcolor: 'rgba(255, 255, 255, 0.05)',
+              '@media (max-width: 1400px)': {
+                display: 'none',
               },
             }}
           >
             历史记录
-          </Button>
-          <Button
-            startIcon={<AddIcon />}
-            onClick={handleNewConversation}
+          </Box>
+        </Button>
+
+        <Button
+          onClick={handleNewConversation}
+          sx={{
+            minWidth: 'auto',
+            padding: '12px 20px',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+            borderRadius: '12px',
+            textTransform: 'none',
+            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            backgroundColor: 'rgba(255, 255, 255, 0.06)',
+            color: 'rgba(255, 255, 255, 0.8)',
+            '&:hover': {
+              backgroundColor: 'rgba(255, 255, 255, 0.1)',
+              borderColor: 'rgba(255, 255, 255, 0.2)',
+              color: 'rgba(255, 255, 255, 0.95)',
+              transform: 'translateY(-1px)',
+              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.15), 0 3px 10px rgba(0, 0, 0, 0.1)',
+            },
+            '&:active': {
+              transform: 'translateY(0)',
+            },
+          }}
+        >
+          <AddIcon sx={{ fontSize: '20px', mr: 1 }} />
+          <Box
+            component="span"
             sx={{
-              color: theme.text.secondary,
-              textTransform: 'none',
-              '&:hover': {
-                color: theme.text.primary,
-                bgcolor: 'rgba(255, 255, 255, 0.05)',
+              '@media (max-width: 1400px)': {
+                display: 'none',
               },
             }}
           >
             新对话
-          </Button>
-        </Box>
+          </Box>
+        </Button>
       </Box>
 
       {/* 中心内容区域 */}
@@ -398,176 +703,6 @@ export default function AgentChatPage() {
                   },
                 }}
                 InputProps={{
-                  startAdornment: (
-                    <Box
-                      onMouseEnter={() => setModelSelectorHovered(true)}
-                      onMouseLeave={() => setModelSelectorHovered(false)}
-                      sx={{
-                        position: 'relative',
-                        display: 'flex',
-                        alignItems: 'center',
-                        mr: 1,
-                      }}
-                    >
-                      {/* 当前选中的模型 - 始终显示在固定位置 */}
-                      <Tooltip
-                        title={modelOptions.find((m) => m.id === selectedModelId)?.name}
-                        placement="top"
-                      >
-                        <Box
-                          sx={{
-                            width: '36px',
-                            height: '36px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            borderRadius: '8px',
-                            bgcolor: modelSelectorHovered
-                              ? 'rgba(144, 202, 249, 0.15)'
-                              : 'transparent',
-                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                            padding: '4px',
-                            zIndex: 2,
-                          }}
-                        >
-                          <img
-                            src={modelOptions.find((m) => m.id === selectedModelId)?.icon}
-                            alt={
-                              modelOptions.find((m) => m.id === selectedModelId)?.provider
-                            }
-                            style={{
-                              width: '26px',
-                              height: '26px',
-                              borderRadius: '6px',
-                              objectFit: 'contain',
-                            }}
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none';
-                            }}
-                          />
-                        </Box>
-                      </Tooltip>
-
-                      {/* 左侧展开的模型 */}
-                      {modelSelectorHovered && (() => {
-                        const otherModels = modelOptions.filter(
-                          (m) => m.id !== selectedModelId
-                        );
-                        const middleIndex = Math.floor(otherModels.length / 2);
-                        const leftModels = otherModels.slice(0, middleIndex);
-
-                        return leftModels.map((model, index) => (
-                          <Tooltip key={model.id} title={model.name} placement="top">
-                            <Box
-                              onClick={() => setSelectedModelId(model.id)}
-                              sx={{
-                                position: 'absolute',
-                                right: `calc(100% + ${(leftModels.length - index) * 4}px)`,
-                                width: '36px',
-                                height: '36px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                                borderRadius: '8px',
-                                bgcolor: 'transparent',
-                                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                                padding: '4px',
-                                opacity: 0,
-                                transform: 'translateX(20px) scale(0.8)',
-                                animation: 'slideInLeft 0.3s ease forwards',
-                                animationDelay: `${index * 40}ms`,
-                                '@keyframes slideInLeft': {
-                                  to: {
-                                    opacity: 1,
-                                    transform: 'translateX(0) scale(1)',
-                                  },
-                                },
-                                '&:hover': {
-                                  bgcolor: 'rgba(255, 255, 255, 0.08)',
-                                  transform: 'scale(1.1)',
-                                },
-                              }}
-                            >
-                              <img
-                                src={model.icon}
-                                alt={model.provider}
-                                style={{
-                                  width: '26px',
-                                  height: '26px',
-                                  borderRadius: '6px',
-                                  objectFit: 'contain',
-                                }}
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
-                                }}
-                              />
-                            </Box>
-                          </Tooltip>
-                        ));
-                      })()}
-
-                      {/* 右侧展开的模型 */}
-                      {modelSelectorHovered && (() => {
-                        const otherModels = modelOptions.filter(
-                          (m) => m.id !== selectedModelId
-                        );
-                        const middleIndex = Math.floor(otherModels.length / 2);
-                        const rightModels = otherModels.slice(middleIndex);
-
-                        return rightModels.map((model, index) => (
-                          <Tooltip key={model.id} title={model.name} placement="top">
-                            <Box
-                              onClick={() => setSelectedModelId(model.id)}
-                              sx={{
-                                position: 'absolute',
-                                left: `calc(100% + ${(index + 1) * 4}px)`,
-                                width: '36px',
-                                height: '36px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                                borderRadius: '8px',
-                                bgcolor: 'transparent',
-                                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                                padding: '4px',
-                                opacity: 0,
-                                transform: 'translateX(-20px) scale(0.8)',
-                                animation: 'slideInRight 0.3s ease forwards',
-                                animationDelay: `${index * 40}ms`,
-                                '@keyframes slideInRight': {
-                                  to: {
-                                    opacity: 1,
-                                    transform: 'translateX(0) scale(1)',
-                                  },
-                                },
-                                '&:hover': {
-                                  bgcolor: 'rgba(255, 255, 255, 0.08)',
-                                  transform: 'scale(1.1)',
-                                },
-                              }}
-                            >
-                              <img
-                                src={model.icon}
-                                alt={model.provider}
-                                style={{
-                                  width: '26px',
-                                  height: '26px',
-                                  borderRadius: '6px',
-                                  objectFit: 'contain',
-                                }}
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
-                                }}
-                              />
-                            </Box>
-                          </Tooltip>
-                        ));
-                      })()}
-                    </Box>
-                  ),
                   endAdornment: (
                     <IconButton
                       onClick={handleSendMessage}
@@ -585,43 +720,124 @@ export default function AgentChatPage() {
                 }}
               />
 
-              {/* 快捷模式按钮 */}
+              {/* Bottom Controls - Research & Model Selector */}
               <Box
                 sx={{
                   display: 'flex',
-                  gap: 1.5,
-                  mt: 2,
-                  justifyContent: 'center',
-                  flexWrap: 'wrap',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  mt: 3,
+                  gap: 2,
                 }}
               >
-                {chatModes.map((mode) => (
-                  <Chip
-                    key={mode.id}
-                    icon={mode.icon}
-                    label={mode.label}
-                    onClick={() => setSelectedMode(mode.id)}
-                    sx={{
-                      bgcolor:
-                        selectedMode === mode.id
-                          ? 'rgba(255, 255, 255, 0.08)'
-                          : 'rgba(255, 255, 255, 0.03)',
-                      color: theme.text.secondary,
-                      border: `1px solid ${
-                        selectedMode === mode.id
-                          ? mode.color
-                          : 'rgba(255, 255, 255, 0.08)'
-                      }`,
-                      '&:hover': {
-                        bgcolor: 'rgba(255, 255, 255, 0.08)',
-                        borderColor: mode.color,
-                      },
-                      '& .MuiChip-icon': {
-                        color: mode.color,
-                      },
-                    }}
-                  />
-                ))}
+                {/* Research Mode Button */}
+                <Button
+                  onClick={() => setResearchMode(!researchMode)}
+                  sx={{
+                    padding: '12px 20px',
+                    backgroundColor: researchMode
+                      ? 'linear-gradient(135deg, #1a2f4a 0%, #243b5e 100%)'
+                      : 'rgba(255, 255, 255, 0.03)',
+                    border: researchMode
+                      ? '1px solid #2d4a6f'
+                      : '1px solid rgba(255, 255, 255, 0.06)',
+                    borderRadius: '24px',
+                    color: researchMode ? '#7d9bb8' : 'rgba(255, 255, 255, 0.5)',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    letterSpacing: '0.3px',
+                    textTransform: 'none',
+                    boxShadow: researchMode
+                      ? '0 0 15px rgba(125, 155, 184, 0.1), inset 0 1px 0 rgba(125, 155, 184, 0.15)'
+                      : 'none',
+                    '&:hover': {
+                      backgroundColor: researchMode
+                        ? 'linear-gradient(135deg, #1e3651 0%, #294268 100%)'
+                        : 'rgba(255, 255, 255, 0.06)',
+                      borderColor: researchMode ? '#355577' : 'rgba(255, 255, 255, 0.1)',
+                      color: researchMode ? '#8ca8c2' : 'rgba(255, 255, 255, 0.8)',
+                    },
+                  }}
+                >
+                  <SearchIcon sx={{ fontSize: '16px' }} />
+                  <span>Research</span>
+                </Button>
+
+                {/* Model Selector - Horizontal Icons */}
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    padding: '4px 8px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                  }}
+                >
+                  {modelOptions.map((model) => (
+                    <Tooltip
+                      key={model.id}
+                      title={model.available ? model.name : `${model.name} (未配置)`}
+                      placement="top"
+                    >
+                      <Box
+                        onClick={() => {
+                          if (model.available) {
+                            setSelectedModelId(model.id);
+                          }
+                        }}
+                        sx={{
+                          position: 'relative',
+                          width: '40px',
+                          height: '40px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: model.available ? 'pointer' : 'not-allowed',
+                          borderRadius: '8px',
+                          border: '2px solid transparent',
+                          backgroundColor:
+                            selectedModelId === model.id
+                              ? 'rgba(144, 202, 249, 0.15)'
+                              : 'transparent',
+                          transition: 'all 0.2s ease',
+                          padding: '4px',
+                          opacity: model.available ? 1 : 0.3,
+                          '&:hover': {
+                            backgroundColor:
+                              selectedModelId === model.id
+                                ? 'rgba(144, 202, 249, 0.15)'
+                                : model.available
+                                ? 'rgba(255, 255, 255, 0.08)'
+                                : 'transparent',
+                          },
+                        }}
+                      >
+                        <Box
+                          component="img"
+                          src={model.icon}
+                          alt={model.provider}
+                          sx={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '6px',
+                            objectFit: 'contain',
+                            filter: model.available ? 'none' : 'grayscale(100%)',
+                          }}
+                          onError={(e: any) => {
+                            e.target.style.display = 'none';
+                          }}
+                        />
+                      </Box>
+                    </Tooltip>
+                  ))}
+                </Box>
               </Box>
             </Box>
           </Box>
@@ -638,9 +854,31 @@ export default function AgentChatPage() {
               gap: 3,
             }}
           >
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))}
+            {messages.map((msg) => {
+              // Use EnhancedMessage if message has research_data
+              if (msg.research_data) {
+                return <EnhancedMessage key={msg.id} message={msg} />;
+              }
+              return <ChatMessage key={msg.id} message={msg} />;
+            })}
+
+            {/* Research Progress Cards */}
+            {researchInProgress && (
+              <>
+                {researchStatus && (
+                  <ResearchStatusCard
+                    status={researchStatus}
+                    sourcesCount={Object.values(researchSources).reduce(
+                      (a, b) => a + b,
+                      0
+                    )}
+                    currentSource={currentSourceReading}
+                  />
+                )}
+                <TypingIndicator />
+              </>
+            )}
+
             <div ref={messagesEndRef} />
           </Box>
         )}
@@ -656,6 +894,126 @@ export default function AgentChatPage() {
           }}
         >
           <Box sx={{ maxWidth: '900px', mx: 'auto' }}>
+            {/* Bottom Controls - Research & Model Selector */}
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                mb: 1.5,
+                gap: 2,
+              }}
+            >
+              {/* Research Mode Button */}
+              <Button
+                onClick={() => setResearchMode(!researchMode)}
+                sx={{
+                  padding: '12px 20px',
+                  backgroundColor: researchMode
+                    ? 'linear-gradient(135deg, #1a2f4a 0%, #243b5e 100%)'
+                    : 'rgba(255, 255, 255, 0.03)',
+                  border: researchMode
+                    ? '1px solid #2d4a6f'
+                    : '1px solid rgba(255, 255, 255, 0.06)',
+                  borderRadius: '24px',
+                  color: researchMode ? '#7d9bb8' : 'rgba(255, 255, 255, 0.5)',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  letterSpacing: '0.3px',
+                  textTransform: 'none',
+                  boxShadow: researchMode
+                    ? '0 0 15px rgba(125, 155, 184, 0.1), inset 0 1px 0 rgba(125, 155, 184, 0.15)'
+                    : 'none',
+                  '&:hover': {
+                    backgroundColor: researchMode
+                      ? 'linear-gradient(135deg, #1e3651 0%, #294268 100%)'
+                      : 'rgba(255, 255, 255, 0.06)',
+                    borderColor: researchMode ? '#355577' : 'rgba(255, 255, 255, 0.1)',
+                    color: researchMode ? '#8ca8c2' : 'rgba(255, 255, 255, 0.8)',
+                  },
+                }}
+              >
+                <SearchIcon sx={{ fontSize: '16px' }} />
+                <span>Research</span>
+              </Button>
+
+              {/* Model Selector - Horizontal Icons */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  padding: '4px 8px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                }}
+              >
+                {modelOptions.map((model) => (
+                  <Tooltip
+                    key={model.id}
+                    title={model.available ? model.name : `${model.name} (未配置)`}
+                    placement="top"
+                  >
+                    <Box
+                      onClick={() => {
+                        if (model.available) {
+                          setSelectedModelId(model.id);
+                        }
+                      }}
+                      sx={{
+                        position: 'relative',
+                        width: '40px',
+                        height: '40px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: model.available ? 'pointer' : 'not-allowed',
+                        borderRadius: '8px',
+                        border: '2px solid transparent',
+                        backgroundColor:
+                          selectedModelId === model.id
+                            ? 'rgba(144, 202, 249, 0.15)'
+                            : 'transparent',
+                        transition: 'all 0.2s ease',
+                        padding: '4px',
+                        opacity: model.available ? 1 : 0.3,
+                        '&:hover': {
+                          backgroundColor:
+                            selectedModelId === model.id
+                              ? 'rgba(144, 202, 249, 0.15)'
+                              : model.available
+                              ? 'rgba(255, 255, 255, 0.08)'
+                              : 'transparent',
+                        },
+                      }}
+                    >
+                      <Box
+                        component="img"
+                        src={model.icon}
+                        alt={model.provider}
+                        sx={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '6px',
+                          objectFit: 'contain',
+                          filter: model.available ? 'none' : 'grayscale(100%)',
+                        }}
+                        onError={(e: any) => {
+                          e.target.style.display = 'none';
+                        }}
+                      />
+                    </Box>
+                  </Tooltip>
+                ))}
+              </Box>
+            </Box>
+
             <TextField
               fullWidth
               multiline
@@ -681,176 +1039,6 @@ export default function AgentChatPage() {
                 },
               }}
               InputProps={{
-                startAdornment: (
-                  <Box
-                    onMouseEnter={() => setModelSelectorHovered(true)}
-                    onMouseLeave={() => setModelSelectorHovered(false)}
-                    sx={{
-                      position: 'relative',
-                      display: 'flex',
-                      alignItems: 'center',
-                      mr: 1,
-                    }}
-                  >
-                    {/* 当前选中的模型 - 始终显示在固定位置 */}
-                    <Tooltip
-                      title={modelOptions.find((m) => m.id === selectedModelId)?.name}
-                      placement="top"
-                    >
-                      <Box
-                        sx={{
-                          width: '36px',
-                          height: '36px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          borderRadius: '8px',
-                          bgcolor: modelSelectorHovered
-                            ? 'rgba(144, 202, 249, 0.15)'
-                            : 'transparent',
-                          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                          padding: '4px',
-                          zIndex: 2,
-                        }}
-                      >
-                        <img
-                          src={modelOptions.find((m) => m.id === selectedModelId)?.icon}
-                          alt={
-                            modelOptions.find((m) => m.id === selectedModelId)?.provider
-                          }
-                          style={{
-                            width: '26px',
-                            height: '26px',
-                            borderRadius: '6px',
-                            objectFit: 'contain',
-                          }}
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
-                        />
-                      </Box>
-                    </Tooltip>
-
-                    {/* 左侧展开的模型 */}
-                    {modelSelectorHovered && (() => {
-                      const otherModels = modelOptions.filter(
-                        (m) => m.id !== selectedModelId
-                      );
-                      const middleIndex = Math.floor(otherModels.length / 2);
-                      const leftModels = otherModels.slice(0, middleIndex);
-
-                      return leftModels.map((model, index) => (
-                        <Tooltip key={model.id} title={model.name} placement="top">
-                          <Box
-                            onClick={() => setSelectedModelId(model.id)}
-                            sx={{
-                              position: 'absolute',
-                              right: `calc(100% + ${(leftModels.length - index) * 4}px)`,
-                              width: '36px',
-                              height: '36px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: 'pointer',
-                              borderRadius: '8px',
-                              bgcolor: 'transparent',
-                              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                              padding: '4px',
-                              opacity: 0,
-                              transform: 'translateX(20px) scale(0.8)',
-                              animation: 'slideInLeft 0.3s ease forwards',
-                              animationDelay: `${index * 40}ms`,
-                              '@keyframes slideInLeft': {
-                                to: {
-                                  opacity: 1,
-                                  transform: 'translateX(0) scale(1)',
-                                },
-                              },
-                              '&:hover': {
-                                bgcolor: 'rgba(255, 255, 255, 0.08)',
-                                transform: 'scale(1.1)',
-                              },
-                            }}
-                          >
-                            <img
-                              src={model.icon}
-                              alt={model.provider}
-                              style={{
-                                width: '26px',
-                                height: '26px',
-                                borderRadius: '6px',
-                                objectFit: 'contain',
-                              }}
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                          </Box>
-                        </Tooltip>
-                      ));
-                    })()}
-
-                    {/* 右侧展开的模型 */}
-                    {modelSelectorHovered && (() => {
-                      const otherModels = modelOptions.filter(
-                        (m) => m.id !== selectedModelId
-                      );
-                      const middleIndex = Math.floor(otherModels.length / 2);
-                      const rightModels = otherModels.slice(middleIndex);
-
-                      return rightModels.map((model, index) => (
-                        <Tooltip key={model.id} title={model.name} placement="top">
-                          <Box
-                            onClick={() => setSelectedModelId(model.id)}
-                            sx={{
-                              position: 'absolute',
-                              left: `calc(100% + ${(index + 1) * 4}px)`,
-                              width: '36px',
-                              height: '36px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: 'pointer',
-                              borderRadius: '8px',
-                              bgcolor: 'transparent',
-                              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                              padding: '4px',
-                              opacity: 0,
-                              transform: 'translateX(-20px) scale(0.8)',
-                              animation: 'slideInRight 0.3s ease forwards',
-                              animationDelay: `${index * 40}ms`,
-                              '@keyframes slideInRight': {
-                                to: {
-                                  opacity: 1,
-                                  transform: 'translateX(0) scale(1)',
-                                },
-                              },
-                              '&:hover': {
-                                bgcolor: 'rgba(255, 255, 255, 0.08)',
-                                transform: 'scale(1.1)',
-                              },
-                            }}
-                          >
-                            <img
-                              src={model.icon}
-                              alt={model.provider}
-                              style={{
-                                width: '26px',
-                                height: '26px',
-                                borderRadius: '6px',
-                                objectFit: 'contain',
-                              }}
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                          </Box>
-                        </Tooltip>
-                      ));
-                    })()}
-                  </Box>
-                ),
                 endAdornment: (
                   <IconButton
                     onClick={handleSendMessage}

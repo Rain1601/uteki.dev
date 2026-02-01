@@ -19,11 +19,31 @@ from uteki.common.config import settings
 from uteki.common.base import Base
 
 # 导入所有模型以确保它们被注册
-from uteki.domains.admin.models import APIKey, User, SystemConfig, AuditLog
+from uteki.domains.admin.models import (
+    APIKey,
+    User,
+    SystemConfig,
+    AuditLog,
+    LLMProvider,
+    ExchangeConfig,
+    DataSourceConfig,
+)
+from uteki.domains.agent.models import (
+    ChatConversation,
+    ChatMessage,
+)
 
 
 async def create_schemas(engine):
-    """创建所有schema"""
+    """创建所有schema（SQLite会跳过此步骤）"""
+    from uteki.common.config import settings
+
+    # SQLite不支持schema，跳过此步骤
+    if settings.database_type == "sqlite":
+        print("✓ SQLite mode: Skipping schema creation (not supported)")
+        return
+
+    # PostgreSQL: 创建所有schema
     schemas = ["admin", "trading", "data", "agent", "evaluation", "dashboard"]
 
     async with engine.begin() as conn:
@@ -47,9 +67,9 @@ async def init_database():
     print("=" * 60)
     print()
 
-    # 创建异步引擎
+    # 创建异步引擎（自动选择SQLite或PostgreSQL）
     engine = create_async_engine(
-        settings.postgres_url,
+        settings.database_url,
         echo=True,
     )
 

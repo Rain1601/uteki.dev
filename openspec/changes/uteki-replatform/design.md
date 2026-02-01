@@ -674,7 +674,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_API_URL: http://localhost:8888
     command: npm start
 ```
 
@@ -741,8 +741,8 @@ case $choice in
         read -p "Press Enter when ready..."
         docker compose up -d
         echo "✓ Uteki.open is running!"
-        echo "  Frontend: http://localhost:3000"
-        echo "  Backend: http://localhost:8000"
+        echo "  Frontend: http://localhost:5173"
+        echo "  Backend: http://localhost:8888"
         ;;
     2)
         echo "Installing for local development..."
@@ -859,7 +859,7 @@ async def test_user_runs_first_backtest():
         page = await browser.new_page()
 
         # Navigate to app
-        await page.goto("http://localhost:3000")
+        await page.goto("http://localhost:5173")
 
         # Go to workplace
         await page.click("text=Workplace")

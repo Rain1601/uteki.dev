@@ -46,8 +46,8 @@ pnpm dev
 
 ### 📍 访问地址
 
-- **后端API文档**: http://localhost:8000/docs
-- **后端健康检查**: http://localhost:8000/health
+- **后端API文档**: http://localhost:8888/docs
+- **后端健康检查**: http://localhost:8888/health
 - **前端界面**: http://localhost:5173
 - **MinIO控制台**: http://localhost:9001 (uteki / uteki_dev_pass)
 
@@ -139,7 +139,7 @@ poetry run ruff format .
 - [常见问题 FAQ](docs/FAQ.md) - 数据库配置、注册说明
 - [数据库策略 Database Strategy](docs/DATABASE_STRATEGY.md) - 多数据库架构
 - [数据分发 Data Distribution](docs/DATA_DISTRIBUTION.md) - 数据获取方案
-- [API Reference](http://localhost:8000/docs) - 在线API文档
+- [API Reference](http://localhost:8888/docs) - 在线API文档
 
 ## License
 

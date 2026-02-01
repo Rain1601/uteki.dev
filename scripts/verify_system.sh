@@ -117,9 +117,9 @@ echo ""
 echo "步骤4: 检查后端服务"
 echo "----------------------------------------"
 if check_port 8000 "Backend API"; then
-    check_http "http://localhost:8000/health" || BACKEND_ISSUES=1
-    check_http "http://localhost:8000/api/status" || BACKEND_ISSUES=1
-    check_http "http://localhost:8000/docs" || BACKEND_ISSUES=1
+    check_http "http://localhost:8888/health" || BACKEND_ISSUES=1
+    check_http "http://localhost:8888/api/status" || BACKEND_ISSUES=1
+    check_http "http://localhost:8888/docs" || BACKEND_ISSUES=1
 else
     echo -e "${RED}✗${NC} 后端未启动"
     BACKEND_ISSUES=1
@@ -154,7 +154,7 @@ echo "步骤6: 测试API CRUD操作"
 echo "----------------------------------------"
 if [ -z "$BACKEND_ISSUES" ]; then
     # 创建测试API密钥
-    RESPONSE=$(curl -s -X POST "http://localhost:8000/api/admin/api-keys" \
+    RESPONSE=$(curl -s -X POST "http://localhost:8888/api/admin/api-keys" \
         -H "Content-Type: application/json" \
         -d '{
             "provider": "test_verify",
@@ -170,12 +170,12 @@ if [ -z "$BACKEND_ISSUES" ]; then
         # 提取ID并尝试读取
         API_KEY_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
         if [ ! -z "$API_KEY_ID" ]; then
-            LIST_RESPONSE=$(curl -s "http://localhost:8000/api/admin/api-keys" 2>/dev/null)
+            LIST_RESPONSE=$(curl -s "http://localhost:8888/api/admin/api-keys" 2>/dev/null)
             if echo "$LIST_RESPONSE" | grep -q "$API_KEY_ID"; then
                 echo -e "${GREEN}✓${NC} API读取操作成功"
 
                 # 删除测试数据
-                DELETE_RESPONSE=$(curl -s -X DELETE "http://localhost:8000/api/admin/api-keys/$API_KEY_ID" 2>/dev/null)
+                DELETE_RESPONSE=$(curl -s -X DELETE "http://localhost:8888/api/admin/api-keys/$API_KEY_ID" 2>/dev/null)
                 if echo "$DELETE_RESPONSE" | grep -q "success"; then
                     echo -e "${GREEN}✓${NC} API删除操作成功"
                 else
@@ -205,8 +205,8 @@ if [ -z "$MISSING_TOOLS" ] && [ -z "$DOCKER_ISSUES" ] && [ -z "$PORT_ISSUES" ] &
     echo -e "${GREEN}✓ 系统完全可用！${NC}"
     echo ""
     echo "访问地址:"
-    echo "  • 后端API文档: http://localhost:8000/docs"
-    echo "  • 后端健康检查: http://localhost:8000/health"
+    echo "  • 后端API文档: http://localhost:8888/docs"
+    echo "  • 后端健康检查: http://localhost:8888/health"
     echo "  • 前端界面: http://localhost:5173"
     echo "  • MinIO控制台: http://localhost:9001 (用户名: uteki, 密码: uteki_dev_pass)"
     echo ""

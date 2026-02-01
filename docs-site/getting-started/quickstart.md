@@ -110,14 +110,14 @@ pnpm dev
 
 访问以下地址：
 
-- **API文档**: http://localhost:8000/docs
-- **健康检查**: http://localhost:8000/health
+- **API文档**: http://localhost:8888/docs
+- **健康检查**: http://localhost:8888/health
 - **前端界面**: http://localhost:5173
 - **MinIO控制台**: http://localhost:9001 (uteki / uteki_dev_pass)
 
 ### 测试CRUD操作
 
-在 http://localhost:8000/docs 中测试：
+在 http://localhost:8888/docs 中测试：
 
 1. 展开 `POST /api/admin/api-keys`
 2. 点击 "Try it out"

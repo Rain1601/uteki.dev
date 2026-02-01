@@ -208,14 +208,14 @@ git clone https://github.com/yourusername/uteki.open
 cd uteki.open
 cp .env.example .env  # Configure API keys
 docker compose up     # Start all services
-# → http://localhost:3000
+# → http://localhost:5173
 
 # Option 2: Local Development (For developers)
 git clone https://github.com/yourusername/uteki.open
 cd uteki.open
 make install          # Poetry + npm install
 make dev              # Start backend + frontend
-# → http://localhost:3000
+# → http://localhost:5173
 ```
 
 **Smart Setup Script**:

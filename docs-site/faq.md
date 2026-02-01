@@ -172,7 +172,7 @@ OKX_API_KEY=your_okx_key
 
 ```bash
 # 启动后端后，通过API配置
-curl -X POST "http://localhost:8000/api/admin/api-keys" \
+curl -X POST "http://localhost:8888/api/admin/api-keys" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "openai",
@@ -277,10 +277,10 @@ poetry run python ../scripts/init_database.py
 poetry run python -m uteki.main
 
 # 4. 访问健康检查接口
-curl http://localhost:8000/health
+curl http://localhost:8888/health
 
 # 5. 测试CRUD操作
-curl -X POST "http://localhost:8000/api/admin/api-keys" \
+curl -X POST "http://localhost:8888/api/admin/api-keys" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "test",
@@ -289,7 +289,7 @@ curl -X POST "http://localhost:8000/api/admin/api-keys" \
   }'
 
 # 6. 查询刚创建的记录
-curl "http://localhost:8000/api/admin/api-keys"
+curl "http://localhost:8888/api/admin/api-keys"
 ```
 
 如果所有步骤都成功，系统就是完全可用的。

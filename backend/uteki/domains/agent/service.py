@@ -9,166 +9,217 @@ import json
 from uteki.domains.agent.models import ChatConversation, ChatMessage
 from uteki.domains.agent.repository import ChatConversationRepository, ChatMessageRepository
 from uteki.domains.agent import schemas
-from uteki.domains.admin.models import LLMProvider, APIKey
-from uteki.domains.admin.repository import LLMProviderRepository, APIKeyRepository
-from uteki.domains.admin.service import EncryptionService
+from uteki.domains.agent.llm_adapter import (
+    LLMAdapterFactory,
+    LLMProvider,
+    LLMMessage,
+    LLMConfig,
+    BaseLLMAdapter
+)
+from uteki.common.config import settings
 
 
-class LLMClientService:
-    """LLM客户端服务 - 统一不同LLM提供商的调用接口"""
+def parse_model_info(model_id: str) -> Tuple[str, str]:
+    """
+    从模型ID解析出 provider 和 model
 
-    def __init__(self, encryption_service: EncryptionService):
-        self.encryption = encryption_service
+    Args:
+        model_id: 前端传来的模型ID，如 "claude-sonnet-4-20250514", "gpt-4-turbo", "deepseek-chat"
 
-    async def get_llm_client(
-        self,
-        session: AsyncSession,
-        llm_provider: LLMProvider
-    ):
-        """获取LLM客户端"""
-        # 获取API密钥
-        api_key = await APIKeyRepository.get_by_id(session, llm_provider.api_key_id)
-        if not api_key:
-            raise ValueError(f"API key not found for provider {llm_provider.provider}")
+    Returns:
+        (provider, model) 元组
+    """
+    # 模型ID映射
+    model_mapping = {
+        # Claude models
+        "claude-sonnet-4-20250514": ("anthropic", "claude-sonnet-4-20250514"),
+        "claude-3-5-sonnet-20241022": ("anthropic", "claude-3-5-sonnet-20241022"),
 
-        # 解密API密钥
-        decrypted_key = self.encryption.decrypt(api_key.api_key)
+        # OpenAI models
+        "gpt-4-turbo": ("openai", "gpt-4-turbo"),
+        "gpt-4o-mini": ("openai", "gpt-4o-mini"),
+        "gpt-4o": ("openai", "gpt-4o"),
 
-        # 根据provider类型返回相应客户端配置
-        provider_name = llm_provider.provider.lower()
+        # DeepSeek models
+        "deepseek-chat": ("deepseek", "deepseek-chat"),
+        "deepseek-coder": ("deepseek", "deepseek-coder"),
 
-        if provider_name == "openai":
-            try:
-                from openai import AsyncOpenAI
-                return AsyncOpenAI(api_key=decrypted_key)
-            except ImportError:
-                raise ImportError("OpenAI package not installed. Run: pip install openai")
+        # Qwen models
+        "qwen-plus": ("dashscope", "qwen-plus"),
+        "qwen-max": ("dashscope", "qwen-max"),
 
-        elif provider_name == "anthropic":
-            try:
-                from anthropic import AsyncAnthropic
-                return AsyncAnthropic(api_key=decrypted_key)
-            except ImportError:
-                raise ImportError("Anthropic package not installed. Run: pip install anthropic")
+        # MiniMax models
+        "abab6.5s-chat": ("minimax", "abab6.5s-chat"),
+        "abab6.5-chat": ("minimax", "abab6.5-chat"),
 
-        elif provider_name in ["dashscope", "qwen"]:
-            # 阿里云DashScope/通义千问
-            try:
-                import dashscope
-                dashscope.api_key = decrypted_key
-                return dashscope
-            except ImportError:
-                raise ImportError("DashScope package not installed. Run: pip install dashscope")
+        # Gemini models
+        "gemini-2.0-flash-exp": ("google", "gemini-2.0-flash-exp"),
+        "gemini-pro": ("google", "gemini-pro"),
+    }
 
-        elif provider_name == "deepseek":
-            # DeepSeek使用OpenAI兼容接口
-            try:
-                from openai import AsyncOpenAI
-                return AsyncOpenAI(
-                    api_key=decrypted_key,
-                    base_url="https://api.deepseek.com"
-                )
-            except ImportError:
-                raise ImportError("OpenAI package not installed. Run: pip install openai")
+    if model_id in model_mapping:
+        return model_mapping[model_id]
 
+    # 如果没找到，尝试从 ID 推断
+    if "claude" in model_id:
+        return ("anthropic", model_id)
+    elif "gpt" in model_id:
+        return ("openai", model_id)
+    elif "deepseek" in model_id:
+        return ("deepseek", model_id)
+    elif "qwen" in model_id:
+        return ("dashscope", model_id)
+    elif "abab" in model_id or "minimax" in model_id:
+        return ("minimax", model_id)
+    elif "gemini" in model_id:
+        return ("google", model_id)
+
+    # 默认使用配置的 provider
+    return (settings.llm_provider, model_id)
+
+
+class SimpleLLMService:
+    """
+    统一的LLM服务 - 使用适配器模式支持多个提供商
+
+    设计理念：
+    - 使用统一的 LLM Adapter 架构
+    - LLM API keys 由平台管理，用户无需配置
+    - 从 settings (.env) 读取配置
+    - 支持 OpenAI, Anthropic, DeepSeek, DashScope
+    - 支持 tool/function calling
+    - 用户可以选择使用哪个模型
+    """
+
+    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
+        """
+        初始化 LLM 服务
+
+        Args:
+            provider: LLM 提供商（openai, anthropic, deepseek, dashscope）
+                     如果为 None，使用 settings 默认值
+            model: 模型名称，如果为 None，使用对应 provider 的默认模型
+        """
+        # 使用传入的 provider，否则使用配置的默认值
+        self.provider = (provider or settings.llm_provider).lower()
+
+        # 根据 provider 确定模型
+        if model:
+            self.model = model
         else:
-            raise ValueError(f"Unsupported LLM provider: {provider_name}")
+            # 使用默认模型
+            if self.provider == "openai":
+                self.model = settings.openai_model
+            elif self.provider == "anthropic":
+                self.model = settings.anthropic_model
+            elif self.provider in ["deepseek", "dashscope", "qwen"]:
+                self.model = model or settings.llm_model
+            else:
+                self.model = settings.llm_model
+
+    def _get_api_key(self) -> str:
+        """获取对应 provider 的 API key"""
+        if self.provider == "openai":
+            if not settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY not configured in .env")
+            return settings.openai_api_key
+        elif self.provider == "anthropic":
+            if not settings.anthropic_api_key:
+                raise ValueError("ANTHROPIC_API_KEY not configured in .env")
+            return settings.anthropic_api_key
+        elif self.provider in ["dashscope", "qwen"]:
+            if not settings.dashscope_api_key:
+                raise ValueError("DASHSCOPE_API_KEY not configured in .env")
+            return settings.dashscope_api_key
+        elif self.provider == "deepseek":
+            if not settings.deepseek_api_key:
+                raise ValueError("DEEPSEEK_API_KEY not configured in .env")
+            return settings.deepseek_api_key
+        elif self.provider == "minimax":
+            if not settings.minimax_api_key:
+                raise ValueError("MINIMAX_API_KEY not configured in .env")
+            return settings.minimax_api_key
+        elif self.provider == "google":
+            if not settings.google_api_key:
+                raise ValueError("GOOGLE_API_KEY not configured in .env")
+            return settings.google_api_key
+        else:
+            raise ValueError(f"Unsupported LLM provider: {self.provider}")
+
+    def _get_adapter(self, config: Optional[LLMConfig] = None) -> BaseLLMAdapter:
+        """创建对应的 LLM Adapter"""
+        api_key = self._get_api_key()
+
+        # 映射 provider 名称到 LLMProvider 枚举
+        provider_mapping = {
+            "openai": LLMProvider.OPENAI,
+            "anthropic": LLMProvider.ANTHROPIC,
+            "deepseek": LLMProvider.DEEPSEEK,
+            "dashscope": LLMProvider.DASHSCOPE,
+            "qwen": LLMProvider.QWEN,
+            "minimax": LLMProvider.MINIMAX,
+            "google": LLMProvider.GOOGLE,
+        }
+
+        provider_enum = provider_mapping.get(self.provider)
+        if not provider_enum:
+            raise ValueError(f"Unsupported provider: {self.provider}")
+
+        return LLMAdapterFactory.create_adapter(
+            provider=provider_enum,
+            api_key=api_key,
+            model=self.model,
+            config=config or LLMConfig()
+        )
 
     async def chat_completion(
         self,
-        session: AsyncSession,
-        llm_provider: LLMProvider,
         messages: List[dict],
-        stream: bool = True
+        stream: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2000
     ) -> AsyncGenerator[str, None]:
-        """调用LLM完成对话"""
-        client = await self.get_llm_client(session, llm_provider)
-        provider_name = llm_provider.provider.lower()
-        model = llm_provider.model
-        config = llm_provider.config or {}
-
-        # 准备配置参数
-        temperature = config.get("temperature", 0.7)
-        max_tokens = config.get("max_tokens", 2000)
-
-        if provider_name in ["openai", "deepseek"]:
-            # OpenAI或兼容OpenAI的接口
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
+        """调用LLM完成对话（使用统一适配器）"""
+        try:
+            # 创建配置
+            config = LLMConfig(
                 temperature=temperature,
-                max_tokens=max_tokens,
-                stream=stream
+                max_tokens=max_tokens
             )
 
-            if stream:
-                async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
-            else:
-                yield response.choices[0].message.content
+            # 获取适配器
+            adapter = self._get_adapter(config)
 
-        elif provider_name == "anthropic":
-            # Anthropic Claude
-            # 转换消息格式（Anthropic不接受system role在messages中）
-            system_message = None
-            anthropic_messages = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_message = msg["content"]
-                else:
-                    anthropic_messages.append(msg)
+            # 转换消息格式为统一格式
+            llm_messages = [
+                LLMMessage(role=msg["role"], content=msg["content"])
+                for msg in messages
+            ]
 
-            kwargs = {
-                "model": model,
-                "messages": anthropic_messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            if system_message:
-                kwargs["system"] = system_message
+            # 调用适配器进行对话
+            async for chunk in adapter.chat(llm_messages, stream=stream):
+                yield chunk
 
-            if stream:
-                async with client.messages.stream(**kwargs) as stream_response:
-                    async for text in stream_response.text_stream:
-                        yield text
-            else:
-                response = await client.messages.create(**kwargs)
-                yield response.content[0].text
-
-        elif provider_name in ["dashscope", "qwen"]:
-            # 阿里云DashScope
-            import dashscope
-            from dashscope import Generation
-
-            response = Generation.call(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                result_format="message",
-                stream=stream
-            )
-
-            if stream:
-                for chunk in response:
-                    if chunk.status_code == 200:
-                        content = chunk.output.choices[0].message.content
-                        if content:
-                            yield content
-            else:
-                if response.status_code == 200:
-                    yield response.output.choices[0].message.content
-
-        else:
-            raise ValueError(f"Unsupported provider: {provider_name}")
+        except Exception as e:
+            # 记录详细错误信息
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            raise ValueError(f"LLM API error ({self.provider}): {error_detail}")
 
 
 class ChatService:
-    """聊天服务"""
+    """
+    聊天服务
 
-    def __init__(self, encryption_service: EncryptionService):
-        self.llm_client_service = LLMClientService(encryption_service)
+    设计理念：
+    - LLM调用使用平台配置（.env），用户无需配置
+    - 用户可以选择使用哪个模型
+    - 对话历史存储在数据库中
+    """
+
+    def __init__(self):
+        # LLM service 在需要时创建，支持动态选择模型
+        pass
 
     async def create_conversation(
         self, session: AsyncSession, data: schemas.ChatConversationCreate
@@ -245,8 +296,23 @@ class ChatService:
         session: AsyncSession,
         data: schemas.ChatRequest
     ) -> AsyncGenerator[schemas.StreamChunk, None]:
-        """执行聊天（流式返回）"""
-        # 1. 获取或创建会话
+        """
+        执行聊天（流式返回）
+
+        LLM配置从.env读取，用户可以选择模型
+        """
+        # 1. 解析模型信息
+        if data.model_id:
+            provider, model = parse_model_info(data.model_id)
+        else:
+            # 使用默认配置
+            provider = settings.llm_provider
+            model = settings.llm_model
+
+        # 2. 创建 LLM 服务实例
+        llm_service = SimpleLLMService(provider=provider, model=model)
+
+        # 3. 获取或创建会话
         if data.conversation_id:
             conversation = await self.get_conversation(session, data.conversation_id)
             if not conversation:
@@ -261,19 +327,7 @@ class ChatService:
                 )
             )
 
-        # 2. 获取LLM提供商
-        if data.llm_provider_id:
-            llm_provider = await LLMProviderRepository.get_by_id(session, data.llm_provider_id)
-        else:
-            llm_provider = await LLMProviderRepository.get_default_provider(session)
-
-        if not llm_provider:
-            raise ValueError("No LLM provider configured")
-
-        if not llm_provider.is_active:
-            raise ValueError(f"LLM provider {llm_provider.display_name} is not active")
-
-        # 3. 保存用户消息
+        # 4. 保存用户消息
         await self.create_message(
             session,
             conversation_id=conversation.id,
@@ -281,36 +335,56 @@ class ChatService:
             content=data.message
         )
 
-        # 4. 构建消息历史
+        # 5. 构建消息历史
         history_messages = await self.get_conversation_messages(session, conversation.id)
         messages = [
             {"role": msg.role, "content": msg.content}
             for msg in history_messages
         ]
 
-        # 5. 调用LLM生成回复（流式）
+        # 6. 调用LLM生成回复（流式）
         assistant_response = ""
-        async for chunk in self.llm_client_service.chat_completion(
-            session, llm_provider, messages, stream=data.stream
-        ):
-            assistant_response += chunk
+        try:
+            async for chunk in llm_service.chat_completion(
+                messages=messages,
+                stream=data.stream
+            ):
+                assistant_response += chunk
+                yield schemas.StreamChunk(
+                    conversation_id=conversation.id,
+                    chunk=chunk,
+                    done=False
+                )
+        except Exception as e:
+            # 返回错误信息
+            error_msg = f"调用 {provider} 模型失败: {str(e)}"
             yield schemas.StreamChunk(
                 conversation_id=conversation.id,
-                chunk=chunk,
-                done=False
+                chunk="",
+                done=True
             )
+            # 保存错误消息
+            await self.create_message(
+                session,
+                conversation_id=conversation.id,
+                role="assistant",
+                content=error_msg,
+                llm_provider=provider,
+                llm_model=model
+            )
+            return
 
-        # 6. 保存助手回复
+        # 7. 保存助手回复
         await self.create_message(
             session,
             conversation_id=conversation.id,
             role="assistant",
             content=assistant_response,
-            llm_provider=llm_provider.provider,
-            llm_model=llm_provider.model
+            llm_provider=provider,
+            llm_model=model
         )
 
-        # 7. 发送完成信号
+        # 8. 发送完成信号
         yield schemas.StreamChunk(
             conversation_id=conversation.id,
             chunk="",
@@ -319,9 +393,11 @@ class ChatService:
 
 
 # 依赖注入工厂函数（用于 FastAPI Depends）
-# 避免模块级别导入，在请求时才创建服务实例
 
 def get_chat_service() -> "ChatService":
-    """获取聊天服务实例"""
-    from uteki.domains.admin.service import get_encryption_service
-    return ChatService(get_encryption_service())
+    """
+    获取聊天服务实例
+
+    注意：LLM配置从.env读取，无需依赖数据库
+    """
+    return ChatService()

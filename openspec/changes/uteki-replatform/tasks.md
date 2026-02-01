@@ -1,15 +1,16 @@
 # Implementation Tasks - uteki-replatform
 
 **Change**: uteki-replatform
-**Status**: In Progress (Week 1-2 完成，进行中Week 3)
-**Progress**: 约15% (Infrastructure完成，Admin Domain基础完成)
+**Status**: In Progress (Week 1-2 完成，Week 3 进行中)
+**Progress**: 约16% (Infrastructure完成，Admin Domain 95%完成，Agent Domain LLM层完成)
 **Estimated Duration**: 14 weeks
+**Last Updated**: 2026-01-31
 
 ---
 
-## 📊 当前状态总结 (2026-01-27)
+## 📊 当前状态总结 (2026-01-31)
 
-### ✅ 已完成 (约15%)
+### ✅ 已完成 (约16%)
 
 **基础设施 (Section 1) - 100%**
 - ✅ 项目结构：6个domain，DDD架构
@@ -20,13 +21,20 @@
 - ✅ 文档系统：VitePress + Vercel部署
 - ✅ 开发规范：CONTRIBUTING.md + GitHub模板
 
-**Admin Domain (Section 2) - 70%**
-- ✅ 数据模型：APIKey, User, SystemConfig, AuditLog
+**Admin Domain (Section 2) - 95%**
+- ✅ 数据模型：APIKey, User, SystemConfig, AuditLog, LLMProvider, ExchangeConfig, DataSourceConfig（7个模型完成）
 - ✅ 加密服务：Fernet加密API密钥
-- ✅ CRUD实现：完整的Repository + Service + API
-- ✅ FastAPI应用：主应用程序 + 健康检查
-- ⚠️ 待完成：LLMProvider, ExchangeConfig模型
-- ⚠️ 待完成：单元测试和集成测试
+- ✅ CRUD实现：完整的Repository + Service + API（30+个endpoints）
+- ✅ FastAPI应用：主应用程序 + 健康检查 + 系统状态检查
+- ⚠️ 待完成：单元测试和集成测试（唯一剩余任务）
+
+**Agent Domain (Section 3) - 8%**
+- ✅ LLM适配器层：统一的BaseLLMAdapter架构
+- ✅ 支持4个提供商：OpenAI, Claude, DeepSeek, Qwen
+- ✅ 支持工具调用：OpenAI functions, Claude tools
+- ✅ 流式响应：Server-Sent Events
+- ✅ Agent Chat UI：模型切换 + 品牌色背景
+- ⚠️ 待完成：Agent SDK层、业务Agent、工具系统、记忆系统
 
 ### 🔄 进行中
 
@@ -166,7 +174,7 @@
 
 ---
 
-## 🔄 2. Admin Domain (Week 3) - IN PROGRESS (约70%完成)
+## ✅ 2. Admin Domain (Week 3) - NEARLY COMPLETE (95%完成)
 
 ### 2.1 Database Models ✅
 - [x] 2.1.1 Create admin/models.py with APIKey model
@@ -174,9 +182,9 @@
 - [x] 2.1.3 Add SystemConfig model (key-value configuration)
 - [x] 2.1.4 Add AuditLog model (audit trail)
 - [x] 2.1.5 Create database initialization script (不使用Alembic)
-- [ ] 2.1.6 Add LLMProvider model (待实现)
-- [ ] 2.1.7 Add ExchangeConfig model (待实现)
-- [ ] 2.1.8 Add DataSourceConfig model (待实现)
+- [x] 2.1.6 Add LLMProvider model (OpenAI/Claude/DeepSeek/Qwen)
+- [x] 2.1.7 Add ExchangeConfig model (OKX/Binance/雪盈)
+- [x] 2.1.8 Add DataSourceConfig model (FMP/Yahoo/CoinGecko)
 
 ### 2.2 Encryption & Security ✅
 - [x] 2.2.1 Implement Fernet encryption for API keys
@@ -191,8 +199,9 @@
 - [x] 2.3.4 Implement UserService for user management
 - [x] 2.3.5 Implement SystemConfigService
 - [x] 2.3.6 Implement AuditLogService
-- [ ] 2.3.7 Implement LLM provider configuration (待实现)
-- [ ] 2.3.8 Implement exchange configuration (待实现)
+- [x] 2.3.7 Implement LLMProviderService (CRUD + 获取默认provider)
+- [x] 2.3.8 Implement ExchangeConfigService (CRUD + 按交易所查询)
+- [x] 2.3.9 Implement DataSourceConfigService (CRUD + 按数据类型查询)
 
 ### 2.4 API Endpoints ✅
 - [x] 2.4.1 Create admin/api.py with FastAPI router
@@ -204,7 +213,10 @@
 - [x] 2.4.7 GET /api/admin/users (list users)
 - [x] 2.4.8 POST /api/admin/config (set system config)
 - [x] 2.4.9 GET /api/admin/audit-logs (list audit logs)
-- [ ] 2.4.10 Add /api/admin/system-health endpoint (待实现)
+- [x] 2.4.10 POST/GET/PATCH/DELETE /api/admin/llm-providers (7个endpoints)
+- [x] 2.4.11 POST/GET/PATCH/DELETE /api/admin/exchanges (5个endpoints)
+- [x] 2.4.12 POST/GET/PATCH/DELETE /api/admin/data-sources (6个endpoints)
+- [x] 2.4.13 GET /api/admin/system/health (详细系统健康检查)
 
 ### 2.5 Core Application ✅ (额外完成)
 - [x] 2.5.1 Create FastAPI main application (backend/uteki/main.py)
@@ -225,11 +237,11 @@
 ## 3. Agent Domain (Week 3-4)
 
 ### 3.1 LLM API Layer
-- [ ] 3.1.1 Create agent/llm/base.py with BaseLLM abstract class
-- [ ] 3.1.2 Implement OpenAILLM adapter (supports GPT-4, GPT-3.5)
-- [ ] 3.1.3 Implement ClaudeLLM adapter (Anthropic API)
-- [ ] 3.1.4 Implement DeepSeekLLM adapter (OpenAI-compatible)
-- [ ] 3.1.5 Implement QwenLLM adapter (DashScope SDK)
+- [x] 3.1.1 Create agent/llm/base.py with BaseLLM abstract class
+- [x] 3.1.2 Implement OpenAILLM adapter (supports GPT-4, GPT-3.5)
+- [x] 3.1.3 Implement ClaudeLLM adapter (Anthropic API)
+- [x] 3.1.4 Implement DeepSeekLLM adapter (OpenAI-compatible)
+- [x] 3.1.5 Implement QwenLLM adapter (DashScope SDK)
 - [ ] 3.1.6 Implement LocalLLM adapter (Ollama)
 - [ ] 3.1.7 Add LLM response format normalization
 - [ ] 3.1.8 Implement cost tracking for each provider

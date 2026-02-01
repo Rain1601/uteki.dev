@@ -7,12 +7,21 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import json
+import logging
 
 from uteki.common.database import db_manager
 from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
+from uteki.domains.agent.research import ResearchRequest, DeepResearchOrchestrator
+from uteki.domains.agent.llm_adapter import (
+    LLMAdapterFactory,
+    LLMProvider,
+    LLMConfig,
+)
+from uteki.common.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -284,3 +293,227 @@ async def chat_sync(
         role="assistant",
         content=full_content,
     )
+
+
+# ============================================================================
+# Model Configuration Routes
+# ============================================================================
+
+
+@router.get(
+    "/models/available",
+    summary="获取可用的模型列表",
+)
+async def get_available_models():
+    """
+    返回所有支持的模型列表，标记哪些已配置可用
+
+    根据 .env 配置检查哪些模型的 API key 已配置
+    """
+    from uteki.common.config import settings
+
+    # 定义所有支持的模型（参考uchu_trade配置）
+    all_models = [
+        {
+            "id": "claude-sonnet-4-20250514",
+            "name": "Claude 4.5 Sonnet",
+            "provider": "Claude",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
+            "available": bool(settings.anthropic_api_key),
+        },
+        {
+            "id": "deepseek-chat",
+            "name": "DeepSeek V3.2",
+            "provider": "DeepSeek",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
+            "available": bool(settings.deepseek_api_key),
+        },
+        {
+            "id": "gemini-2.0-flash-exp",
+            "name": "Gemini 2.0 Flash",
+            "provider": "Google",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
+            "available": bool(settings.google_api_key),
+        },
+        {
+            "id": "gpt-4o-mini",
+            "name": "GPT-4o Mini",
+            "provider": "OpenAI",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
+            "available": bool(settings.openai_api_key),
+        },
+        {
+            "id": "qwen-plus",
+            "name": "Qwen Plus",
+            "provider": "Qwen",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
+            "available": bool(settings.dashscope_api_key),
+        },
+        {
+            "id": "abab6.5s-chat",
+            "name": "MiniMax abab6.5s",
+            "provider": "MiniMax",
+            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
+            "available": bool(settings.minimax_api_key),
+        },
+    ]
+
+    # 检查是否有至少一个可用的模型
+    available_count = sum(1 for m in all_models if m["available"])
+    if available_count == 0:
+        raise HTTPException(
+            status_code=500,
+            detail="No LLM API keys configured. Please configure at least one LLM provider in .env"
+        )
+
+    return {
+        "models": all_models,
+        "default_model": settings.llm_model,
+    }
+
+
+# ============================================================================
+# Deep Research Routes
+# ============================================================================
+
+
+@router.post(
+    "/research/stream",
+    summary="Deep Research - 流式返回",
+)
+async def research_stream(request: ResearchRequest):
+    """
+    执行深度研究（Deep Research）并流式返回进度
+
+    - **query**: 研究问题
+    - **max_sources**: 最大搜索结果数（默认20）
+    - **max_scrape**: 最大抓取URL数（默认10）
+
+    返回格式：Server-Sent Events (text/event-stream)
+
+    事件类型：
+    - research_start: 研究开始
+    - thought: 子任务分解
+    - status: 状态更新
+    - plan_created: 研究计划创建
+    - sources_update: 搜索进度更新
+    - sources_complete: 搜索完成
+    - source_read: 内容抓取进度
+    - content_chunk: LLM响应流式输出
+    - research_complete: 研究完成
+    - error: 错误信息
+    """
+    orchestrator = DeepResearchOrchestrator()
+
+    async def event_generator():
+        """SSE事件生成器"""
+        try:
+            # Create LLM adapter for research - use default model from settings
+            llm_adapter = None
+
+            # Determine provider from model name
+            if "claude" in settings.llm_model.lower():
+                if settings.anthropic_api_key:
+                    llm_adapter = LLMAdapterFactory.create_adapter(
+                        provider=LLMProvider.ANTHROPIC,
+                        api_key=settings.anthropic_api_key,
+                        model=settings.llm_model,
+                    )
+            elif "gpt" in settings.llm_model.lower():
+                if settings.openai_api_key:
+                    llm_adapter = LLMAdapterFactory.create_adapter(
+                        provider=LLMProvider.OPENAI,
+                        api_key=settings.openai_api_key,
+                        model=settings.llm_model,
+                    )
+            elif "deepseek" in settings.llm_model.lower():
+                if settings.deepseek_api_key:
+                    llm_adapter = LLMAdapterFactory.create_adapter(
+                        provider=LLMProvider.DEEPSEEK,
+                        api_key=settings.deepseek_api_key,
+                        model=settings.llm_model,
+                    )
+            elif "qwen" in settings.llm_model.lower():
+                if settings.dashscope_api_key:
+                    llm_adapter = LLMAdapterFactory.create_adapter(
+                        provider=LLMProvider.QWEN,
+                        api_key=settings.dashscope_api_key,
+                        model=settings.llm_model,
+                    )
+
+            if not llm_adapter:
+                raise ValueError("No LLM adapter configured")
+
+            async for event in orchestrator.research_stream(
+                query=request.query,
+                max_sources=request.max_sources,
+                max_scrape=request.max_scrape,
+                llm_adapter=llm_adapter,
+            ):
+                event_data = json.dumps(event, ensure_ascii=False)
+                yield f"data: {event_data}\n\n"
+
+        except Exception as e:
+            logger.error(f"Research stream error: {e}", exc_info=True)
+            error_event = {"type": "error", "data": {"message": str(e)}}
+            yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get(
+    "/research/health",
+    summary="Deep Research 健康检查",
+)
+async def research_health():
+    """
+    检查Deep Research功能的健康状态
+
+    返回：
+    - search_engine: 配置的搜索引擎
+    - google_configured: Google API是否已配置
+    - dependencies: 依赖包状态
+    """
+    import os
+
+    google_configured = bool(
+        os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY")
+        and os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID")
+    )
+
+    search_engine = os.getenv("DEFAULT_SEARCH_ENGINE", "duckduckgo")
+
+    # Check dependencies
+    dependencies = {}
+    try:
+        import duckduckgo_search
+        dependencies["duckduckgo_search"] = True
+    except ImportError:
+        dependencies["duckduckgo_search"] = False
+
+    try:
+        import beautifulsoup4
+        dependencies["beautifulsoup4"] = True
+    except ImportError:
+        dependencies["beautifulsoup4"] = False
+
+    try:
+        import trafilatura
+        dependencies["trafilatura"] = True
+    except ImportError:
+        dependencies["trafilatura"] = False
+
+    return {
+        "status": "healthy",
+        "search_engine": search_engine,
+        "google_configured": google_configured,
+        "dependencies": dependencies,
+    }

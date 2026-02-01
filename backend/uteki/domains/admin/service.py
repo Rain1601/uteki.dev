@@ -487,13 +487,9 @@ def get_encryption_service() -> EncryptionService:
     return EncryptionService()
 
 
-def get_api_key_service(
-    encryption_service: EncryptionService = None
-) -> APIKeyService:
+def get_api_key_service() -> APIKeyService:
     """获取 API Key 服务实例"""
-    if encryption_service is None:
-        encryption_service = get_encryption_service()
-    return APIKeyService(encryption_service)
+    return APIKeyService(get_encryption_service())
 
 
 def get_user_service() -> UserService:

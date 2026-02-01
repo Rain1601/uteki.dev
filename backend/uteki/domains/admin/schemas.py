@@ -198,3 +198,158 @@ class PaginatedUsersResponse(PaginatedResponse):
 class PaginatedAuditLogsResponse(PaginatedResponse):
     """分页审计日志响应"""
     items: list[AuditLogResponse]
+
+
+# ============================================================================
+# LLM Provider Schemas
+# ============================================================================
+
+class LLMProviderBase(BaseModel):
+    """LLM提供商基础schema"""
+    provider: str = Field(..., description="提供商 (openai, anthropic, dashscope, deepseek)")
+    model: str = Field(..., description="模型名称")
+    display_name: str = Field(..., description="显示名称")
+    config: Optional[Dict[str, Any]] = Field(None, description="模型配置")
+    is_default: bool = Field(default=False, description="是否为默认provider")
+    priority: int = Field(default=0, description="优先级")
+    description: Optional[str] = Field(None, description="描述")
+
+
+class LLMProviderCreate(LLMProviderBase):
+    """创建LLM提供商"""
+    api_key_id: str = Field(..., description="关联的API密钥ID")
+    is_active: bool = Field(default=True, description="是否启用")
+
+
+class LLMProviderUpdate(BaseModel):
+    """更新LLM提供商"""
+    display_name: Optional[str] = None
+    model: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    is_default: Optional[bool] = None
+    is_active: Optional[bool] = None
+    priority: Optional[int] = None
+    description: Optional[str] = None
+
+
+class LLMProviderResponse(LLMProviderBase):
+    """LLM提供商响应"""
+    id: str
+    api_key_id: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Exchange Config Schemas
+# ============================================================================
+
+class ExchangeConfigBase(BaseModel):
+    """交易所配置基础schema"""
+    exchange: str = Field(..., description="交易所名称 (okx, binance, xueying)")
+    display_name: str = Field(..., description="显示名称")
+    trading_enabled: bool = Field(default=True, description="是否启用交易")
+    spot_enabled: bool = Field(default=True, description="是否启用现货")
+    futures_enabled: bool = Field(default=False, description="是否启用合约")
+    max_position_size: float = Field(default=10000.00, description="最大持仓金额(USD)")
+    risk_config: Optional[Dict[str, Any]] = Field(None, description="风险配置")
+    exchange_config: Optional[Dict[str, Any]] = Field(None, description="交易所特定配置")
+    description: Optional[str] = Field(None, description="描述")
+
+
+class ExchangeConfigCreate(ExchangeConfigBase):
+    """创建交易所配置"""
+    api_key_id: str = Field(..., description="关联的API密钥ID")
+    is_active: bool = Field(default=True, description="是否启用")
+
+
+class ExchangeConfigUpdate(BaseModel):
+    """更新交易所配置"""
+    display_name: Optional[str] = None
+    trading_enabled: Optional[bool] = None
+    spot_enabled: Optional[bool] = None
+    futures_enabled: Optional[bool] = None
+    max_position_size: Optional[float] = None
+    risk_config: Optional[Dict[str, Any]] = None
+    exchange_config: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
+
+
+class ExchangeConfigResponse(ExchangeConfigBase):
+    """交易所配置响应"""
+    id: str
+    api_key_id: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Data Source Config Schemas
+# ============================================================================
+
+class DataSourceConfigBase(BaseModel):
+    """数据源配置基础schema"""
+    source_type: str = Field(..., description="数据源类型 (fmp, yahoo, coingecko)")
+    display_name: str = Field(..., description="显示名称")
+    data_types: list[str] = Field(..., description="支持的数据类型")
+    refresh_interval: int = Field(default=60, description="刷新间隔(秒)")
+    priority: int = Field(default=0, description="优先级")
+    source_config: Optional[Dict[str, Any]] = Field(None, description="数据源配置")
+    description: Optional[str] = Field(None, description="描述")
+
+
+class DataSourceConfigCreate(DataSourceConfigBase):
+    """创建数据源配置"""
+    api_key_id: Optional[str] = Field(None, description="关联的API密钥ID (可选)")
+    is_active: bool = Field(default=True, description="是否启用")
+
+
+class DataSourceConfigUpdate(BaseModel):
+    """更新数据源配置"""
+    display_name: Optional[str] = None
+    data_types: Optional[list[str]] = None
+    refresh_interval: Optional[int] = None
+    priority: Optional[int] = None
+    source_config: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
+
+
+class DataSourceConfigResponse(DataSourceConfigBase):
+    """数据源配置响应"""
+    id: str
+    api_key_id: Optional[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Additional Paginated Responses
+# ============================================================================
+
+class PaginatedLLMProvidersResponse(PaginatedResponse):
+    """分页LLM提供商响应"""
+    items: list[LLMProviderResponse]
+
+
+class PaginatedExchangeConfigsResponse(PaginatedResponse):
+    """分页交易所配置响应"""
+    items: list[ExchangeConfigResponse]
+
+
+class PaginatedDataSourceConfigsResponse(PaginatedResponse):
+    """分页数据源配置响应"""
+    items: list[DataSourceConfigResponse]

@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     dashscope_api_key: Optional[str] = None  # Qwen
+    deepseek_api_key: Optional[str] = None
+    minimax_api_key: Optional[str] = None
+    minimax_group_id: Optional[str] = None
+    google_api_key: Optional[str] = None  # Gemini
+
+    # LLM Provider Configuration
+    llm_provider: str = "anthropic"  # 默认使用 Anthropic
+    llm_model: str = "claude-sonnet-4-20250514"
+    openai_model: str = "gpt-4o-mini"
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    openai_api_base: str = "https://api.openai.com/v1"
 
     # 其他配置
     environment: str = "development"
