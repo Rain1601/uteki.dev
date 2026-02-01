@@ -76,9 +76,12 @@ async def github_callback(
     # 生成 JWT token
     token = auth_service.create_user_token(str(user.id), user_info)
 
-    # 重定向到前端，设置 cookie
+    # 重定向到前端，通过 URL hash 传递 token（跨域场景）
     frontend_url = state or get_frontend_url()
-    response = RedirectResponse(url=frontend_url)
+    # 使用 hash fragment 传递 token，这样不会被记录在服务器日志中
+    redirect_url = f"{frontend_url}#token={token}"
+    response = RedirectResponse(url=redirect_url)
+    # 同时设置 cookie（同域场景下可用）
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
         value=token,
@@ -134,9 +137,10 @@ async def google_callback(
     # 生成 JWT token
     token = auth_service.create_user_token(str(user.id), user_info)
 
-    # 重定向到前端
+    # 重定向到前端，通过 URL hash 传递 token（跨域场景）
     frontend_url = state or get_frontend_url()
-    response = RedirectResponse(url=frontend_url)
+    redirect_url = f"{frontend_url}#token={token}"
+    response = RedirectResponse(url=redirect_url)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
         value=token,

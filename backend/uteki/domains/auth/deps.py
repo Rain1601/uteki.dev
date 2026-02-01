@@ -16,9 +16,19 @@ AUTH_COOKIE_NAME = "auth_token"
 async def get_current_user_optional(request: Request) -> Optional[dict]:
     """
     获取当前用户（可选，未登录返回None）
-    从 Cookie 中读取 JWT token 并验证
+    优先从 Authorization header 读取，其次从 Cookie 中读取 JWT token
     """
-    token = request.cookies.get(AUTH_COOKIE_NAME)
+    token = None
+
+    # 1. 先尝试从 Authorization header 获取 (Bearer token)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]  # Remove "Bearer " prefix
+
+    # 2. 如果没有 header，尝试从 Cookie 获取
+    if not token:
+        token = request.cookies.get(AUTH_COOKIE_NAME)
+
     if not token:
         return None
 
