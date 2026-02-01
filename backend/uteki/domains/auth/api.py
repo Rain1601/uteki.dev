@@ -55,42 +55,49 @@ async def github_callback(
     session: AsyncSession = Depends(get_session),
 ):
     """GitHub OAuth 回调处理"""
-    # 获取用户信息
-    user_info = await auth_service.exchange_github_code(code)
-    if not user_info:
-        # 登录失败，重定向到前端登录页并显示错误
-        frontend_url = state or get_frontend_url()
-        return RedirectResponse(url=f"{frontend_url}/login?error=github_auth_failed")
-
-    # 创建或获取用户
-    user_service = UserService()
-    user = await user_service.get_or_create_oauth_user(
-        session=session,
-        oauth_provider=user_info["provider"],
-        oauth_id=user_info["provider_id"],
-        email=user_info.get("email"),
-        username=user_info.get("name"),
-        avatar_url=user_info.get("avatar"),
-    )
-
-    # 生成 JWT token
-    token = auth_service.create_user_token(str(user.id), user_info)
-
-    # 重定向到前端，通过 URL hash 传递 token（跨域场景）
     frontend_url = state or get_frontend_url()
-    # 使用 hash fragment 传递 token，这样不会被记录在服务器日志中
-    redirect_url = f"{frontend_url}#token={token}"
-    response = RedirectResponse(url=redirect_url)
-    # 同时设置 cookie（同域场景下可用）
-    response.set_cookie(
-        key=AUTH_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.environment == "production",
-        max_age=60 * 60 * 24 * 7,  # 7 days
-    )
-    return response
+
+    try:
+        # 获取用户信息
+        user_info = await auth_service.exchange_github_code(code)
+        if not user_info:
+            logger.error("GitHub OAuth: Failed to get user info")
+            return RedirectResponse(url=f"{frontend_url}/login?error=github_auth_failed")
+
+        logger.info(f"GitHub OAuth: Got user info for {user_info.get('email')}")
+
+        # 创建或获取用户
+        user_service = UserService()
+        user = await user_service.get_or_create_oauth_user(
+            session=session,
+            oauth_provider=user_info["provider"],
+            oauth_id=user_info["provider_id"],
+            email=user_info.get("email"),
+            username=user_info.get("name"),
+            avatar_url=user_info.get("avatar"),
+        )
+
+        logger.info(f"GitHub OAuth: User created/found with id {user.id}")
+
+        # 生成 JWT token
+        token = auth_service.create_user_token(str(user.id), user_info)
+
+        # 重定向到前端，通过 URL hash 传递 token（跨域场景）
+        redirect_url = f"{frontend_url}#token={token}"
+        response = RedirectResponse(url=redirect_url)
+        response.set_cookie(
+            key=AUTH_COOKIE_NAME,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=settings.environment == "production",
+            max_age=60 * 60 * 24 * 7,
+        )
+        return response
+
+    except Exception as e:
+        logger.error(f"GitHub OAuth callback error: {str(e)}", exc_info=True)
+        return RedirectResponse(url=f"{frontend_url}/login?error=github_callback_error&detail={str(e)[:100]}")
 
 
 # =============================================================================
@@ -117,39 +124,49 @@ async def google_callback(
     session: AsyncSession = Depends(get_session),
 ):
     """Google OAuth 回调处理"""
-    # 获取用户信息
-    user_info = await auth_service.exchange_google_code(code)
-    if not user_info:
-        frontend_url = state or get_frontend_url()
-        return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
-
-    # 创建或获取用户
-    user_service = UserService()
-    user = await user_service.get_or_create_oauth_user(
-        session=session,
-        oauth_provider=user_info["provider"],
-        oauth_id=user_info["provider_id"],
-        email=user_info.get("email"),
-        username=user_info.get("name"),
-        avatar_url=user_info.get("avatar"),
-    )
-
-    # 生成 JWT token
-    token = auth_service.create_user_token(str(user.id), user_info)
-
-    # 重定向到前端，通过 URL hash 传递 token（跨域场景）
     frontend_url = state or get_frontend_url()
-    redirect_url = f"{frontend_url}#token={token}"
-    response = RedirectResponse(url=redirect_url)
-    response.set_cookie(
-        key=AUTH_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.environment == "production",
-        max_age=60 * 60 * 24 * 7,
-    )
-    return response
+
+    try:
+        # 获取用户信息
+        user_info = await auth_service.exchange_google_code(code)
+        if not user_info:
+            logger.error("Google OAuth: Failed to get user info")
+            return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
+
+        logger.info(f"Google OAuth: Got user info for {user_info.get('email')}")
+
+        # 创建或获取用户
+        user_service = UserService()
+        user = await user_service.get_or_create_oauth_user(
+            session=session,
+            oauth_provider=user_info["provider"],
+            oauth_id=user_info["provider_id"],
+            email=user_info.get("email"),
+            username=user_info.get("name"),
+            avatar_url=user_info.get("avatar"),
+        )
+
+        logger.info(f"Google OAuth: User created/found with id {user.id}")
+
+        # 生成 JWT token
+        token = auth_service.create_user_token(str(user.id), user_info)
+
+        # 重定向到前端
+        redirect_url = f"{frontend_url}#token={token}"
+        response = RedirectResponse(url=redirect_url)
+        response.set_cookie(
+            key=AUTH_COOKIE_NAME,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=settings.environment == "production",
+            max_age=60 * 60 * 24 * 7,
+        )
+        return response
+
+    except Exception as e:
+        logger.error(f"Google OAuth callback error: {str(e)}", exc_info=True)
+        return RedirectResponse(url=f"{frontend_url}/login?error=google_callback_error&detail={str(e)[:100]}")
 
 
 # =============================================================================
@@ -170,4 +187,35 @@ async def get_current_user_info(
 async def logout(response: Response):
     """用户登出"""
     response.delete_cookie(key=AUTH_COOKIE_NAME)
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/debug/test-user-creation")
+async def debug_test_user_creation(
+    session: AsyncSession = Depends(get_session),
+):
+    """Debug: 测试用户创建流程"""
+    try:
+        user_service = UserService()
+        user = await user_service.get_or_create_oauth_user(
+            session=session,
+            oauth_provider="test",
+            oauth_id="test-123",
+            email="test@example.com",
+            username="Test User",
+            avatar_url=None,
+        )
+        return {
+            "success": True,
+            "user_id": str(user.id),
+            "email": user.email,
+            "username": user.username,
+        }
+    except Exception as e:
+        logger.error(f"Debug user creation error: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+        }
     return {"message": "Logged out successfully"}
