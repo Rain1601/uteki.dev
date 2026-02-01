@@ -470,6 +470,23 @@ async def research_stream(request: ResearchRequest):
 
 
 @router.get(
+    "/debug/config",
+    summary="配置信息检查",
+)
+async def debug_config():
+    """检查环境配置"""
+    from uteki.common.config import settings
+    import os
+    return {
+        "database_type": settings.database_type,
+        "database_url": settings.database_url[:50] + "..." if len(settings.database_url) > 50 else settings.database_url,
+        "env_database_type": os.getenv("DATABASE_TYPE"),
+        "environment": settings.environment,
+        "debug": settings.debug,
+    }
+
+
+@router.get(
     "/debug/db-test",
     summary="数据库连接测试",
 )
@@ -494,11 +511,16 @@ async def debug_db_test(session: AsyncSession = Depends(get_db_session)):
         )
         tables = [f"{row[0]}.{row[1]}" for row in table_result.fetchall()]
 
+        # 测试 4: 检查 Base.metadata 中注册的表
+        from uteki.common.base import Base
+        registered_tables = list(Base.metadata.tables.keys())
+
         return {
             "status": "ok",
             "test_query": test_val,
             "schemas": schemas,
-            "tables": tables
+            "tables": tables,
+            "registered_tables": registered_tables,
         }
     except Exception as e:
         import traceback
