@@ -34,7 +34,7 @@ async def init_database():
 
     # Get engine
     from uteki.common.config import settings
-    from uteki.infrastructure.database.base import Base
+    from uteki.common.base import Base
 
     async with db_manager.postgres_engine.begin() as conn:
         # For SQLite, we need to enable foreign keys
@@ -95,7 +95,7 @@ async def upgrade_to_multiuser():
                 logger.info("Creating auth.users table...")
                 # Import to ensure model is registered
                 from uteki.domains.user.models import User
-                from uteki.infrastructure.database.base import Base
+                from uteki.common.base import Base
 
                 await conn.run_sync(Base.metadata.create_all)
                 logger.info("✓ Created auth.users table")
