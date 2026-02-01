@@ -15,9 +15,13 @@ python -c "from uteki.main import app; print('Import successful')" || {
 }
 
 # Initialize database (create tables if they don't exist)
+echo "========================================="
 echo "Initializing database..."
-python -m uteki.scripts.init_db init || {
-    echo "Database initialization failed, but continuing (tables may already exist)"
+echo "========================================="
+python -m uteki.scripts.init_db init 2>&1 | tee /tmp/db_init.log || {
+    echo "⚠️  Database initialization had errors:"
+    cat /tmp/db_init.log
+    echo "Continuing anyway (tables may already exist)"
 }
 
 echo "Starting uvicorn..."

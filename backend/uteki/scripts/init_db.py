@@ -50,7 +50,16 @@ async def init_database():
 
         # Create all tables
         logger.info("Creating all tables...")
-        await conn.run_sync(Base.metadata.create_all)
+        logger.info(f"Base.metadata has {len(Base.metadata.tables)} tables registered:")
+        for table_name in Base.metadata.tables.keys():
+            logger.info(f"  - {table_name}")
+
+        try:
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("✓ create_all completed successfully")
+        except Exception as e:
+            logger.error(f"✗ create_all failed: {e}")
+            raise
 
     logger.info("✓ Database initialization complete!")
 
