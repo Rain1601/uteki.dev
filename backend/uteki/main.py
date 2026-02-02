@@ -26,8 +26,27 @@ async def lifespan(app: FastAPI):
     # Database initialization happens in background to avoid blocking Cloud Run startup
     import asyncio
     asyncio.create_task(initialize_databases())
+
+    # Start news scheduler if enabled
+    if settings.environment != "test":
+        try:
+            from uteki.schedulers import get_news_scheduler
+            news_scheduler = get_news_scheduler()
+            news_scheduler.start()
+            logger.info("News scheduler started")
+        except Exception as e:
+            logger.warning(f"Failed to start news scheduler: {e}")
+
     yield
+
+    # Shutdown scheduler
     logger.info("Application shutting down...")
+    try:
+        from uteki.schedulers import get_news_scheduler
+        news_scheduler = get_news_scheduler()
+        news_scheduler.stop()
+    except Exception:
+        pass
 
 
 async def initialize_databases():
@@ -185,6 +204,9 @@ async def api_status():
 from uteki.domains.admin.api import router as admin_router
 from uteki.domains.agent.api import router as agent_router
 from uteki.domains.auth.api import router as auth_router
+from uteki.domains.news.api import router as news_router
+from uteki.domains.news.analysis_api import router as news_analysis_router
+from uteki.domains.macro.api import router as macro_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
@@ -194,6 +216,9 @@ from uteki.domains.auth.api import router as auth_router
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(news_router, prefix="/api/news", tags=["news"])
+app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
+app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现

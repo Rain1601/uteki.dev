@@ -5,6 +5,8 @@ import DemoPage from './pages/DemoPage';
 import AdminPage from './pages/AdminPage';
 import AgentChatPage from './pages/AgentChatPage';
 import LoginPage from './pages/LoginPage';
+import NewsTimelinePage from './pages/NewsTimelinePage';
+import FOMCCalendarPage from './pages/FOMCCalendarPage';
 
 function App() {
   return (
@@ -24,6 +26,8 @@ function App() {
         <Route index element={<DemoPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="agent" element={<AgentChatPage />} />
+        <Route path="news-timeline" element={<NewsTimelinePage />} />
+        <Route path="macro/fomc-calendar" element={<FOMCCalendarPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

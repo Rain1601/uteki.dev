@@ -2,6 +2,7 @@
 Admin domain API routes - FastAPI路由
 """
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
@@ -856,7 +857,14 @@ async def create_admin_tables(session: AsyncSession = Depends(get_db_session)):
 
 
 @router.get("/system/health", summary="系统健康检查")
-async def system_health_check(session: AsyncSession = Depends(get_db_session)):
+async def system_health_check(
+    session: AsyncSession = Depends(get_db_session),
+    api_key_svc: APIKeyService = Depends(get_api_key_service),
+    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
+    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
+    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
+    audit_svc: AuditLogService = Depends(get_audit_log_service),
+):
     """
     详细的系统健康检查
 
@@ -941,12 +949,12 @@ async def system_health_check(session: AsyncSession = Depends(get_db_session)):
 
     # 数据库连接状态（从db_manager获取）
     from uteki.common.database import db_manager
-    health_info["components"]["databases"] = {
-        "postgres": "connected" if db_manager.postgres_available else "disconnected",
-        "redis": "connected" if db_manager.redis_available else "disconnected",
-        "clickhouse": "connected" if db_manager.clickhouse_available else "fallback",
-        "qdrant": "connected" if db_manager.qdrant_available else "disabled",
-        "minio": "connected" if db_manager.minio_available else "disabled"
+    health_info["databases"] = {
+        "postgresql": {"status": "connected" if db_manager.postgres_available else "disconnected"},
+        "redis": {"status": "connected" if db_manager.redis_available else "disconnected"},
+        "clickhouse": {"status": "connected" if db_manager.clickhouse_available else "disabled"},
+        "qdrant": {"status": "connected" if db_manager.qdrant_available else "disabled"},
+        "minio": {"status": "connected" if db_manager.minio_available else "disabled"}
     }
 
     return health_info

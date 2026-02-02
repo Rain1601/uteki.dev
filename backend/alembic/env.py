@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from uteki.common.base import Base
 from uteki.common.config import settings
 from uteki.domains.agent.models import ChatConversation, ChatMessage
+from uteki.domains.news.models import NewsArticle
+from uteki.domains.macro.models import EconomicEvent
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -21,9 +23,11 @@ config = context.config
 
 # Set database URL from settings (convert async to sync for Alembic)
 database_url = str(settings.database_url)
-# Convert asyncpg to psycopg2 for Alembic migrations
+# Convert async drivers to sync drivers for Alembic migrations
 if database_url.startswith("postgresql+asyncpg://"):
     database_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+elif database_url.startswith("sqlite+aiosqlite://"):
+    database_url = database_url.replace("sqlite+aiosqlite://", "sqlite://")
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.

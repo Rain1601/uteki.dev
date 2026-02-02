@@ -24,6 +24,8 @@ import {
   Brightness4 as DarkModeIcon,
   Brightness7 as LightModeIcon,
   Close as CloseIcon,
+  Article as ArticleIcon,
+  Event as EventIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
@@ -55,11 +57,13 @@ const menuItems: MenuCategory[] = [
       { text: '演示页面', icon: <DashboardIcon />, path: '/' },
       { text: 'Admin 管理', icon: <SettingsIcon />, path: '/admin' },
       { text: 'AI Agent', icon: <SmartToyIcon />, path: '/agent' },
+      { text: '新闻时间线', icon: <ArticleIcon />, path: '/news-timeline' },
     ],
   },
   {
     category: 'TRADING',
     items: [
+      { text: '经济日历', icon: <EventIcon />, path: '/macro/fomc-calendar' },
       { text: '交易面板', icon: <TrendingUpIcon />, path: '/trading', disabled: true },
       { text: '数据分析', icon: <AssessmentIcon />, path: '/analytics', disabled: true },
     ],
@@ -379,17 +383,35 @@ export default function HoverSidebar() {
 
   // 桌面端使用原有的悬浮侧边栏
   return (
-    <Box
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-      sx={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        height: '100vh',
-        zIndex: 1300,
-      }}
-    >
+    <>
+      {/* 毛玻璃遮罩层 - 覆盖主内容区域 */}
+      <Box
+        sx={{
+          position: 'fixed',
+          top: 0,
+          left: SIDEBAR_COLLAPSED_WIDTH,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.06)',
+          backdropFilter: 'blur(2px)',
+          opacity: isHovered ? 1 : 0,
+          pointerEvents: isHovered ? 'auto' : 'none',
+          transition: 'opacity 0.35s cubic-bezier(0.23, 1, 0.32, 1)',
+          zIndex: 1299,
+        }}
+        onClick={() => setIsHovered(false)}
+      />
+      <Box
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        sx={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          height: '100vh',
+          zIndex: 1300,
+        }}
+      >
       {/* 触发区域 */}
       <Box
         sx={{
@@ -464,10 +486,10 @@ export default function HoverSidebar() {
           background: `${theme.background.deepest}f2`, // 半透明
           backdropFilter: 'blur(16px) saturate(1.2)',
           borderRight: `1px solid ${theme.border.default}`,
-          boxShadow: '12px 0 40px rgba(0, 0, 0, 0.5), 6px 0 20px rgba(0, 0, 0, 0.3)',
+          boxShadow: '4px 0 16px rgba(0, 0, 0, 0.15)',
           transform: isHovered ? 'translateX(0)' : 'translateX(-100%)',
-          transition: 'all 0.35s cubic-bezier(0.23, 1, 0.32, 1)',
           opacity: isHovered ? 1 : 0,
+          transition: 'all 0.35s cubic-bezier(0.23, 1, 0.32, 1)',
           zIndex: 1301,
           overflow: 'hidden',
           '&::before': {
@@ -691,5 +713,6 @@ export default function HoverSidebar() {
         </Box>
       </Box>
     </Box>
+    </>
   );
 }
