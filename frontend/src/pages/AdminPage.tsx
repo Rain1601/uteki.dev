@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -24,11 +24,14 @@ import {
   Paper,
   Switch,
   FormControlLabel,
+  Tooltip,
 } from '@mui/material';
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
   Refresh as RefreshIcon,
+  ContentCopy as CopyIcon,
+  Public as PublicIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
@@ -51,6 +54,46 @@ export default function AdminPage() {
   const { showToast } = useToast();
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
   const [llmDialogOpen, setLlmDialogOpen] = useState(false);
+
+  // IP Address state
+  const [ipAddress, setIpAddress] = useState<string | null>(null);
+  const [ipLoading, setIpLoading] = useState(false);
+  const [ipCopied, setIpCopied] = useState(false);
+
+  // Fetch IP address
+  const fetchIpAddress = async () => {
+    setIpLoading(true);
+    try {
+      const response = await fetch('https://api.ipify.org?format=json');
+      const data = await response.json();
+      setIpAddress(data.ip);
+    } catch (error) {
+      console.error('Failed to fetch IP:', error);
+      setIpAddress(null);
+    } finally {
+      setIpLoading(false);
+    }
+  };
+
+  // Copy IP to clipboard
+  const copyIpAddress = async () => {
+    if (ipAddress) {
+      try {
+        await navigator.clipboard.writeText(ipAddress);
+        setIpCopied(true);
+        showToast('IP 地址已复制', 'success');
+        setTimeout(() => setIpCopied(false), 2000);
+      } catch (error) {
+        console.error('Failed to copy:', error);
+        showToast('复制失败', 'error');
+      }
+    }
+  };
+
+  // Fetch IP on mount
+  useEffect(() => {
+    fetchIpAddress();
+  }, []);
 
   // API Keys状态
   const { data: apiKeysData, isLoading: apiKeysLoading, refetch: refetchApiKeys } = useAPIKeys();
@@ -184,8 +227,77 @@ export default function AdminPage() {
       </Typography>
 
       <Grid container spacing={3}>
+        {/* 当前 IP 地址 */}
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <PublicIcon sx={{ color: theme.brand.primary }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    当前 IP 地址
+                  </Typography>
+                </Box>
+                <IconButton size="small" onClick={fetchIpAddress} disabled={ipLoading}>
+                  <RefreshIcon />
+                </IconButton>
+              </Box>
+
+              {ipLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : ipAddress ? (
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    p: 1.5,
+                    bgcolor: theme.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                    borderRadius: 1,
+                    border: `1px solid ${theme.border.default}`,
+                  }}
+                >
+                  <Typography
+                    sx={{
+                      flex: 1,
+                      fontFamily: 'monospace',
+                      fontSize: 18,
+                      fontWeight: 600,
+                      color: theme.brand.primary,
+                      letterSpacing: 1,
+                    }}
+                  >
+                    {ipAddress}
+                  </Typography>
+                  <Tooltip title={ipCopied ? '已复制!' : '复制 IP'}>
+                    <IconButton
+                      size="small"
+                      onClick={copyIpAddress}
+                      sx={{
+                        color: ipCopied ? theme.status.success : theme.text.secondary,
+                        '&:hover': {
+                          bgcolor: `${theme.brand.primary}15`,
+                          color: theme.brand.primary,
+                        },
+                      }}
+                    >
+                      <CopyIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ) : (
+                <Alert severity="error" sx={{ mt: 1 }}>
+                  无法获取 IP 地址
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
         {/* API Keys 管理 */}
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
               <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 1 : 0, mb: 2 }}>
@@ -268,7 +380,7 @@ export default function AdminPage() {
         </Grid>
 
         {/* LLM Providers */}
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
               <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 1 : 0, mb: 2 }}>
