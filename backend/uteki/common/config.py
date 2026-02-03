@@ -91,10 +91,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 43200
 
-    # Interactive Brokers配置
-    ib_host: str = "localhost"
-    ib_port: int = 7497
-    ib_account: Optional[str] = None
+    # 雪盈证券 SNB (仅本地部署)
+    snb_account: Optional[str] = None
+    snb_api_key: Optional[str] = None
+    snb_env: str = "prod"
+    snb_totp_secret: Optional[str] = None
 
     # API配置
     api_host: str = "0.0.0.0"

@@ -13,7 +13,6 @@ import {
   DialogActions,
   TextField,
   Alert,
-  CircularProgress,
   IconButton,
   Table,
   TableBody,
@@ -33,9 +32,11 @@ import {
   ContentCopy as CopyIcon,
   Public as PublicIcon,
 } from '@mui/icons-material';
+import LoadingDots from '../components/LoadingDots';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
 import { useToast } from '../components/Toast';
+import { get } from '../api/client';
 import {
   useAPIKeys,
   useCreateAPIKey,
@@ -60,15 +61,14 @@ export default function AdminPage() {
   const [ipLoading, setIpLoading] = useState(false);
   const [ipCopied, setIpCopied] = useState(false);
 
-  // Fetch IP address
+  // Fetch server IP address from backend
   const fetchIpAddress = async () => {
     setIpLoading(true);
     try {
-      const response = await fetch('https://api.ipify.org?format=json');
-      const data = await response.json();
+      const data = await get<{ ip: string | null }>('/api/admin/system/server-ip');
       setIpAddress(data.ip);
     } catch (error) {
-      console.error('Failed to fetch IP:', error);
+      console.error('Failed to fetch server IP:', error);
       setIpAddress(null);
     } finally {
       setIpLoading(false);
@@ -235,7 +235,7 @@ export default function AdminPage() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PublicIcon sx={{ color: theme.brand.primary }} />
                   <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    当前 IP 地址
+                    服务器 IP 地址
                   </Typography>
                 </Box>
                 <IconButton size="small" onClick={fetchIpAddress} disabled={ipLoading}>
@@ -245,7 +245,7 @@ export default function AdminPage() {
 
               {ipLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                  <CircularProgress size={24} />
+                  <LoadingDots text="获取 IP 中" />
                 </Box>
               ) : ipAddress ? (
                 <Box
@@ -332,7 +332,7 @@ export default function AdminPage() {
 
               {apiKeysLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                  <CircularProgress size={24} />
+                  <LoadingDots text="加载密钥" />
                 </Box>
               ) : apiKeysData && apiKeysData.items.length > 0 ? (
                 <TableContainer component={Paper} elevation={0} sx={{ overflowX: 'auto' }}>
@@ -415,7 +415,7 @@ export default function AdminPage() {
 
               {llmLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                  <CircularProgress size={24} />
+                  <LoadingDots text="加载 Provider" />
                 </Box>
               ) : llmProvidersData && llmProvidersData.items.length > 0 ? (
                 <TableContainer component={Paper} elevation={0} sx={{ overflowX: 'auto' }}>
@@ -470,7 +470,9 @@ export default function AdminPage() {
                 交易所配置
               </Typography>
               {exchangesLoading ? (
-                <CircularProgress size={24} />
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <LoadingDots text="加载交易所" />
+                </Box>
               ) : exchangeConfigsData && exchangeConfigsData.items.length > 0 ? (
                 <Box sx={{ mt: 2 }}>
                   {exchangeConfigsData.items.map((exchange) => (
@@ -498,7 +500,9 @@ export default function AdminPage() {
                 数据源配置
               </Typography>
               {dataSourcesLoading ? (
-                <CircularProgress size={24} />
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <LoadingDots text="加载数据源" />
+                </Box>
               ) : dataSourcesData && dataSourcesData.items.length > 0 ? (
                 <Box sx={{ mt: 2 }}>
                   {dataSourcesData.items.map((source) => (
@@ -533,7 +537,7 @@ export default function AdminPage() {
 
               {healthLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                  <CircularProgress />
+                  <LoadingDots text="检查系统状态" />
                 </Box>
               ) : healthData ? (
                 <Grid container spacing={2} sx={{ mt: 1 }}>

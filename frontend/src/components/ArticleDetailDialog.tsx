@@ -5,7 +5,6 @@ import {
   DialogContent,
   IconButton,
   Typography,
-  CircularProgress,
   Chip,
   Box,
   Switch,
@@ -23,6 +22,7 @@ import {
   CheckCircle as CheckIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import LoadingDots from './LoadingDots';
 import { getArticleDetail } from '../api/news';
 
 interface ArticleData {
@@ -389,8 +389,7 @@ export default function ArticleDetailDialog({
     >
       {loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 7.5, flexDirection: 'column', gap: 2, color: theme.text.muted }}>
-          <CircularProgress sx={{ color: theme.brand.primary }} />
-          <Typography variant="body2">Loading article...</Typography>
+          <LoadingDots text="Loading article" fontSize={16} />
         </Box>
       ) : error ? (
         <Box sx={{ p: 5, textAlign: 'center', color: theme.status.error }}>

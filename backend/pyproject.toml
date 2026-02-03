@@ -28,6 +28,7 @@ google-api-python-client = {version = "^2.150.0", optional = true}  # Google Cus
 # Exchange SDKs
 ccxt = "^4.3.0"
 ib-insync = "^0.9.86"  # Interactive Brokers (雪盈)
+snbpy = "^1.0.0"  # Snowball Securities (雪盈证券)
 # Data processing
 pandas = "^2.2.0"
 numpy = "^1.26.0"
@@ -54,6 +55,9 @@ apscheduler = "^3.10.4"
 prometheus-client = "^0.20.0"
 email-validator = "^2.3.0"
 psycopg2-binary = "^2.9.11"
+# TOTP (Google Authenticator)
+pyotp = "^2.9.0"
+qrcode = {extras = ["pil"], version = "^8.0"}
 
 [tool.poetry.group.dev.dependencies]
 # Testing

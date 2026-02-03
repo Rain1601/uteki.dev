@@ -64,7 +64,7 @@ const menuItems: MenuCategory[] = [
     category: 'TRADING',
     items: [
       { text: '经济日历', icon: <EventIcon />, path: '/macro/fomc-calendar' },
-      { text: '交易面板', icon: <TrendingUpIcon />, path: '/trading', disabled: true },
+      { text: '雪盈证券', icon: <TrendingUpIcon />, path: '/trading/snb' },
       { text: '数据分析', icon: <AssessmentIcon />, path: '/analytics', disabled: true },
     ],
   },
@@ -436,7 +436,7 @@ export default function HoverSidebar() {
           height: '100%',
           background: theme.background.primary,
           borderRight: `1px solid ${theme.border.subtle}`,
-          transition: 'all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1)',
+          transition: 'background 0.3s ease, border-color 0.3s ease',
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'center',
@@ -489,7 +489,7 @@ export default function HoverSidebar() {
           boxShadow: '4px 0 16px rgba(0, 0, 0, 0.15)',
           transform: isHovered ? 'translateX(0)' : 'translateX(-100%)',
           opacity: isHovered ? 1 : 0,
-          transition: 'all 0.35s cubic-bezier(0.23, 1, 0.32, 1)',
+          transition: 'transform 0.35s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s cubic-bezier(0.23, 1, 0.32, 1)',
           zIndex: 1301,
           overflow: 'hidden',
           '&::before': {

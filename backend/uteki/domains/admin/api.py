@@ -856,6 +856,19 @@ async def create_admin_tables(session: AsyncSession = Depends(get_db_session)):
 # ============================================================================
 
 
+@router.get("/system/server-ip", summary="获取服务器公网IP")
+async def get_server_ip():
+    """获取服务器的公网IP地址"""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get("https://api.ipify.org?format=json")
+            data = response.json()
+            return {"ip": data["ip"]}
+    except Exception as e:
+        return {"ip": None, "error": str(e)}
+
+
 @router.get("/system/health", summary="系统健康检查")
 async def system_health_check(
     session: AsyncSession = Depends(get_db_session),

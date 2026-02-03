@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from 'react-router-dom';
-import { CircularProgress, Box } from '@mui/material';
+import { Box } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
+import LoadingDots from './LoadingDots';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -21,7 +22,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
           bgcolor: 'background.default',
         }}
       >
-        <CircularProgress />
+        <LoadingDots text="加载中" fontSize={16} />
       </Box>
     );
   }

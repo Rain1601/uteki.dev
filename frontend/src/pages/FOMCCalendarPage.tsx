@@ -4,7 +4,6 @@ import {
   Typography,
   Grid,
   Chip,
-  CircularProgress,
   IconButton,
   Button,
   Divider,
@@ -19,6 +18,7 @@ import {
   EmojiObjects as AIIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
+import LoadingDots from '../components/LoadingDots';
 import { getMonthlyEventsEnriched, getEventStatistics } from '../api/economicCalendar';
 import { analyzeEventStream } from '../api/news';
 import { EconomicEvent, EventsByDate, EventStatistics, EventFilterType, EventAnalysisResult } from '../types/economicCalendar';
@@ -506,10 +506,7 @@ export default function FOMCCalendarPage() {
                   >
                     {analysisResults[eventId]?.loading ? (
                       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', p: '30px 20px', gap: 2 }}>
-                        <CircularProgress size={36} sx={{ color: '#c8a2ff' }} />
-                        <Typography sx={{ color: theme.text.secondary, fontSize: 14 }}>
-                          AI analyzing...
-                        </Typography>
+                        <LoadingDots text="AI analyzing" fontSize={14} color="#c8a2ff" />
                         {analysisResults[eventId]?.streamContent && (
                           <Typography sx={{ color: theme.text.primary, fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
                             {analysisResults[eventId].streamContent}
@@ -589,8 +586,7 @@ export default function FOMCCalendarPage() {
           m: -3,
         }}
       >
-        <CircularProgress sx={{ color: theme.brand.primary }} />
-        <Typography sx={{ color: theme.text.secondary }}>Loading events...</Typography>
+        <LoadingDots text="Loading events" fontSize={16} />
       </Box>
     );
   }

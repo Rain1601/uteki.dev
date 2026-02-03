@@ -1,10 +1,11 @@
-import { Box, Button, Typography, Paper, CircularProgress, Alert } from '@mui/material';
+import { Box, Button, Typography, Paper, Alert } from '@mui/material';
 import { GoogleColorIcon, GitHubIcon } from '../components/icons/SocialIcons';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
 import { useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
+import LoadingDots from '../components/LoadingDots';
 
 export default function LoginPage() {
   const { loading, error, login, isAuthenticated } = useAuth();
@@ -30,7 +31,7 @@ export default function LoginPage() {
           bgcolor: theme.background.deepest,
         }}
       >
-        <CircularProgress />
+        <LoadingDots text="加载中" fontSize={16} />
       </Box>
     );
   }

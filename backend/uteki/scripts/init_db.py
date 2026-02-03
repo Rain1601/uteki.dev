@@ -31,6 +31,11 @@ async def init_database():
         ChatMessage
     )
     from uteki.domains.user.models import User
+    from uteki.domains.snb.models import (
+        SnbTransaction,
+        SnbTransactionNote,
+        SnbUserTotp,
+    )
 
     # Get engine
     from uteki.common.config import settings
@@ -43,7 +48,7 @@ async def init_database():
         else:
             # For PostgreSQL, create schemas first
             logger.info("Creating PostgreSQL schemas...")
-            schemas = ["admin", "agent", "auth"]
+            schemas = ["admin", "agent", "auth", "snb"]
             for schema in schemas:
                 await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
             logger.info(f"✓ Created schemas: {', '.join(schemas)}")

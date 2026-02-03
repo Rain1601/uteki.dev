@@ -207,6 +207,7 @@ from uteki.domains.auth.api import router as auth_router
 from uteki.domains.news.api import router as news_router
 from uteki.domains.news.analysis_api import router as news_analysis_router
 from uteki.domains.macro.api import router as macro_router
+from uteki.domains.snb.api import router as snb_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
@@ -219,6 +220,7 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(news_router, prefix="/api/news", tags=["news"])
 app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
 app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
+app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现

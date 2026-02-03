@@ -8,7 +8,6 @@ import {
   MenuItem,
   IconButton,
   Chip,
-  CircularProgress,
   SelectChangeEvent,
 } from '@mui/material';
 import {
@@ -22,6 +21,7 @@ import {
 import { useTheme } from '../theme/ThemeProvider';
 import { getMonthlyNews, analyzeNewsStream } from '../api/news';
 import ArticleDetailDialog from '../components/ArticleDetailDialog';
+import LoadingDots from '../components/LoadingDots';
 import { NewsItem, NewsDataByDate, NewsFilterType, AnalysisResult } from '../types/news';
 
 interface CalendarDay {
@@ -797,14 +797,14 @@ export default function NewsTimelinePage() {
                 fontWeight: 500,
               }}
             >
-              {isLoading ? 'Loading...' : `${titlesList.length} articles`}
+              {isLoading ? <LoadingDots text="" fontSize={11} /> : `${titlesList.length} articles`}
             </Typography>
           </Box>
           <Box sx={{ p: 1 }}>
             {isLoading ? (
-              <Typography sx={{ textAlign: 'center', color: theme.text.muted, p: '30px 20px', fontSize: 12 }}>
-                Loading headlines...
-              </Typography>
+              <Box sx={{ textAlign: 'center', p: '30px 20px' }}>
+                <LoadingDots text="Loading headlines" fontSize={12} />
+              </Box>
             ) : error ? (
               <Typography sx={{ textAlign: 'center', color: theme.text.muted, p: '30px 20px', fontSize: 12 }}>
                 Failed to load
@@ -921,9 +921,8 @@ export default function NewsTimelinePage() {
           }}
         >
           {isLoading ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 7.5, color: theme.text.muted }}>
-              <CircularProgress sx={{ mb: 2, color: theme.brand.primary }} />
-              <Typography sx={{ fontSize: 16 }}>Loading news...</Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 7.5 }}>
+              <LoadingDots text="Loading news" fontSize={16} />
             </Box>
           ) : error ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 7.5, color: theme.text.muted }}>
@@ -933,9 +932,9 @@ export default function NewsTimelinePage() {
           ) : filteredNews.length > 0 ? (
             <>
               {isLoadingMore && (
-                <Typography sx={{ textAlign: 'center', p: 2.5, color: theme.text.muted, fontSize: 14 }}>
-                  Loading more...
-                </Typography>
+                <Box sx={{ textAlign: 'center', p: 2.5 }}>
+                  <LoadingDots text="Loading more" />
+                </Box>
               )}
               {filteredNews.map((dateGroup) => (
                 <Box key={dateGroup.date} data-date={dateGroup.date} sx={{ mb: 4 }}>
@@ -1155,10 +1154,7 @@ export default function NewsTimelinePage() {
                                   borderBottom: '1px solid rgba(200, 162, 255, 0.15)',
                                 }}
                               >
-                                <CircularProgress size={20} sx={{ color: '#c8a2ff' }} />
-                                <Typography sx={{ fontSize: 14, color: theme.text.muted, fontWeight: 500 }}>
-                                  AI analyzing...
-                                </Typography>
+                                <LoadingDots text="AI analyzing" fontSize={14} color="#c8a2ff" />
                               </Box>
                               {analysisResults[newsItem.id]?.streamContent && (
                                 <Typography
@@ -1289,9 +1285,9 @@ export default function NewsTimelinePage() {
                 </Box>
               ))}
               {isLoadingMore && (
-                <Typography sx={{ textAlign: 'center', p: 2.5, color: theme.text.muted, fontSize: 14 }}>
-                  Loading more...
-                </Typography>
+                <Box sx={{ textAlign: 'center', p: 2.5 }}>
+                  <LoadingDots text="Loading more" />
+                </Box>
               )}
             </>
           ) : (
