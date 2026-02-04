@@ -36,6 +36,18 @@ async def init_database():
         SnbTransactionNote,
         SnbUserTotp,
     )
+    from uteki.domains.index.models import (
+        Watchlist,
+        IndexPrice,
+        PromptVersion,
+        AgentMemory,
+        DecisionHarness,
+        ModelIO,
+        DecisionLog,
+        Counterfactual,
+        ModelScore,
+        ScheduleTask,
+    )
 
     # Get engine
     from uteki.common.config import settings
@@ -48,7 +60,7 @@ async def init_database():
         else:
             # For PostgreSQL, create schemas first
             logger.info("Creating PostgreSQL schemas...")
-            schemas = ["admin", "agent", "auth", "snb"]
+            schemas = ["admin", "agent", "auth", "snb", "index"]
             for schema in schemas:
                 await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
             logger.info(f"✓ Created schemas: {', '.join(schemas)}")

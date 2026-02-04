@@ -37,6 +37,19 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to start news scheduler: {e}")
 
+    # Load index scheduler tasks from DB on startup
+    if settings.environment != "test":
+        try:
+            from uteki.domains.index.services.scheduler_service import get_scheduler_service
+            async with db_manager.get_postgres_session() as session:
+                sched_svc = get_scheduler_service()
+                enabled = await sched_svc.get_enabled_tasks(session)
+                for task in enabled:
+                    await sched_svc.compute_next_run(task["id"], session)
+                logger.info(f"Index scheduler: loaded {len(enabled)} enabled tasks")
+        except Exception as e:
+            logger.warning(f"Failed to load index schedules on startup: {e}")
+
     yield
 
     # Shutdown scheduler
@@ -208,6 +221,7 @@ from uteki.domains.news.api import router as news_router
 from uteki.domains.news.analysis_api import router as news_analysis_router
 from uteki.domains.macro.api import router as macro_router
 from uteki.domains.snb.api import router as snb_router
+from uteki.domains.index.api import router as index_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
 # from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
@@ -221,6 +235,7 @@ app.include_router(news_router, prefix="/api/news", tags=["news"])
 app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
 app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
 app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
+app.include_router(index_router, prefix="/api/index", tags=["index"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
 # app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现

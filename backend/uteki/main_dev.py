@@ -98,11 +98,15 @@ async def health_check():
 # 导入并注册所有domain路由（本地开发版本）
 from uteki.domains.admin.api import router as admin_router
 from uteki.domains.agent.api import router as agent_router
+from uteki.domains.snb.api import router as snb_router
+from uteki.domains.index.api import router as index_router
 
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
+app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
+app.include_router(index_router, prefix="/api/index", tags=["index"])
 
-logger.info("✅ All domain routers registered (admin, agent)")
+logger.info("✅ All domain routers registered (admin, agent, snb, index)")
 
 
 if __name__ == "__main__":

@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     minimax_api_key: Optional[str] = None
     minimax_group_id: Optional[str] = None
     google_api_key: Optional[str] = None  # Gemini
+    google_api_base_url: Optional[str] = None  # Gemini proxy, e.g. https://your-proxy.com/v1beta/openai
 
     # Google Search API (for Research mode)
     google_search_api_key: Optional[str] = None

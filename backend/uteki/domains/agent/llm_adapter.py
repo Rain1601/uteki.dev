@@ -299,70 +299,16 @@ class DeepSeekAdapter(OpenAIAdapter):
         )
 
 
-class QwenAdapter(BaseLLMAdapter):
-    """Qwen (DashScope) Adapter"""
+class QwenAdapter(OpenAIAdapter):
+    """Qwen (DashScope) Adapter — 使用 OpenAI 兼容接口，无需 dashscope SDK"""
 
     def __init__(self, api_key: str, model: str, config: Optional[LLMConfig] = None):
         super().__init__(api_key, model, config)
-        import dashscope
-        dashscope.api_key = api_key
-        self.dashscope = dashscope
-
-    def convert_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
-        """转换为 DashScope 消息格式"""
-        return [
-            {"role": msg.role, "content": msg.content}
-            for msg in messages
-        ]
-
-    def convert_tools(self, tools: List[LLMTool]) -> List[Dict[str, Any]]:
-        """DashScope 工具格式（类似 OpenAI）"""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                }
-            }
-            for tool in tools
-        ]
-
-    async def chat(
-        self,
-        messages: List[LLMMessage],
-        stream: bool = True,
-        tools: Optional[List[LLMTool]] = None
-    ) -> AsyncGenerator[str, None]:
-        """Qwen 聊天接口"""
-        from dashscope import Generation
-
-        qwen_messages = self.convert_messages(messages)
-
-        kwargs = {
-            "model": self.model,
-            "messages": qwen_messages,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-            "result_format": "message",
-            "stream": stream,
-        }
-
-        if tools:
-            kwargs["tools"] = self.convert_tools(tools)
-
-        response = Generation.call(**kwargs)
-
-        if stream:
-            for chunk in response:
-                if chunk.status_code == 200:
-                    content = chunk.output.choices[0].message.content
-                    if content:
-                        yield content
-        else:
-            if response.status_code == 200:
-                yield response.output.choices[0].message.content
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
 
 
 # ============================================================================
@@ -392,65 +338,25 @@ class MiniMaxAdapter(OpenAIAdapter):
 # ============================================================================
 
 
-class GeminiAdapter(BaseLLMAdapter):
-    """Google Gemini Adapter"""
+class GeminiAdapter(OpenAIAdapter):
+    """Google Gemini Adapter — 使用 OpenAI 兼容接口，支持自定义 base_url 代理"""
+
+    # Google 官方 OpenAI 兼容端点
+    DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.0-flash-exp",
-        config: Optional[LLMConfig] = None
+        model: str = "gemini-2.0-flash",
+        config: Optional[LLMConfig] = None,
+        base_url: Optional[str] = None,
     ):
-        """初始化 Gemini Adapter"""
         super().__init__(api_key, model, config)
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            self.client = genai.GenerativeModel(model)
-        except ImportError:
-            raise ImportError("请安装 google-generativeai: pip install google-generativeai")
-
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        stream: bool = True,
-        tools: Optional[List[LLMTool]] = None
-    ) -> str:
-        """同步调用（Gemini SDK主要是同步的）"""
-        # Convert messages to Gemini format
-        prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-
-        response = self.client.generate_content(
-            prompt,
-            generation_config={
-                "temperature": self.config.temperature,
-                "max_output_tokens": self.config.max_tokens,
-            }
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url or self.DEFAULT_BASE_URL,
         )
-
-        return response.text
-
-    async def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        tools: Optional[List[LLMTool]] = None
-    ) -> AsyncGenerator[str, None]:
-        """流式调用"""
-        # Gemini 流式需要特殊处理
-        prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-
-        response = self.client.generate_content(
-            prompt,
-            generation_config={
-                "temperature": self.config.temperature,
-                "max_output_tokens": self.config.max_tokens,
-            },
-            stream=True
-        )
-
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
 
 
 # ============================================================================
@@ -466,7 +372,8 @@ class LLMAdapterFactory:
         provider: LLMProvider,
         api_key: str,
         model: str,
-        config: Optional[LLMConfig] = None
+        config: Optional[LLMConfig] = None,
+        base_url: Optional[str] = None,
     ) -> BaseLLMAdapter:
         """
         创建 LLM Adapter
@@ -476,6 +383,7 @@ class LLMAdapterFactory:
             api_key: API 密钥
             model: 模型名称
             config: 配置
+            base_url: 自定义 API 地址（用于代理）
 
         Returns:
             相应的 Adapter 实例
@@ -491,6 +399,6 @@ class LLMAdapterFactory:
         elif provider == LLMProvider.MINIMAX:
             return MiniMaxAdapter(api_key, model, config)
         elif provider == LLMProvider.GOOGLE:
-            return GeminiAdapter(api_key, model, config)
+            return GeminiAdapter(api_key, model, config, base_url=base_url)
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")

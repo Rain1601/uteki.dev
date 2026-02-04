@@ -26,6 +26,7 @@ import {
   Close as CloseIcon,
   Article as ArticleIcon,
   Event as EventIcon,
+  ShowChart as IndexIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
@@ -65,6 +66,7 @@ const menuItems: MenuCategory[] = [
     items: [
       { text: '经济日历', icon: <EventIcon />, path: '/macro/fomc-calendar' },
       { text: '雪盈证券', icon: <TrendingUpIcon />, path: '/trading/snb' },
+      { text: '指数投资', icon: <IndexIcon />, path: '/index-agent' },
       { text: '数据分析', icon: <AssessmentIcon />, path: '/analytics', disabled: true },
     ],
   },
