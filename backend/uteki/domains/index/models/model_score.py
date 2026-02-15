@@ -1,5 +1,6 @@
 """模型评分模型"""
 
+from typing import Optional
 from sqlalchemy import String, Integer, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,11 +34,19 @@ class ModelScore(Base, UUIDMixin, TimestampMixin):
     counterfactual_win_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     counterfactual_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     avg_return_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    rejection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    approve_vote_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    simulated_return_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    decision_accuracy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    confidence_calibration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     def to_dict(self) -> dict:
         adoption_rate = (self.adoption_count / self.total_decisions * 100) if self.total_decisions > 0 else 0
         win_rate = (self.win_count / (self.win_count + self.loss_count) * 100) if (self.win_count + self.loss_count) > 0 else 0
         cf_win_rate = (self.counterfactual_win_count / self.counterfactual_total * 100) if self.counterfactual_total > 0 else 0
+        approve = self.approve_vote_count or 0
+        reject = self.rejection_count or 0
+        model_score = approve - reject
 
         return {
             "id": self.id,
@@ -46,6 +55,9 @@ class ModelScore(Base, UUIDMixin, TimestampMixin):
             "prompt_version_id": self.prompt_version_id,
             "adoption_count": self.adoption_count,
             "adoption_rate": round(adoption_rate, 1),
+            "approve_vote_count": approve,
+            "rejection_count": reject,
+            "model_score": model_score,
             "win_count": self.win_count,
             "loss_count": self.loss_count,
             "win_rate": round(win_rate, 1),
@@ -54,4 +66,7 @@ class ModelScore(Base, UUIDMixin, TimestampMixin):
             "counterfactual_total": self.counterfactual_total,
             "counterfactual_win_rate": round(cf_win_rate, 1),
             "avg_return_pct": round(self.avg_return_pct, 2),
+            "simulated_return_pct": round(self.simulated_return_pct, 2) if self.simulated_return_pct is not None else None,
+            "decision_accuracy": round(self.decision_accuracy, 2) if self.decision_accuracy is not None else None,
+            "confidence_calibration": round(self.confidence_calibration, 2) if self.confidence_calibration is not None else None,
         }

@@ -11,6 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from uteki.common.database import db_manager
 from uteki.domains.news.services import get_jeff_cox_service, get_bloomberg_service
+from uteki.domains.news.services import get_translation_service
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,17 @@ class NewsScheduler:
         except Exception as e:
             logger.error(f"Startup scrape failed: {e}", exc_info=True)
 
+    async def _translate_pending(self, source: str = 'cnbc_jeff_cox'):
+        """翻译所有待处理的文章"""
+        try:
+            async with db_manager.get_postgres_session() as session:
+                svc = get_translation_service()
+                stats = await svc.translate_pending_articles(session, limit=10, source_filter=source)
+                if stats['success'] > 0 or stats['failed'] > 0:
+                    logger.info(f"Auto-translate [{source}]: {stats['success']} ok, {stats['failed']} failed")
+        except Exception as e:
+            logger.error(f"Auto-translate failed: {e}", exc_info=True)
+
     async def _scrape_news_job(self):
         """定时抓取任务"""
         try:
@@ -109,7 +121,7 @@ class NewsScheduler:
                 return
 
             # 获取数据库会话
-            async for session in db_manager.get_session():
+            async with db_manager.get_postgres_session() as session:
                 try:
                     service = get_jeff_cox_service()
                     result = await service.collect_and_enrich(session, max_news=10)
@@ -128,6 +140,9 @@ class NewsScheduler:
                     logger.error(f"Error in scheduled scrape: {e}", exc_info=True)
                     self._last_result = {'success': False, 'error': str(e)}
 
+            # 采集后自动翻译待处理文章
+            await self._translate_pending('cnbc_jeff_cox')
+
         except Exception as e:
             logger.error(f"Scheduled news scrape job failed: {e}", exc_info=True)
 
@@ -140,7 +155,7 @@ class NewsScheduler:
                 logger.warning("PostgreSQL not available, skipping deep scrape")
                 return
 
-            async for session in db_manager.get_session():
+            async with db_manager.get_postgres_session() as session:
                 try:
                     service = get_jeff_cox_service()
                     result = await service.collect_and_enrich(session, max_news=30)
@@ -156,6 +171,9 @@ class NewsScheduler:
                 except Exception as e:
                     logger.error(f"Error in daily deep scrape: {e}", exc_info=True)
 
+            # 采集后自动翻译待处理文章
+            await self._translate_pending('cnbc_jeff_cox')
+
         except Exception as e:
             logger.error(f"Daily deep scrape job failed: {e}", exc_info=True)
 
@@ -168,7 +186,7 @@ class NewsScheduler:
                 logger.warning("PostgreSQL not available, skipping Bloomberg scrape")
                 return
 
-            async for session in db_manager.get_session():
+            async with db_manager.get_postgres_session() as session:
                 try:
                     service = get_bloomberg_service()
                     result = await service.collect_and_enrich(session, max_news=10)
@@ -185,6 +203,9 @@ class NewsScheduler:
                 except Exception as e:
                     logger.error(f"Error in Bloomberg scheduled scrape: {e}", exc_info=True)
 
+            # 采集后自动翻译待处理文章
+            await self._translate_pending('bloomberg')
+
         except Exception as e:
             logger.error(f"Bloomberg scheduled scrape job failed: {e}", exc_info=True)
 
@@ -196,7 +217,7 @@ class NewsScheduler:
             if not db_manager.postgres_available:
                 return {'success': False, 'error': 'Database not available'}
 
-            async for session in db_manager.get_session():
+            async with db_manager.get_postgres_session() as session:
                 service = get_jeff_cox_service()
                 result = await service.collect_and_enrich(session, max_news=max_news)
                 self._last_result = result

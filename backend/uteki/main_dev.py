@@ -29,8 +29,23 @@ async def lifespan(app: FastAPI):
     # 本地开发可以同步初始化数据库（没有Cloud Run的启动超时限制）
     await db_manager.initialize()
     logger.info("✅ Database initialization completed")
+
+    # Start news scheduler (CNBC Jeff Cox + Bloomberg)
+    from uteki.schedulers import get_news_scheduler
+    news_sched = get_news_scheduler()
+    news_sched.start()
+    logger.info("✅ News scheduler started")
+
+    # Start index scheduler (daily price update)
+    from uteki.schedulers import get_index_scheduler
+    idx_sched = get_index_scheduler()
+    idx_sched.start()
+
     yield
+
     logger.info("Application shutting down...")
+    news_sched.stop()
+    idx_sched.stop()
 
 
 # 创建FastAPI应用
@@ -96,17 +111,27 @@ async def health_check():
 
 
 # 导入并注册所有domain路由（本地开发版本）
+from uteki.domains.auth.api import router as auth_router
 from uteki.domains.admin.api import router as admin_router
 from uteki.domains.agent.api import router as agent_router
+from uteki.domains.news.api import router as news_router
+from uteki.domains.news.analysis_api import router as news_analysis_router
+from uteki.domains.news.bloomberg_api import router as bloomberg_news_router
+from uteki.domains.macro.api import router as macro_router
 from uteki.domains.snb.api import router as snb_router
 from uteki.domains.index.api import router as index_router
 
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
+app.include_router(news_router, prefix="/api/news", tags=["news"])
+app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
+app.include_router(bloomberg_news_router, prefix="/api/news", tags=["bloomberg-news"])
+app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
 app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
 app.include_router(index_router, prefix="/api/index", tags=["index"])
 
-logger.info("✅ All domain routers registered (admin, agent, snb, index)")
+logger.info("✅ All domain routers registered (auth, admin, agent, news, snb, index)")
 
 
 if __name__ == "__main__":

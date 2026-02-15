@@ -24,6 +24,7 @@ class DecisionHarness(Base, UUIDMixin, TimestampMixin):
     memory_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     task: Mapped[dict] = mapped_column(JSON, nullable=False)
     tool_definitions: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    pipeline_state: Mapped[Optional[dict]] = mapped_column(JSON, default=dict, nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -35,5 +36,6 @@ class DecisionHarness(Base, UUIDMixin, TimestampMixin):
             "memory_summary": self.memory_summary,
             "task": self.task,
             "tool_definitions": self.tool_definitions,
+            "pipeline_state": self.pipeline_state,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

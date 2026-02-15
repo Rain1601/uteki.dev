@@ -204,7 +204,10 @@ export default function KlineChart({ symbol, onError }: KlineChartProps) {
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const chart = createChart(chartContainerRef.current, {
+    const container = chartContainerRef.current;
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
       layout: {
         background: { type: ColorType.Solid, color: chartTheme.background },
         textColor: chartTheme.textColor,
@@ -263,9 +266,11 @@ export default function KlineChart({ symbol, onError }: KlineChartProps) {
     // Resize observer
     const resizeObserver = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      chart.applyOptions({ width, height });
+      if (width > 0 && height > 0) {
+        chart.applyOptions({ width, height });
+      }
     });
-    resizeObserver.observe(chartContainerRef.current);
+    resizeObserver.observe(container);
 
     return () => {
       resizeObserver.disconnect();
@@ -341,66 +346,67 @@ export default function KlineChart({ symbol, onError }: KlineChartProps) {
     if (newInterval) setInterval(newInterval);
   };
 
-  if (!symbol) {
-    return (
-      <Box
-        sx={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: theme.text.muted,
-        }}
-      >
-        <Typography sx={{ fontSize: 14 }}>Select a symbol from the watchlist to view chart</Typography>
-      </Box>
-    );
-  }
-
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Toolbar */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          px: 2,
-          py: 1,
-          borderBottom: `1px solid ${theme.border.subtle}`,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Typography sx={{ fontWeight: 600, fontSize: 16, color: theme.text.primary }}>{symbol}</Typography>
-
-        <ToggleButtonGroup
-          value={interval}
-          exclusive
-          onChange={handleIntervalChange}
-          size="small"
-          sx={{ '& .MuiToggleButton-root': { px: 1.5, py: 0.3, fontSize: 12 } }}
+    <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* Toolbar — hidden when no symbol */}
+      {symbol && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            px: 2,
+            py: 1,
+            borderBottom: `1px solid ${theme.border.subtle}`,
+            flexWrap: 'wrap',
+          }}
         >
-          <ToggleButton value="daily">Daily</ToggleButton>
-          <ToggleButton value="weekly">Weekly</ToggleButton>
-          <ToggleButton value="monthly">Monthly</ToggleButton>
-        </ToggleButtonGroup>
+          <Typography sx={{ fontWeight: 600, fontSize: 16, color: theme.text.primary }}>{symbol}</Typography>
 
-        <FormControlLabel
-          control={
-            <Switch size="small" checked={showMA50} onChange={(e) => setShowMA50(e.target.checked)} />
-          }
-          label={<Typography sx={{ fontSize: 12, color: theme.text.secondary }}>MA50</Typography>}
-        />
-        <FormControlLabel
-          control={
-            <Switch size="small" checked={showMA200} onChange={(e) => setShowMA200(e.target.checked)} />
-          }
-          label={<Typography sx={{ fontSize: 12, color: theme.text.secondary }}>MA200</Typography>}
-        />
-      </Box>
+          <ToggleButtonGroup
+            value={interval}
+            exclusive
+            onChange={handleIntervalChange}
+            size="small"
+            sx={{ '& .MuiToggleButton-root': { px: 1.5, py: 0.3, fontSize: 12 } }}
+          >
+            <ToggleButton value="daily">Daily</ToggleButton>
+            <ToggleButton value="weekly">Weekly</ToggleButton>
+            <ToggleButton value="monthly">Monthly</ToggleButton>
+          </ToggleButtonGroup>
 
-      {/* Chart */}
+          <FormControlLabel
+            control={
+              <Switch size="small" checked={showMA50} onChange={(e) => setShowMA50(e.target.checked)} />
+            }
+            label={<Typography sx={{ fontSize: 12, color: theme.text.secondary }}>MA50</Typography>}
+          />
+          <FormControlLabel
+            control={
+              <Switch size="small" checked={showMA200} onChange={(e) => setShowMA200(e.target.checked)} />
+            }
+            label={<Typography sx={{ fontSize: 12, color: theme.text.secondary }}>MA200</Typography>}
+          />
+        </Box>
+      )}
+
+      {/* Chart container — always in DOM so createChart runs on mount */}
       <Box sx={{ flex: 1, position: 'relative', minHeight: 300 }}>
+        {!symbol && (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: theme.text.muted,
+              zIndex: 10,
+            }}
+          >
+            <Typography sx={{ fontSize: 14 }}>Select a symbol from the watchlist to view chart</Typography>
+          </Box>
+        )}
         {loading && (
           <Box
             sx={{
@@ -416,7 +422,7 @@ export default function KlineChart({ symbol, onError }: KlineChartProps) {
             <LoadingDots text="Loading chart" fontSize={14} />
           </Box>
         )}
-        <Box ref={chartContainerRef} sx={{ width: '100%', height: '100%' }} />
+        <Box ref={chartContainerRef} sx={{ position: 'absolute', inset: 0 }} />
       </Box>
     </Box>
   );

@@ -6,8 +6,7 @@ import {
   Chip,
   Collapse,
   TextField,
-  MenuItem,
-  Skeleton,
+  LinearProgress,
 } from '@mui/material';
 import {
   PlayArrow as RunIcon,
@@ -15,33 +14,67 @@ import {
   ExpandLess as ExpandLessIcon,
   CheckCircle as AdoptIcon,
   ErrorOutline as ErrorIcon,
-  AccessTime as PendingIcon,
+  CheckCircleOutline as DoneIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
 import { useToast } from '../Toast';
 import {
   ArenaTimelinePoint,
+  ArenaVote,
+  ArenaFinalDecision,
+  ArenaProgressEvent,
   ModelIOSummary,
   ModelIODetail,
-  runArena,
+  PipelineStep,
+  AccountSummary,
+  runArenaStream,
   fetchArenaTimeline,
   fetchArenaResults,
   fetchModelIODetail,
+  fetchArenaVotes,
   adoptModel,
+  fetchAccountSummary,
+  fetchAgentConfig,
+  saveAgentConfig,
 } from '../../api/index';
 import { ModelLogo } from './ModelLogos';
 import ArenaTimelineChart from './ArenaTimelineChart';
+import AllocationBarChart from './AllocationBarChart';
 
 // 当前已配置的模型列表（用于生成占位卡片）
 const KNOWN_MODELS = [
   { provider: 'anthropic', name: 'claude-sonnet-4-20250514' },
   { provider: 'openai', name: 'gpt-4o' },
   { provider: 'deepseek', name: 'deepseek-chat' },
-  { provider: 'google', name: 'gemini-2.0-flash' },
+  { provider: 'google', name: 'gemini-2.5-pro-thinking' },
   { provider: 'qwen', name: 'qwen-plus' },
   { provider: 'minimax', name: 'MiniMax-Text-01' },
 ];
+
+const SKILL_LABELS: Record<string, string> = {
+  analyze_market: 'Market',
+  analyze_macro: 'Macro',
+  recall_memory: 'Memory',
+  make_decision: 'Decision',
+};
+
+const SKILL_ORDER = ['analyze_market', 'analyze_macro', 'recall_memory', 'make_decision'];
+
+interface ModelProgress {
+  phase: string;
+  currentSkill: string | null;
+  completedSkills: string[];
+  status: 'pending' | 'running' | 'done' | 'error';
+  latency?: number;
+  parseStatus?: string;
+}
+
+interface PhaseProgress {
+  phase: string;
+  totalModels: number;
+  completedModels: number;
+}
 
 export default function ArenaView() {
   const { theme, isDark } = useTheme();
@@ -58,14 +91,29 @@ export default function ArenaView() {
   const [selectedPromptVersion, setSelectedPromptVersion] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Voting data
+  const votesState = useState<ArenaVote[]>([]);
+  const setVotes = votesState[1];
+  const [finalDecision, setFinalDecision] = useState<ArenaFinalDecision | null>(null);
+
+  // Account & config
+  const [account, setAccount] = useState<AccountSummary | null>(null);
+  const [agentBudget, setAgentBudget] = useState<number>(1000);
+  const [budgetInput, setBudgetInput] = useState<string>('1000');
+  const [budgetSaving, setBudgetSaving] = useState(false);
+
   // Run controls
   const [running, setRunning] = useState(false);
-  const [harnessType, setHarnessType] = useState('monthly_dca');
-  const [budget, setBudget] = useState(1000);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
 
-  const cardBg = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)';
+  // Selected model for detail view
+  const [selectedModelId2, setSelectedModelId2] = useState<string | null>(null);
+
+  // SSE progress state
+  const [modelProgress, setModelProgress] = useState<Record<string, ModelProgress>>({});
+  const [phaseProgress, setPhaseProgress] = useState<PhaseProgress | null>(null);
 
   // Load timeline data
   const loadTimeline = useCallback(async () => {
@@ -74,7 +122,6 @@ export default function ArenaView() {
       const res = await fetchArenaTimeline();
       if (res.success && res.data) {
         setTimeline(res.data);
-        // Default select latest point
         if (res.data.length > 0 && !selectedHarnessId) {
           const latest = res.data[res.data.length - 1];
           handleSelectPoint(latest.harness_id, res.data);
@@ -85,6 +132,35 @@ export default function ArenaView() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadTimeline(); }, [loadTimeline]);
+
+  // Load account summary & agent config
+  useEffect(() => {
+    fetchAccountSummary().then((res) => {
+      if (res.success && res.data) setAccount(res.data);
+    }).catch(() => {});
+    fetchAgentConfig().then((res) => {
+      if (res.success && res.data?.budget != null) {
+        setAgentBudget(res.data.budget);
+        setBudgetInput(String(res.data.budget));
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Save budget
+  const handleSaveBudget = useCallback(async () => {
+    const val = Number(budgetInput);
+    if (isNaN(val) || val <= 0) return;
+    setBudgetSaving(true);
+    try {
+      await saveAgentConfig({ budget: val });
+      setAgentBudget(val);
+      showToast('Budget saved', 'success');
+    } catch {
+      showToast('Failed to save budget', 'error');
+    } finally {
+      setBudgetSaving(false);
+    }
+  }, [budgetInput, showToast]);
 
   // Timer
   useEffect(() => {
@@ -106,95 +182,209 @@ export default function ArenaView() {
     setSelectedHarnessType(point?.harness_type || '');
     setSelectedPromptVersion(point?.prompt_version || '');
     setSelectedModels([]);
+    setVotes([]);
+    setFinalDecision(null);
     setDetailLoading(true);
 
     try {
-      const res = await fetchArenaResults(harnessId);
-      if (res.success && res.data) setSelectedModels(res.data);
-      else showToast('Failed to load arena results', 'error');
+      const [resModels, resVotes] = await Promise.all([
+        fetchArenaResults(harnessId),
+        fetchArenaVotes(harnessId),
+      ]);
+      if (resModels.success && resModels.data) setSelectedModels(resModels.data);
+      if (resVotes.success && resVotes.data) setVotes(resVotes.data);
     } catch { showToast('Failed to load arena results', 'error'); }
     finally { setDetailLoading(false); }
   }, [timeline, showToast]);
 
-  // Run Arena
+  // Handle SSE progress events
+  const handleProgressEvent = useCallback((event: ArenaProgressEvent) => {
+    switch (event.type) {
+      case 'phase_start':
+        setPhaseProgress({
+          phase: event.phase || '',
+          totalModels: event.total_models || 0,
+          completedModels: 0,
+        });
+        break;
+
+      case 'model_start':
+        if (event.model) {
+          setModelProgress(prev => ({
+            ...prev,
+            [event.model!]: {
+              phase: event.phase || 'decide',
+              currentSkill: null,
+              completedSkills: [],
+              status: 'running',
+            },
+          }));
+        }
+        break;
+
+      case 'skill_start':
+        if (event.model) {
+          setModelProgress(prev => ({
+            ...prev,
+            [event.model!]: {
+              ...prev[event.model!],
+              currentSkill: event.skill || null,
+            },
+          }));
+        }
+        break;
+
+      case 'skill_complete':
+        if (event.model) {
+          setModelProgress(prev => {
+            const existing = prev[event.model!];
+            if (!existing) return prev;
+            return {
+              ...prev,
+              [event.model!]: {
+                ...existing,
+                currentSkill: null,
+                completedSkills: event.error
+                  ? existing.completedSkills
+                  : [...existing.completedSkills, event.skill || ''],
+              },
+            };
+          });
+        }
+        break;
+
+      case 'model_complete':
+        if (event.model) {
+          setModelProgress(prev => ({
+            ...prev,
+            [event.model!]: {
+              ...prev[event.model!],
+              currentSkill: null,
+              status: event.status === 'success' ? 'done' : 'error',
+              latency: event.latency_ms,
+              parseStatus: event.parse_status,
+            },
+          }));
+          setPhaseProgress(prev => prev ? {
+            ...prev,
+            completedModels: prev.completedModels + 1,
+          } : null);
+        }
+        break;
+
+      case 'result':
+        if (event.data) {
+          setSelectedHarnessId(event.data.harness_id);
+          setSelectedHarnessType(event.data.harness_type);
+          setSelectedPromptVersion(event.data.prompt_version || '');
+          setSelectedModels(event.data.models);
+          setVotes(event.data.votes || []);
+          setFinalDecision(event.data.final_decision || null);
+          // Reload timeline
+          fetchArenaTimeline().then(tlRes => {
+            if (tlRes.success && tlRes.data) setTimeline(tlRes.data);
+          }).catch(() => {});
+          fetchAccountSummary().then(r => {
+            if (r.success && r.data) setAccount(r.data);
+          }).catch(() => {});
+        }
+        setRunning(false);
+        break;
+
+      case 'error':
+        showToast(event.message || 'Arena stream error', 'error');
+        setRunning(false);
+        break;
+    }
+  }, [showToast]);
+
+  // Run Arena with SSE
   const handleRun = useCallback(async () => {
     setRunning(true);
-    try {
-      const res = await runArena({ harness_type: harnessType, budget });
-      if (res.success && res.data) {
-        // After run, reload timeline and select the new run
-        setSelectedHarnessId(res.data.harness_id);
-        setSelectedHarnessType(res.data.harness_type);
-        setSelectedPromptVersion(res.data.prompt_version || '');
-        setSelectedModels(res.data.models);
-        // Reload timeline to include new data point
-        const tlRes = await fetchArenaTimeline();
-        if (tlRes.success && tlRes.data) setTimeline(tlRes.data);
-      } else {
-        showToast(res.error || 'Arena run failed', 'error');
-      }
-    } catch (e: any) {
-      showToast(e.message || 'Arena run failed', 'error');
-    } finally {
-      setRunning(false);
-    }
-  }, [harnessType, budget, showToast]);
+    setModelProgress({});
+    setPhaseProgress(null);
+    setFinalDecision(null);
+    setSelectedModels([]);
+
+    const models = KNOWN_MODELS
+      .map(m => ({ provider: m.provider, model: m.name }));
+
+    const { cancel } = runArenaStream(
+      { harness_type: 'monthly_dca', budget: agentBudget, models },
+      handleProgressEvent,
+    );
+    cancelRef.current = cancel;
+  }, [agentBudget, handleProgressEvent]);
 
   const hasData = timeline.length > 0;
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* ── Top Controls ── */}
-      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', px: 3, py: 1.5, flexWrap: 'wrap', flexShrink: 0, borderBottom: `1px solid ${theme.border.subtle}` }}>
-        <TextField
-          select
-          size="small"
-          label="Harness Type"
-          value={harnessType}
-          onChange={(e) => setHarnessType(e.target.value)}
-          sx={{ minWidth: 160 }}
-          InputProps={{ sx: { color: theme.text.primary, fontSize: 13 } }}
-          InputLabelProps={{ sx: { color: theme.text.muted } }}
-        >
-          <MenuItem value="monthly_dca">Monthly DCA</MenuItem>
-          <MenuItem value="weekly_check">Weekly Check</MenuItem>
-          <MenuItem value="adhoc">Ad Hoc</MenuItem>
-        </TextField>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 3, py: 1, flexShrink: 0, borderBottom: `1px solid ${theme.border.subtle}`, gap: 1.5, minHeight: 48 }}>
+        {[
+          { label: 'Total', value: account?.total, bold: true },
+          { label: 'Cash', value: account?.cash },
+          { label: 'Positions', value: account?.positions_value },
+        ].map(({ label, value, bold }) => (
+          <Box key={label} sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: theme.text.muted }}>{label}</Typography>
+            <Typography sx={{
+              fontSize: 13,
+              fontWeight: bold ? 700 : 500,
+              color: bold ? theme.text.primary : theme.text.secondary,
+              fontFeatureSettings: '"tnum"',
+            }}>
+              {value != null ? `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+            </Typography>
+          </Box>
+        ))}
+
+        <Box sx={{ width: '1px', height: 20, bgcolor: theme.border.subtle, mx: 0.5 }} />
 
         <TextField
           size="small"
-          label="Budget ($)"
+          label="Budget"
           type="number"
-          value={budget}
-          onChange={(e) => setBudget(Number(e.target.value))}
-          sx={{ width: 120 }}
-          InputProps={{ sx: { color: theme.text.primary, fontSize: 13 } }}
-          InputLabelProps={{ sx: { color: theme.text.muted } }}
+          value={budgetInput}
+          onChange={(e) => setBudgetInput(e.target.value)}
+          onBlur={handleSaveBudget}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveBudget(); }}
+          sx={{ width: 100 }}
+          InputProps={{
+            sx: { color: theme.text.primary, fontSize: 13, height: 32 },
+            startAdornment: <Typography sx={{ fontSize: 12, color: theme.text.muted, mr: 0.3 }}>$</Typography>,
+          }}
+          InputLabelProps={{ sx: { color: theme.text.muted, fontSize: 12 } }}
+          disabled={budgetSaving}
         />
 
         <Button
-          startIcon={running ? undefined : <RunIcon />}
+          startIcon={running ? undefined : <RunIcon sx={{ fontSize: 16 }} />}
           onClick={handleRun}
           disabled={running}
+          size="small"
           sx={{
             bgcolor: theme.brand.primary,
             color: '#fff',
             textTransform: 'none',
             fontWeight: 600,
-            fontSize: 13,
-            borderRadius: 2,
-            px: 3,
+            fontSize: 12,
+            borderRadius: 1.5,
+            px: 2,
+            py: 0.6,
+            flexShrink: 0,
             '&:hover': { bgcolor: theme.brand.hover },
           }}
         >
-          {running ? <LoadingDots text="Running Arena" fontSize={13} color="#fff" /> : 'Run Arena'}
+          {running ? <LoadingDots text="Running" fontSize={12} color="#fff" /> : 'Run Arena'}
         </Button>
-
         {running && (
-          <Typography sx={{ fontSize: 12, color: theme.text.muted, ml: 1 }}>
+          <Typography sx={{ fontSize: 11, color: theme.text.muted, flexShrink: 0 }}>
             {elapsedSeconds}s
           </Typography>
         )}
+
       </Box>
 
       {/* ── Main Content: Left Chart + Right Detail ── */}
@@ -207,10 +397,10 @@ export default function ArenaView() {
           minHeight: 0,
         }}
       >
-        {/* ── Left Panel: Timeline Chart (70%) ── */}
+        {/* ── Left Panel: Timeline Chart (50%) ── */}
         <Box
           sx={{
-            width: { xs: '100%', md: '70%' },
+            width: { xs: '100%', md: '50%' },
             height: { xs: 280, md: '100%' },
             flexShrink: 0,
             borderRight: { xs: 'none', md: `1px solid ${theme.border.subtle}` },
@@ -230,36 +420,63 @@ export default function ArenaView() {
           )}
         </Box>
 
-        {/* ── Right Panel: Model Cards (30%) ── */}
+        {/* ── Right Panel: Allocation Chart + Detail (50%) ── */}
         <Box
           sx={{
-            width: { xs: '100%', md: '30%' },
+            width: { xs: '100%', md: '50%' },
             overflow: 'auto',
             px: 1.5,
             py: 1.5,
             minWidth: 0,
           }}
         >
-          {/* Running skeleton */}
+          {/* Running: Progress cards */}
           {running && (
             <>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary }}>
-                  Arena Results
-                </Typography>
-              </Box>
+              {/* Phase progress banner */}
+              {phaseProgress && (
+                <Box sx={{ mb: 1.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.secondary }}>
+                      {phaseProgress.phase === 'decide' ? 'Phase 1/3: Decisions'
+                        : phaseProgress.phase === 'vote' ? 'Phase 2/3: Voting'
+                        : 'Phase 3/3: Tally'}
+                    </Typography>
+                    <Typography sx={{ fontSize: 11, color: theme.text.muted }}>
+                      {phaseProgress.completedModels}/{phaseProgress.totalModels}
+                    </Typography>
+                  </Box>
+                  <LinearProgress
+                    variant="determinate"
+                    value={phaseProgress.totalModels > 0
+                      ? (phaseProgress.completedModels / phaseProgress.totalModels) * 100
+                      : 0}
+                    sx={{
+                      height: 3,
+                      borderRadius: 1,
+                      bgcolor: 'rgba(128,128,128,0.1)',
+                      '& .MuiLinearProgress-bar': { bgcolor: theme.brand.primary },
+                    }}
+                  />
+                </Box>
+              )}
+
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {KNOWN_MODELS.map((m) => (
-                  <Box key={m.provider}>
-                    <SkeletonModelCard
+                {KNOWN_MODELS.map((m) => {
+                  const key = `${m.provider}:${m.name}`;
+                  const progress = modelProgress[key];
+                  return (
+                    <ProgressModelCard
+                      key={key}
                       provider={m.provider}
                       modelName={m.name}
+                      progress={progress}
                       theme={theme}
                       isDark={isDark}
                       elapsedSeconds={elapsedSeconds}
                     />
-                  </Box>
-                ))}
+                  );
+                })}
               </Box>
             </>
           )}
@@ -288,7 +505,7 @@ export default function ArenaView() {
                   <Chip
                     label={selectedHarnessType.replace('_', ' ')}
                     size="small"
-                    sx={{ fontSize: 9, height: 18, bgcolor: cardBg, color: theme.text.muted }}
+                    sx={{ fontSize: 9, height: 18, bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)', color: theme.text.muted }}
                   />
                 )}
                 {selectedPromptVersion && (
@@ -303,7 +520,7 @@ export default function ArenaView() {
               {detailLoading && selectedModels.length === 0 ? (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {KNOWN_MODELS.map((m) => (
-                    <SkeletonModelCard
+                    <ProgressModelCard
                       key={m.provider}
                       provider={m.provider}
                       modelName={m.name}
@@ -315,15 +532,59 @@ export default function ArenaView() {
                 </Box>
               ) : (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {selectedModels.map((model) => (
-                    <ModelCard
-                      key={model.id}
-                      model={model}
-                      harnessId={selectedHarnessId}
-                      theme={theme}
-                      isDark={isDark}
-                    />
-                  ))}
+                  {/* Final decision banner */}
+                  {finalDecision && (
+                    <Box sx={{
+                      display: 'flex', alignItems: 'center', gap: 1, py: 0.8, px: 1,
+                      bgcolor: 'rgba(76,175,80,0.08)', borderRadius: 1, mb: 0.5,
+                    }}>
+                      <Typography sx={{ fontSize: 11, color: '#4caf50', fontWeight: 600 }}>
+                        Winner: {finalDecision.winner_model_name}
+                      </Typography>
+                      <Chip
+                        label={finalDecision.winner_action}
+                        size="small"
+                        sx={{
+                          fontSize: 9, height: 16, fontWeight: 600,
+                          bgcolor: finalDecision.winner_action === 'BUY' ? 'rgba(76,175,80,0.15)' : finalDecision.winner_action === 'SELL' ? 'rgba(244,67,54,0.15)' : 'rgba(255,152,0,0.15)',
+                          color: finalDecision.winner_action === 'BUY' ? '#4caf50' : finalDecision.winner_action === 'SELL' ? '#f44336' : '#ff9800',
+                        }}
+                      />
+                      <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+                        +{finalDecision.total_approve}/-{finalDecision.total_reject} (net:{finalDecision.net_score})
+                      </Typography>
+                    </Box>
+                  )}
+
+                  {/* Allocation Bar Chart */}
+                  {(() => {
+                    const selectedDetail = selectedModels.find((m) => m.id === selectedModelId2);
+                    return (
+                      <>
+                        <AllocationBarChart
+                          models={selectedModels}
+                          isDark={isDark}
+                          theme={theme}
+                          onSelectModel={(id) => setSelectedModelId2(prev => prev === id ? null : id)}
+                          selectedModelId={selectedModelId2}
+                        />
+
+                        {/* Selected model detail card */}
+                        {selectedDetail && (
+                          <Box sx={{ mt: 1, borderTop: `1px solid ${theme.border.subtle}`, pt: 1 }}>
+                            <ModelCard
+                              model={selectedDetail}
+                              harnessId={selectedHarnessId}
+                              theme={theme}
+                              isDark={isDark}
+                              voteSummary={finalDecision?.vote_summary?.[selectedDetail.id]}
+                              isWinner={finalDecision?.winner_model_io_id === selectedDetail.id}
+                            />
+                          </Box>
+                        )}
+                      </>
+                    );
+                  })()}
                 </Box>
               )}
             </>
@@ -334,22 +595,33 @@ export default function ArenaView() {
   );
 }
 
-/* ── 骨架加载卡片 ── */
-function SkeletonModelCard({
+/* ── Progress Model Card (during run) ── */
+function ProgressModelCard({
   provider,
   modelName,
+  progress,
   theme,
   isDark,
   elapsedSeconds,
 }: {
   provider: string;
   modelName: string;
+  progress?: ModelProgress;
   theme: any;
   isDark: boolean;
   elapsedSeconds: number;
 }) {
+  const isRunning = progress?.status === 'running';
+  const isDone = progress?.status === 'done';
+  const isError = progress?.status === 'error';
+
   return (
-    <Box sx={{ borderBottom: `1px solid ${theme.border.subtle}`, pb: 1 }}>
+    <Box sx={{
+      borderBottom: `1px solid ${theme.border.subtle}`,
+      pb: 1,
+      opacity: isDone || isError ? 0.7 : 1,
+    }}>
+      {/* Header */}
       <Box sx={{ py: 0.8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ModelLogo provider={provider} size={18} isDark={isDark} />
@@ -358,38 +630,421 @@ function SkeletonModelCard({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <PendingIcon sx={{ fontSize: 12, color: theme.text.muted, animation: 'spin 2s linear infinite', '@keyframes spin': { '100%': { transform: 'rotate(360deg)' } } }} />
-          <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
-            {elapsedSeconds}s
-          </Typography>
+          {isDone && (
+            <DoneIcon sx={{ fontSize: 14, color: '#4caf50' }} />
+          )}
+          {isError && (
+            <ErrorIcon sx={{ fontSize: 14, color: '#f44336' }} />
+          )}
+          {!isDone && !isError && (
+            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+              {elapsedSeconds}s
+            </Typography>
+          )}
+          {progress?.latency != null && (
+            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+              {(progress.latency / 1000).toFixed(1)}s
+            </Typography>
+          )}
+          {progress?.parseStatus && (
+            <Chip
+              label={progress.parseStatus}
+              size="small"
+              sx={{
+                fontSize: 8, height: 16,
+                bgcolor: progress.parseStatus === 'structured' ? 'rgba(76,175,80,0.12)' : 'rgba(255,152,0,0.12)',
+                color: progress.parseStatus === 'structured' ? '#4caf50' : '#ff9800',
+              }}
+            />
+          )}
         </Box>
       </Box>
-      <Skeleton variant="rounded" width={50} height={16} sx={{ mb: 0.5, bgcolor: 'rgba(128,128,128,0.1)' }} />
-      <Skeleton variant="text" width="70%" sx={{ bgcolor: 'rgba(128,128,128,0.08)', height: 14 }} />
+
+      {/* Skill progress steps */}
+      <Box sx={{ display: 'flex', gap: 0.5, py: 0.3 }}>
+        {SKILL_ORDER.map((skill) => {
+          const isCompleted = progress?.completedSkills.includes(skill);
+          const isCurrent = progress?.currentSkill === skill;
+
+          return (
+            <Box
+              key={skill}
+              sx={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.3,
+                py: 0.3,
+                px: 0.5,
+                borderRadius: 0.5,
+                bgcolor: isCompleted
+                  ? 'rgba(76,175,80,0.08)'
+                  : isCurrent
+                    ? 'rgba(33,150,243,0.08)'
+                    : 'rgba(128,128,128,0.04)',
+                border: isCurrent ? '1px solid rgba(33,150,243,0.3)' : '1px solid transparent',
+              }}
+            >
+              <Typography sx={{
+                fontSize: 9,
+                color: isCompleted ? '#4caf50' : isCurrent ? '#2196f3' : theme.text.muted,
+                fontWeight: isCurrent ? 600 : 400,
+              }}>
+                {isCompleted ? '✓' : isCurrent ? '⏳' : '○'} {SKILL_LABELS[skill] || skill}
+              </Typography>
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Current skill indicator */}
+      {isRunning && !progress?.currentSkill && !isDone && (
+        <LinearProgress
+          sx={{
+            height: 2,
+            borderRadius: 1,
+            mt: 0.5,
+            bgcolor: 'rgba(128,128,128,0.05)',
+            '& .MuiLinearProgress-bar': { bgcolor: theme.brand.primary },
+          }}
+        />
+      )}
     </Box>
   );
 }
 
-/* ── 结果卡片 ── */
+/* ── Pipeline Steps Display ── */
+function PipelineSteps({
+  steps,
+  theme,
+}: {
+  steps: PipelineStep[];
+  theme: any;
+}) {
+  const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
+
+  return (
+    <Box sx={{ py: 0.5 }}>
+      <Typography sx={{ fontSize: 11, color: theme.text.muted, fontWeight: 600, mb: 0.5 }}>
+        Pipeline Steps
+      </Typography>
+      {steps.map((step, i) => (
+        <Box key={i}>
+          <Box
+            sx={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              py: 0.3, px: 0.5, borderRadius: 0.5, cursor: step.output_summary ? 'pointer' : 'default',
+              '&:hover': step.output_summary ? { bgcolor: 'rgba(128,128,128,0.05)' } : {},
+            }}
+            onClick={() => step.output_summary && setExpandedSkill(expandedSkill === step.skill ? null : step.skill)}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography sx={{
+                fontSize: 10,
+                color: step.status === 'success' ? '#4caf50' : '#f44336',
+              }}>
+                {step.status === 'success' ? '✓' : '✗'}
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: theme.text.primary }}>
+                {SKILL_LABELS[step.skill] || step.skill}
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {step.latency_ms != null && (
+                <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+                  {(step.latency_ms / 1000).toFixed(1)}s
+                </Typography>
+              )}
+              {step.output_summary && (
+                expandedSkill === step.skill
+                  ? <ExpandLessIcon sx={{ fontSize: 12, color: theme.text.muted }} />
+                  : <ExpandMoreIcon sx={{ fontSize: 12, color: theme.text.muted }} />
+              )}
+            </Box>
+          </Box>
+          <Collapse in={expandedSkill === step.skill}>
+            <Box sx={{ px: 0.5, py: 0.5, ml: 2 }}>
+              {step.error ? (
+                <Typography sx={{ fontSize: 10, color: '#f44336', fontFamily: 'monospace' }}>
+                  {step.error}
+                </Typography>
+              ) : step.output_summary ? (
+                <Box sx={{ fontSize: 10, fontFamily: 'monospace', color: theme.text.secondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {tryFormatJson(step.output_summary)}
+                </Box>
+              ) : null}
+            </Box>
+          </Collapse>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/* ── JSON Syntax Highlighter ── */
+function JsonView({ data, theme, collapsed = false }: { data: any; theme: any; collapsed?: boolean }) {
+  const [isCollapsed, setIsCollapsed] = useState(collapsed);
+
+  if (data === null || data === undefined) {
+    return <span style={{ color: '#9e9e9e' }}>null</span>;
+  }
+
+  if (typeof data === 'string') {
+    return <span style={{ color: '#4caf50' }}>"{data.length > 200 ? data.slice(0, 200) + '...' : data}"</span>;
+  }
+
+  if (typeof data === 'number') {
+    return <span style={{ color: '#ff9800' }}>{data}</span>;
+  }
+
+  if (typeof data === 'boolean') {
+    return <span style={{ color: '#ab47bc' }}>{String(data)}</span>;
+  }
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) return <span>[]</span>;
+    if (isCollapsed) {
+      return (
+        <span style={{ cursor: 'pointer', color: theme.text.muted }} onClick={() => setIsCollapsed(false)}>
+          [{data.length} items...]
+        </span>
+      );
+    }
+    return (
+      <span>
+        <span style={{ cursor: 'pointer', color: theme.text.muted }} onClick={() => setIsCollapsed(true)}>[</span>
+        {data.map((item, i) => (
+          <Box key={i} sx={{ pl: 2 }}>
+            <JsonView data={item} theme={theme} collapsed />
+            {i < data.length - 1 && ','}
+          </Box>
+        ))}
+        <span>]</span>
+      </span>
+    );
+  }
+
+  if (typeof data === 'object') {
+    const keys = Object.keys(data);
+    if (keys.length === 0) return <span>{'{}'}</span>;
+    if (isCollapsed) {
+      return (
+        <span style={{ cursor: 'pointer', color: theme.text.muted }} onClick={() => setIsCollapsed(false)}>
+          {'{'}{keys.length} keys...{'}'}
+        </span>
+      );
+    }
+    return (
+      <span>
+        <span style={{ cursor: 'pointer', color: theme.text.muted }} onClick={() => setIsCollapsed(true)}>{'{'}</span>
+        {keys.map((key, i) => (
+          <Box key={key} sx={{ pl: 2 }}>
+            <span style={{ color: '#42a5f5' }}>"{key}"</span>
+            <span style={{ color: theme.text.muted }}>: </span>
+            <JsonView data={data[key]} theme={theme} collapsed={typeof data[key] === 'object' && data[key] !== null} />
+            {i < keys.length - 1 && ','}
+          </Box>
+        ))}
+        <span>{'}'}</span>
+      </span>
+    );
+  }
+
+  return <span>{String(data)}</span>;
+}
+
+/** Try to parse and pretty-format JSON strings, return original if not JSON */
+function tryFormatJson(text: string): string {
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'object') {
+      return JSON.stringify(parsed, null, 2);
+    }
+  } catch { /* not JSON */ }
+  return text;
+}
+
+/* ── Structured Output Card ── */
+function StructuredOutputCard({ data, theme }: { data: Record<string, any>; theme: any }) {
+  const [showJson, setShowJson] = useState(false);
+
+  if (!data || Object.keys(data).length === 0) return null;
+
+  const action = data.action || data['操作'];
+  const allocations = data.allocations || data['分配'] || [];
+  const confidence = data.confidence ?? data['信心度'];
+  const reasoning = data.reasoning || data['决策理由'];
+  const chainOfThought = data.chain_of_thought || data['思考过程'];
+  const riskAssessment = data.risk_assessment || data['风险评估'];
+  const invalidation = data.invalidation || data['失效条件'];
+
+  const actionColor = (a: string) => {
+    const upper = (a || '').toUpperCase();
+    if (['BUY', 'ALLOCATE', '买入'].some(x => upper.includes(x))) return '#4caf50';
+    if (['SELL', '卖出'].some(x => upper.includes(x))) return '#f44336';
+    return '#ff9800';
+  };
+
+  return (
+    <Box sx={{ mb: 1 }}>
+      {/* Action + Confidence header */}
+      {(action || confidence != null) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+          {action && (
+            <Chip
+              label={action}
+              size="small"
+              sx={{ fontWeight: 700, fontSize: 11, height: 22, bgcolor: `${actionColor(action)}18`, color: actionColor(action) }}
+            />
+          )}
+          {confidence != null && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography sx={{ fontSize: 10, color: theme.text.muted }}>信心度</Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.primary }}>
+                {typeof confidence === 'number' ? `${(confidence * 100).toFixed(0)}%` : confidence}
+              </Typography>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Allocations table */}
+      {allocations.length > 0 && (
+        <Box sx={{
+          mb: 0.8, p: 0.8, borderRadius: 1,
+          bgcolor: 'rgba(128,128,128,0.04)',
+          border: `1px solid rgba(128,128,128,0.08)`,
+        }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, mb: 0.5, fontWeight: 600 }}>分配方案</Typography>
+          {allocations.map((alloc: any, i: number) => (
+            <Box key={i} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.primary }}>
+                  {alloc.etf || alloc.symbol || alloc['标的']}
+                </Typography>
+                {(alloc.reason || alloc['理由']) && (
+                  <Typography sx={{ fontSize: 10, color: theme.text.muted, maxWidth: 180 }} noWrap>
+                    {alloc.reason || alloc['理由']}
+                  </Typography>
+                )}
+              </Box>
+              <Typography sx={{ fontSize: 11, color: theme.text.secondary, fontFeatureSettings: '"tnum"' }}>
+                ${(alloc.amount || alloc['金额'] || 0).toLocaleString()} ({alloc.percentage || alloc['比例'] || 0}%)
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {/* Reasoning */}
+      {reasoning && (
+        <Box sx={{ mb: 0.8 }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.3 }}>决策理由</Typography>
+          <Typography sx={{ fontSize: 11, color: theme.text.secondary, lineHeight: 1.6 }}>
+            {reasoning}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Risk assessment */}
+      {riskAssessment && (
+        <Box sx={{ mb: 0.8 }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.3 }}>风险评估</Typography>
+          <Typography sx={{ fontSize: 11, color: theme.text.secondary, lineHeight: 1.6 }}>
+            {riskAssessment}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Chain of thought — collapsible */}
+      {chainOfThought && (
+        <Box sx={{ mb: 0.8 }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.3 }}>思考过程</Typography>
+          <Typography sx={{ fontSize: 11, color: theme.text.muted, lineHeight: 1.5 }}>
+            {chainOfThought}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Invalidation */}
+      {invalidation && (
+        <Box sx={{ mb: 0.8 }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.3 }}>失效条件</Typography>
+          <Typography sx={{ fontSize: 11, color: '#ff9800', lineHeight: 1.5 }}>
+            {invalidation}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Toggle JSON view */}
+      <Button
+        size="small"
+        onClick={() => setShowJson(!showJson)}
+        sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 10, py: 0, minHeight: 20 }}
+      >
+        {showJson ? '隐藏 JSON' : '查看 JSON'}
+      </Button>
+      <Collapse in={showJson}>
+        <Box sx={{ fontSize: 11, fontFamily: 'monospace', lineHeight: 1.5, mt: 0.5 }}>
+          <JsonView data={data} theme={theme} />
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
+/* ── Raw Output Section (collapsible) ── */
+function RawOutputSection({ raw, theme }: { raw: string; theme: any }) {
+  const [show, setShow] = useState(false);
+
+  return (
+    <Box>
+      <Button
+        size="small"
+        onClick={() => setShow(!show)}
+        sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 10, py: 0, minHeight: 20 }}
+      >
+        {show ? '隐藏原始输出' : '查看原始输出'}
+      </Button>
+      <Collapse in={show}>
+        <pre style={{
+          margin: 0, marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          fontSize: 10, lineHeight: 1.5, color: theme.text.muted,
+          maxHeight: 200, overflow: 'auto',
+        }}>
+          {raw}
+        </pre>
+      </Collapse>
+    </Box>
+  );
+}
+
+/* ── Result Model Card ── */
 function ModelCard({
   model,
   harnessId,
   theme,
   isDark,
+  voteSummary,
+  isWinner,
 }: {
   model: ModelIOSummary;
   harnessId: string;
   theme: any;
   isDark: boolean;
+  voteSummary?: { approve: number; reject: number; net: number };
+  isWinner?: boolean;
 }) {
   const { showToast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<ModelIODetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [adopting, setAdopting] = useState(false);
+  const [showPipeline, setShowPipeline] = useState(false);
 
   const isError = model.status === 'error' || model.status === 'timeout';
   const structured = model.output_structured || {};
+  const pipelineSteps = model.pipeline_steps;
 
   const handleExpand = async () => {
     if (!expanded && !detail) {
@@ -440,6 +1095,18 @@ function ModelCard({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+          {isWinner && (
+            <Chip
+              label="Winner"
+              size="small"
+              sx={{ fontSize: 9, height: 18, fontWeight: 700, bgcolor: 'rgba(76,175,80,0.15)', color: '#4caf50' }}
+            />
+          )}
+          {voteSummary && (
+            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+              +{voteSummary.approve}/-{voteSummary.reject}
+            </Typography>
+          )}
           {structured.action && (
             <Chip
               label={structured.action}
@@ -471,12 +1138,14 @@ function ModelCard({
         </Box>
       )}
 
-      {/* Summary — allocations + metrics in compact row */}
+      {/* Allocations — structured table or raw extraction */}
       {!isError && (
         <Box sx={{ pb: 0.5 }}>
           {structured.allocations?.map((alloc: any, i: number) => (
             <Box key={i} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.15 }}>
-              <Typography sx={{ fontSize: 11, color: theme.text.primary }}>{alloc.etf}</Typography>
+              <Typography sx={{ fontSize: 11, color: theme.text.primary }}>
+                {alloc.etf || alloc.symbol}
+              </Typography>
               <Typography sx={{ fontSize: 11, color: theme.text.secondary }}>
                 ${alloc.amount?.toLocaleString()} ({alloc.percentage}%)
               </Typography>
@@ -519,6 +1188,15 @@ function ModelCard({
         >
           {expanded ? 'Collapse' : 'Details'}
         </Button>
+        {pipelineSteps && pipelineSteps.length > 0 && (
+          <Button
+            size="small"
+            onClick={() => setShowPipeline(!showPipeline)}
+            sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24 }}
+          >
+            Pipeline
+          </Button>
+        )}
         {!isError && (
           <Button
             size="small"
@@ -540,44 +1218,43 @@ function ModelCard({
         )}
       </Box>
 
+      {/* Pipeline Steps */}
+      {pipelineSteps && pipelineSteps.length > 0 && (
+        <Collapse in={showPipeline}>
+          <PipelineSteps steps={pipelineSteps} theme={theme} />
+        </Collapse>
+      )}
+
       {/* Detail */}
       <Collapse in={expanded}>
-        <Box sx={{ py: 1, maxHeight: 200, overflow: 'auto' }}>
+        <Box sx={{ py: 1, maxHeight: 400, overflow: 'auto' }}>
           {detailLoading ? (
             <LoadingDots text="Loading" fontSize={12} />
           ) : detail ? (
-            <Box sx={{ fontSize: 12, fontFamily: 'monospace', color: theme.text.secondary }}>
+            <Box sx={{ color: theme.text.secondary }}>
               {detail.error_message && (
-                <>
-                  <Typography sx={{ fontSize: 11, color: '#f44336', mb: 0.5, fontWeight: 600 }}>
-                    Error:
+                <Box sx={{ mb: 1.5, p: 1, bgcolor: 'rgba(244,67,54,0.06)', borderRadius: 1 }}>
+                  <Typography sx={{ fontSize: 11, color: '#f44336', fontWeight: 600, mb: 0.3 }}>
+                    Error
                   </Typography>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#f44336', marginBottom: 12 }}>
+                  <Typography sx={{ fontSize: 11, color: '#f44336', lineHeight: 1.4 }}>
                     {detail.error_message}
-                  </pre>
-                </>
+                  </Typography>
+                </Box>
               )}
+
+              {/* Structured output — card style */}
+              <StructuredOutputCard
+                data={detail.output_structured || structured}
+                theme={theme}
+              />
+
+              {/* Raw output — collapsible */}
               {detail.output_raw && (
-                <>
-                  <Typography sx={{ fontSize: 11, color: theme.text.muted, mb: 0.5, fontWeight: 600 }}>
-                    Raw Output:
-                  </Typography>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: 12 }}>
-                    {detail.output_raw}
-                  </pre>
-                </>
+                <RawOutputSection raw={detail.output_raw} theme={theme} />
               )}
-              {structured.reasoning && (
-                <>
-                  <Typography sx={{ fontSize: 11, color: theme.text.muted, mb: 0.5, fontWeight: 600 }}>
-                    Reasoning:
-                  </Typography>
-                  <Typography sx={{ fontSize: 12, color: theme.text.secondary, lineHeight: 1.6 }}>
-                    {structured.reasoning}
-                  </Typography>
-                </>
-              )}
-              {!detail.output_raw && !detail.error_message && !structured.reasoning && (
+
+              {!detail.output_raw && !detail.error_message && !structured.reasoning && !detail.output_structured && (
                 <Typography sx={{ fontSize: 12, color: theme.text.muted }}>No details available</Typography>
               )}
             </Box>

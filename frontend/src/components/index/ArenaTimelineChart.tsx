@@ -15,6 +15,7 @@ import {
   Time,
   ColorType,
   LineSeries,
+  AreaSeries,
   SeriesMarker,
   LineStyle,
 } from 'lightweight-charts';
@@ -42,6 +43,9 @@ function getChartTheme(isDark: boolean) {
         crosshairColor: 'rgba(150, 150, 180, 0.3)',
         crosshairLabelBg: '#2a2e39',
         lineColor: '#a855f7',
+        returnColor: '#3b82f6',
+        returnAreaTop: 'rgba(59, 130, 246, 0.18)',
+        returnAreaBottom: 'rgba(59, 130, 246, 0.0)',
         tooltipBg: 'rgba(19, 23, 34, 0.85)',
         tooltipBorder: 'rgba(168, 85, 247, 0.25)',
         tooltipText: 'rgba(209, 212, 220, 0.9)',
@@ -54,6 +58,9 @@ function getChartTheme(isDark: boolean) {
         crosshairColor: 'rgba(120, 125, 140, 0.25)',
         crosshairLabelBg: '#f0f3fa',
         lineColor: '#7c3aed',
+        returnColor: '#2563eb',
+        returnAreaTop: 'rgba(37, 99, 235, 0.12)',
+        returnAreaBottom: 'rgba(37, 99, 235, 0.0)',
         tooltipBg: 'rgba(255, 255, 255, 0.88)',
         tooltipBorder: 'rgba(124, 58, 237, 0.15)',
         tooltipText: 'rgba(30, 35, 50, 0.9)',
@@ -76,6 +83,7 @@ export default function ArenaTimelineChart({
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const returnSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const dataMapRef = useRef<Map<string, string>>(new Map());
   const timeMapRef = useRef<Map<string, Time>>(new Map());
@@ -145,6 +153,11 @@ export default function ArenaTimelineChart({
         borderVisible: false,
         scaleMargins: { top: 0.12, bottom: 0.08 },
       },
+      leftPriceScale: {
+        visible: true,
+        borderVisible: false,
+        scaleMargins: { top: 0.12, bottom: 0.08 },
+      },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
@@ -186,6 +199,24 @@ export default function ArenaTimelineChart({
     const seriesMarkers = createSeriesMarkers(series, []);
     markersRef.current = seriesMarkers;
 
+    // AreaSeries — return rate on left Y-axis
+    const returnSeries = chart.addSeries(AreaSeries, {
+      priceScaleId: 'left',
+      lineColor: chartTheme.returnColor,
+      topColor: chartTheme.returnAreaTop,
+      bottomColor: chartTheme.returnAreaBottom,
+      lineWidth: 1,
+      crosshairMarkerVisible: false,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      pointMarkersVisible: false,
+      priceFormat: {
+        type: 'custom',
+        formatter: (price: number) => `${price >= 0 ? '+' : ''}${price.toFixed(1)}%`,
+      },
+    });
+    returnSeriesRef.current = returnSeries;
+
     // Click handler
     chart.subscribeClick((param) => {
       if (!param.time) return;
@@ -213,6 +244,7 @@ export default function ArenaTimelineChart({
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      returnSeriesRef.current = null;
       markersRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -240,6 +272,11 @@ export default function ArenaTimelineChart({
       crosshairMarkerBackgroundColor: chartTheme.background,
       priceLineColor: chartTheme.lineColor,
     });
+    returnSeriesRef.current?.applyOptions({
+      lineColor: chartTheme.returnColor,
+      topColor: chartTheme.returnAreaTop,
+      bottomColor: chartTheme.returnAreaBottom,
+    });
   }, [chartTheme]);
 
   // Update data + markers + tooltip
@@ -249,7 +286,17 @@ export default function ArenaTimelineChart({
     const timeMap = new Map<string, string>();
     const harnessTimeMap = new Map<string, Time>();
     const lineData: LineData[] = [];
+    const returnData: LineData[] = [];
     const markers: SeriesMarker<Time>[] = [];
+
+    // Find the first valid account_total as baseline for return rate
+    let baseline: number | null = null;
+    for (const pt of data) {
+      if (pt.account_total != null && pt.account_total > 0) {
+        baseline = pt.account_total;
+        break;
+      }
+    }
 
     for (const pt of data) {
       if (pt.account_total == null || pt.account_total === 0) continue;
@@ -260,6 +307,12 @@ export default function ArenaTimelineChart({
       harnessTimeMap.set(pt.harness_id, ts);
 
       lineData.push({ time: ts, value: pt.account_total });
+
+      // Return rate: (current - baseline) / baseline * 100
+      if (baseline) {
+        const returnPct = ((pt.account_total - baseline) / baseline) * 100;
+        returnData.push({ time: ts, value: returnPct });
+      }
 
       // Selected point: larger marker in line color
       if (pt.harness_id === selectedHarnessId) {
@@ -276,6 +329,7 @@ export default function ArenaTimelineChart({
     dataMapRef.current = timeMap;
     timeMapRef.current = harnessTimeMap;
     seriesRef.current.setData(lineData);
+    returnSeriesRef.current?.setData(returnData);
     markersRef.current?.setMarkers(markers);
     chartRef.current.timeScale().fitContent();
 
@@ -310,6 +364,17 @@ export default function ArenaTimelineChart({
     );
   }
 
+  // Compute return rate for tooltip
+  const tooltipReturnPct = (() => {
+    if (!tooltip) return null;
+    const validPts = data.filter((p) => p.account_total != null && p.account_total > 0);
+    if (validPts.length === 0) return null;
+    const baseline = validPts[0].account_total!;
+    const current = tooltip.point.account_total;
+    if (current == null || current === 0) return null;
+    return ((current - baseline) / baseline) * 100;
+  })();
+
   const actionInfo = tooltip?.point.action
     ? ACTION_LABELS[tooltip.point.action.toUpperCase()]
     : null;
@@ -341,18 +406,32 @@ export default function ArenaTimelineChart({
               : '0 4px 20px rgba(0,0,0,0.08)',
           }}
         >
-          {/* Account total */}
-          <Typography
-            sx={{
-              fontSize: 16,
-              fontWeight: 700,
-              color: chartTheme.tooltipText,
-              lineHeight: 1.2,
-              fontFeatureSettings: '"tnum"',
-            }}
-          >
-            ${tooltip.point.account_total?.toLocaleString()}
-          </Typography>
+          {/* Account total + return rate */}
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.8 }}>
+            <Typography
+              sx={{
+                fontSize: 16,
+                fontWeight: 700,
+                color: chartTheme.tooltipText,
+                lineHeight: 1.2,
+                fontFeatureSettings: '"tnum"',
+              }}
+            >
+              ${tooltip.point.account_total?.toLocaleString()}
+            </Typography>
+            {tooltipReturnPct != null && (
+              <Typography
+                sx={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: tooltipReturnPct >= 0 ? '#26a69a' : '#ef5350',
+                  fontFeatureSettings: '"tnum"',
+                }}
+              >
+                {tooltipReturnPct >= 0 ? '+' : ''}{tooltipReturnPct.toFixed(1)}%
+              </Typography>
+            )}
+          </Box>
 
           {/* Date */}
           <Typography

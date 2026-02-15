@@ -91,7 +91,11 @@ class ScoreService:
             )
             query = query.where(ModelScore.prompt_version_id == current_prompt)
 
-        query = query.order_by(ModelScore.avg_return_pct.desc())
+        query = query.order_by(
+            (ModelScore.approve_vote_count - ModelScore.rejection_count).desc(),
+            ModelScore.adoption_count.desc(),
+            ModelScore.avg_return_pct.desc(),
+        )
         result = await session.execute(query)
         scores = result.scalars().all()
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Typography, IconButton, Tooltip } from '@mui/material';
-import { ContentCopy, Person, SmartToy } from '@mui/icons-material';
+import { ContentCopy, SmartToy } from '@mui/icons-material';
+import { useTheme } from '../../theme/ThemeProvider';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -21,14 +22,17 @@ interface Message {
       source: string;
     }>;
   };
-  created_at: string;
+  created_at?: string;
+  timestamp?: Date;
 }
 
 interface EnhancedMessageProps {
   message: Message;
+  modelIcon?: string;
 }
 
-const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
+const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message, modelIcon }) => {
+  const { theme, isDark } = useTheme();
   const isUser = message.role === 'user';
 
   const handleCopyCode = (code: string) => {
@@ -77,17 +81,23 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
         {!isUser && (
           <Box
             sx={{
-              width: 36,
-              height: 36,
+              width: 28,
+              height: 28,
               borderRadius: '50%',
-              backgroundColor: 'rgba(79, 195, 247, 0.2)',
+              bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
+              mt: 0.5,
+              overflow: 'hidden',
             }}
           >
-            <SmartToy sx={{ fontSize: 20, color: '#4FC3F7' }} />
+            {modelIcon ? (
+              <img src={modelIcon} alt="" style={{ width: 18, height: 18 }} />
+            ) : (
+              <SmartToy sx={{ fontSize: 16, color: theme.text.muted }} />
+            )}
           </Box>
         )}
 
@@ -95,21 +105,20 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
         <Box
           sx={{
             maxWidth: isUser ? '75%' : '85%',
-            backgroundColor: isUser
-              ? 'rgba(79, 195, 247, 0.15)'
-              : 'rgba(255, 255, 255, 0.04)',
-            backdropFilter: 'blur(12px)',
-            border: `1px solid ${
-              isUser ? 'rgba(79, 195, 247, 0.3)' : 'rgba(255, 255, 255, 0.08)'
-            }`,
-            borderRadius: 2,
-            padding: 2,
-            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+            ...(isUser ? {
+              bgcolor: isDark ? 'rgba(100,149,237,0.12)' : 'rgba(100,149,237,0.08)',
+              borderRadius: '18px 18px 4px 18px',
+              px: 2,
+              py: 1.2,
+            } : {
+              backgroundColor: 'transparent',
+            }),
           }}
         >
           <ReactMarkdown
             components={{
-              code({ node, inline, className, children, ...props }) {
+              code({ node, className, children, ...props }) {
+                const inline = (props as any)?.inline;
                 const match = /language-(\w+)/.exec(className || '');
                 const codeString = String(children).replace(/\n$/, '');
 
@@ -134,15 +143,14 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
                       </IconButton>
                     </Tooltip>
                     <SyntaxHighlighter
-                      style={vscDarkPlus}
+                      style={vscDarkPlus as any}
                       language={match[1]}
                       PreTag="div"
                       customStyle={{
                         margin: 0,
                         borderRadius: '8px',
                         fontSize: '0.85rem',
-                      }}
-                      {...props}
+                      } as any}
                     >
                       {codeString}
                     </SyntaxHighlighter>
@@ -167,7 +175,7 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
                 <Typography
                   variant="body1"
                   sx={{
-                    color: 'rgba(255, 255, 255, 0.85)',
+                    color: theme.text.primary,
                     lineHeight: 1.7,
                     mb: 1,
                     '&:last-child': { mb: 0 },
@@ -197,7 +205,7 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
                 </Box>
               ),
               li: ({ children }) => (
-                <Typography component="li" sx={{ color: 'rgba(255, 255, 255, 0.85)', mb: 0.5 }}>
+                <Typography component="li" sx={{ color: theme.text.primary, mb: 0.5 }}>
                   {children}
                 </Typography>
               ),
@@ -207,23 +215,7 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message }) => {
           </ReactMarkdown>
         </Box>
 
-        {/* Avatar for user */}
-        {isUser && (
-          <Box
-            sx={{
-              width: 36,
-              height: 36,
-              borderRadius: '50%',
-              backgroundColor: 'rgba(255, 255, 255, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            <Person sx={{ fontSize: 20, color: 'rgba(255, 255, 255, 0.7)' }} />
-          </Box>
-        )}
+        {/* No user avatar */}
       </Box>
     </Box>
   );

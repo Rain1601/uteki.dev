@@ -21,8 +21,6 @@ import {
   MenuItem,
 } from '@mui/material';
 import {
-  Save as SaveIcon,
-  Refresh as RefreshIcon,
   PlayArrow as TriggerIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -31,20 +29,8 @@ import {
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
 import { useToast } from '../Toast';
-import KlineChart from './KlineChart';
 import {
-  WatchlistItem,
-  PromptVersion,
   ScheduleTask,
-  fetchWatchlist,
-  addToWatchlist,
-  removeFromWatchlist,
-  refreshData,
-  fetchCurrentPrompt,
-  updatePrompt,
-  fetchPromptHistory,
-  activatePromptVersion,
-  deletePromptVersion,
   fetchSchedules,
   createSchedule,
   updateSchedule,
@@ -53,21 +39,24 @@ import {
   createIndexTables,
   seedIndexDefaults,
 } from '../../api/index';
+import SystemPromptTab from './context/SystemPromptTab';
+import UserPromptTab from './context/UserPromptTab';
+import MemoryTab from './context/MemoryTab';
+import ToolsTab from './context/ToolsTab';
 
 export default function SettingsPanel() {
   const { theme, isDark } = useTheme();
   const { showToast } = useToast();
 
   // Section state
-  const [section, setSection] = useState<'watchlist' | 'prompt' | 'schedules' | 'debug'>('watchlist');
+  const [section, setSection] = useState<'context' | 'schedules' | 'debug'>('context');
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', px: 3, py: 2 }}>
       {/* Section Tabs */}
       <Box sx={{ display: 'flex', gap: 1, mb: 3, flexWrap: 'wrap' }}>
         {[
-          { key: 'watchlist', label: 'Watchlist' },
-          { key: 'prompt', label: 'System Prompt' },
+          { key: 'context', label: 'Context' },
           { key: 'schedules', label: 'Schedules' },
           ...(import.meta.env.DEV ? [{ key: 'debug', label: 'Debug' }] : []),
         ].map(({ key, label }) => (
@@ -87,374 +76,49 @@ export default function SettingsPanel() {
         ))}
       </Box>
 
-      {section === 'watchlist' && <WatchlistSection theme={theme} isDark={isDark} showToast={showToast} />}
-      {section === 'prompt' && <PromptSection theme={theme} isDark={isDark} showToast={showToast} />}
+      {section === 'context' && <ContextSection theme={theme} isDark={isDark} showToast={showToast} />}
       {section === 'schedules' && <ScheduleSection theme={theme} isDark={isDark} showToast={showToast} />}
       {import.meta.env.DEV && section === 'debug' && <DebugSection theme={theme} isDark={isDark} showToast={showToast} />}
     </Box>
   );
 }
 
-// ── Watchlist ──
+// ── Context ──
 
-function WatchlistSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
-  const [items, setItems] = useState<WatchlistItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [newSymbol, setNewSymbol] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
-  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+function ContextSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
+  const [subTab, setSubTab] = useState<'system' | 'user' | 'memory' | 'tools'>('system');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetchWatchlist();
-      if (res.success && res.data) {
-        setItems(res.data);
-        // Auto-select first symbol if none selected
-        if (!selectedSymbol && res.data.length > 0) {
-          setSelectedSymbol(res.data[0].symbol);
-        }
-      }
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedSymbol]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const handleAdd = async () => {
-    const sym = newSymbol.trim().toUpperCase();
-    if (!sym) return;
-    try {
-      const res = await addToWatchlist(sym);
-      if (res.success) {
-        showToast(`Added ${sym}`, 'success');
-        setNewSymbol('');
-        setSelectedSymbol(sym);
-        load();
-      } else {
-        showToast(res.error || 'Failed to add', 'error');
-      }
-    } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
-    }
-  };
-
-  const handleRemove = async (symbol: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await removeFromWatchlist(symbol);
-      showToast(`Removed ${symbol}`, 'success');
-      if (selectedSymbol === symbol) {
-        setSelectedSymbol(null);
-      }
-      load();
-    } catch {
-      showToast('Failed to remove', 'error');
-    }
-  };
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await refreshData();
-      showToast('Data refresh triggered', 'success');
-    } catch {
-      showToast('Refresh failed', 'error');
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  return (
-    <Box sx={{ display: 'flex', gap: 2, height: 'calc(100vh - 200px)', minHeight: 500 }}>
-      {/* Left: Symbol List */}
-      <Box
-        sx={{
-          width: 240,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          borderRight: `1px solid ${theme.border.subtle}`,
-          pr: 2,
-        }}
-      >
-        {/* Add symbol input */}
-        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-          <TextField
-            size="small"
-            placeholder="Add (e.g. VOO)"
-            value={newSymbol}
-            onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-            InputProps={{ sx: { color: theme.text.primary, fontSize: 12 } }}
-            sx={{ flex: 1 }}
-          />
-          <IconButton
-            size="small"
-            onClick={handleAdd}
-            disabled={!newSymbol.trim()}
-            sx={{ bgcolor: theme.brand.primary, color: '#fff', borderRadius: 1, '&:hover': { bgcolor: theme.brand.hover }, '&.Mui-disabled': { bgcolor: theme.border.subtle } }}
-          >
-            <AddIcon fontSize="small" />
-          </IconButton>
-        </Box>
-
-        {/* Refresh button */}
-        <Button
-          size="small"
-          startIcon={refreshing ? undefined : <RefreshIcon />}
-          onClick={handleRefresh}
-          disabled={refreshing}
-          sx={{ color: theme.brand.primary, textTransform: 'none', fontSize: 12, mb: 2, justifyContent: 'flex-start' }}
-        >
-          {refreshing ? <LoadingDots text="Refreshing" fontSize={11} /> : 'Refresh Data'}
-        </Button>
-
-        {/* Symbol list */}
-        <Box sx={{ flex: 1, overflow: 'auto' }}>
-          {loading ? (
-            <LoadingDots text="Loading" fontSize={12} />
-          ) : items.length === 0 ? (
-            <Typography sx={{ fontSize: 12, color: theme.text.muted, py: 2 }}>No symbols. Add one above.</Typography>
-          ) : (
-            items.map((item) => (
-              <Box
-                key={item.id}
-                onClick={() => setSelectedSymbol(item.symbol)}
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  px: 1.5,
-                  py: 1,
-                  mb: 0.5,
-                  borderRadius: 1,
-                  cursor: 'pointer',
-                  bgcolor: selectedSymbol === item.symbol
-                    ? isDark ? 'rgba(100,149,237,0.15)' : 'rgba(100,149,237,0.1)'
-                    : 'transparent',
-                  border: selectedSymbol === item.symbol
-                    ? `1px solid rgba(100,149,237,0.3)`
-                    : '1px solid transparent',
-                  '&:hover': {
-                    bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
-                  },
-                }}
-              >
-                <Box>
-                  <Typography
-                    sx={{
-                      fontSize: 13,
-                      fontWeight: selectedSymbol === item.symbol ? 600 : 500,
-                      color: selectedSymbol === item.symbol ? theme.brand.primary : theme.text.primary,
-                    }}
-                  >
-                    {item.symbol}
-                  </Typography>
-                  {item.etf_type && (
-                    <Typography sx={{ fontSize: 10, color: theme.text.muted }}>{item.etf_type}</Typography>
-                  )}
-                </Box>
-                <IconButton
-                  size="small"
-                  onClick={(e) => handleRemove(item.symbol, e)}
-                  sx={{ color: theme.text.muted, opacity: 0.5, '&:hover': { color: '#f44336', opacity: 1 } }}
-                >
-                  <DeleteIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Box>
-            ))
-          )}
-        </Box>
-      </Box>
-
-      {/* Right: K-Line Chart */}
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <KlineChart symbol={selectedSymbol} onError={(msg) => showToast(msg, 'error')} />
-      </Box>
-    </Box>
-  );
-}
-
-// ── Prompt ──
-
-function PromptSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
-  const [current, setCurrent] = useState<PromptVersion | null>(null);
-  const [history, setHistory] = useState<PromptVersion[]>([]);
-  const [content, setContent] = useState('');
-  const [description, setDescription] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const reload = useCallback(async () => {
-    const [curRes, histRes] = await Promise.all([fetchCurrentPrompt(), fetchPromptHistory()]);
-    if (curRes.success && curRes.data) {
-      setCurrent(curRes.data);
-      setContent(curRes.data.content);
-    }
-    if (histRes.success && histRes.data) setHistory(histRes.data);
-  }, []);
-
-  useEffect(() => {
-    reload().catch(() => {}).finally(() => setLoading(false));
-  }, [reload]);
-
-  const handleSave = async () => {
-    if (!content.trim() || !description.trim()) return;
-    setSaving(true);
-    try {
-      const res = await updatePrompt(content, description);
-      if (res.success && res.data) {
-        showToast('Prompt updated', 'success');
-        setDescription('');
-        await reload();
-      } else {
-        showToast(res.error || 'Update failed', 'error');
-      }
-    } catch (e: any) {
-      showToast(e.message || 'Update failed', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleActivate = async (versionId: string) => {
-    try {
-      const res = await activatePromptVersion(versionId);
-      if (res.success) {
-        showToast('Version activated', 'success');
-        await reload();
-      } else {
-        showToast('Activate failed', 'error');
-      }
-    } catch (e: any) {
-      showToast(e.message || 'Activate failed', 'error');
-    }
-  };
-
-  const handleDelete = async (versionId: string) => {
-    try {
-      const res = await deletePromptVersion(versionId);
-      if (res.success) {
-        showToast('Version deleted', 'success');
-        await reload();
-      } else {
-        showToast('Delete failed', 'error');
-      }
-    } catch (e: any) {
-      showToast(e?.response?.data?.detail || e.message || 'Delete failed', 'error');
-    }
-  };
-
-  if (loading) return <LoadingDots text="Loading prompt" fontSize={13} />;
+  const subTabs = [
+    { key: 'system', label: 'System Prompt' },
+    { key: 'user', label: 'User Prompt' },
+    { key: 'memory', label: 'Memory' },
+    { key: 'tools', label: 'Tools' },
+  ] as const;
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 2 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary }}>
-          System Prompt
-        </Typography>
-        {current && (
-          <Chip label={current.version} size="small" sx={{ fontSize: 11, bgcolor: 'rgba(100,149,237,0.15)', color: theme.brand.primary }} />
-        )}
+      {/* Sub-tabs */}
+      <Box sx={{ display: 'flex', gap: 0.5, mb: 2 }}>
+        {subTabs.map(({ key, label }) => (
+          <Chip
+            key={key}
+            label={label}
+            size="small"
+            onClick={() => setSubTab(key)}
+            sx={{
+              fontSize: 11, cursor: 'pointer', fontWeight: 600,
+              bgcolor: subTab === key ? 'rgba(100,149,237,0.12)' : 'transparent',
+              color: subTab === key ? theme.brand.primary : theme.text.muted,
+              border: `1px solid ${subTab === key ? 'rgba(100,149,237,0.25)' : 'transparent'}`,
+            }}
+          />
+        ))}
       </Box>
 
-      <TextField
-        fullWidth
-        multiline
-        rows={12}
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        InputProps={{ sx: { color: theme.text.primary, fontSize: 13, fontFamily: 'monospace', lineHeight: 1.6 } }}
-        sx={{ mb: 2, '& .MuiOutlinedInput-notchedOutline': { borderColor: theme.border.default } }}
-      />
-
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 3 }}>
-        <TextField
-          size="small"
-          placeholder="Version description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          InputProps={{ sx: { color: theme.text.primary, fontSize: 13 } }}
-          sx={{ flex: 1 }}
-        />
-        <Button
-          startIcon={saving ? undefined : <SaveIcon />}
-          onClick={handleSave}
-          disabled={saving || !content.trim() || !description.trim()}
-          sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, fontSize: 13, borderRadius: 2, px: 3, '&:hover': { bgcolor: theme.brand.hover } }}
-        >
-          {saving ? <LoadingDots text="Saving" fontSize={12} color="#fff" /> : 'Save'}
-        </Button>
-      </Box>
-
-      {/* History */}
-      {history.length > 0 && (
-        <>
-          <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.muted, mb: 1 }}>
-            Version History
-          </Typography>
-          {history.map((v) => (
-            <Box
-              key={v.id}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                py: 1,
-                borderBottom: `1px solid ${theme.border.subtle}`,
-                cursor: 'pointer',
-                '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' },
-              }}
-              onClick={() => { setContent(v.content); }}
-            >
-              <Chip
-                label={v.version}
-                size="small"
-                sx={{
-                  fontSize: 11,
-                  bgcolor: v.is_current ? 'rgba(76,175,80,0.15)' : 'transparent',
-                  color: v.is_current ? '#4caf50' : theme.text.muted,
-                }}
-              />
-              {v.is_current && (
-                <Chip label="current" size="small" sx={{ fontSize: 10, height: 18, bgcolor: 'rgba(76,175,80,0.1)', color: '#4caf50' }} />
-              )}
-              <Typography sx={{ fontSize: 12, color: theme.text.secondary, flex: 1 }}>
-                {v.description}
-              </Typography>
-              <Typography sx={{ fontSize: 11, color: theme.text.muted, mr: 1 }}>
-                {v.created_at ? new Date(v.created_at).toLocaleDateString() : ''}
-              </Typography>
-              {!v.is_current && (
-                <>
-                  <Tooltip title="Set as current version">
-                    <IconButton
-                      size="small"
-                      onClick={(e) => { e.stopPropagation(); handleActivate(v.id); }}
-                      sx={{ color: theme.brand.primary, p: 0.5 }}
-                    >
-                      <RefreshIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete version">
-                    <IconButton
-                      size="small"
-                      onClick={(e) => { e.stopPropagation(); handleDelete(v.id); }}
-                      sx={{ color: '#f44336', p: 0.5 }}
-                    >
-                      <DeleteIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
-            </Box>
-          ))}
-        </>
-      )}
+      {subTab === 'system' && <SystemPromptTab theme={theme} isDark={isDark} showToast={showToast} />}
+      {subTab === 'user' && <UserPromptTab theme={theme} isDark={isDark} showToast={showToast} />}
+      {subTab === 'memory' && <MemoryTab theme={theme} isDark={isDark} showToast={showToast} />}
+      {subTab === 'tools' && <ToolsTab theme={theme} isDark={isDark} showToast={showToast} />}
     </Box>
   );
 }

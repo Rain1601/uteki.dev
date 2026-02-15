@@ -13,6 +13,7 @@ from uteki.common.database import db_manager
 from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
 from uteki.domains.agent.research import ResearchRequest, DeepResearchOrchestrator
+from uteki.domains.agent.research.search_engine import SearchEngine
 from uteki.domains.agent.llm_adapter import (
     LLMAdapterFactory,
     LLMProvider,
@@ -410,7 +411,11 @@ async def research_stream(request: ResearchRequest):
     - research_complete: 研究完成
     - error: 错误信息
     """
-    orchestrator = DeepResearchOrchestrator()
+    search_engine = SearchEngine(
+        google_api_key=settings.google_search_api_key,
+        google_engine_id=settings.google_search_engine_id,
+    )
+    orchestrator = DeepResearchOrchestrator(search_engine=search_engine)
 
     async def event_generator():
         """SSE事件生成器"""

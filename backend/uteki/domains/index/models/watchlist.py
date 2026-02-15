@@ -1,7 +1,7 @@
 """观察池标的模型"""
 
 from typing import Optional
-from sqlalchemy import String, Boolean, Index, UniqueConstraint
+from sqlalchemy import String, Boolean, Text, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from uteki.common.base import Base, TimestampMixin, UUIDMixin, get_table_args
@@ -21,6 +21,7 @@ class Watchlist(Base, UUIDMixin, TimestampMixin):
     name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     etf_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -29,6 +30,7 @@ class Watchlist(Base, UUIDMixin, TimestampMixin):
             "name": self.name,
             "etf_type": self.etf_type,
             "is_active": self.is_active,
+            "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

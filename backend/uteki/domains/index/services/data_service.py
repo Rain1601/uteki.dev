@@ -16,14 +16,29 @@ logger = logging.getLogger(__name__)
 
 # 预设观察池
 DEFAULT_WATCHLIST = [
-    {"symbol": "VOO", "name": "Vanguard S&P 500 ETF", "etf_type": "broad_market"},
-    {"symbol": "IVV", "name": "iShares Core S&P 500 ETF", "etf_type": "broad_market"},
-    {"symbol": "QQQ", "name": "Invesco QQQ Trust", "etf_type": "nasdaq100"},
-    {"symbol": "ACWI", "name": "iShares MSCI ACWI ETF", "etf_type": "global"},
-    {"symbol": "VGT", "name": "Vanguard Information Technology ETF", "etf_type": "sector_tech"},
+    {
+        "symbol": "VOO", "name": "Vanguard S&P 500 ETF", "etf_type": "broad_market",
+        "notes": "追踪标普500指数，费率0.03%，是最受欢迎的被动指数基金之一。适合作为美股核心配置，长期年化回报约10%。Vanguard旗舰产品，流动性极强。",
+    },
+    {
+        "symbol": "IVV", "name": "iShares Core S&P 500 ETF", "etf_type": "broad_market",
+        "notes": "iShares版标普500 ETF，费率0.03%，与VOO几乎相同。BlackRock旗下产品，AUM规模略大于VOO，适合作为VOO的替代选择。",
+    },
+    {
+        "symbol": "QQQ", "name": "Invesco QQQ Trust", "etf_type": "nasdaq100",
+        "notes": "追踪纳斯达克100指数，重仓科技股（苹果、微软、英伟达等），费率0.20%。波动性高于标普500，但长期回报也更高。适合看好科技板块的投资者。",
+    },
+    {
+        "symbol": "ACWI", "name": "iShares MSCI ACWI ETF", "etf_type": "global",
+        "notes": "追踪MSCI全球指数（含发达+新兴市场），约60%美股+40%国际。费率0.32%，一只ETF实现全球分散配置。适合不想只押注美股的投资者。",
+    },
+    {
+        "symbol": "VGT", "name": "Vanguard Information Technology ETF", "etf_type": "sector_tech",
+        "notes": "Vanguard信息技术板块ETF，费率0.10%，集中持有苹果、微软、英伟达等科技龙头。比QQQ更纯粹的科技板块暴露，波动性更大。",
+    },
 ]
 
-FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 AV_BASE_URL = "https://www.alphavantage.co/query"
 
 
@@ -59,8 +74,8 @@ class DataService:
         try:
             client = await self._get_client()
             resp = await client.get(
-                f"{FMP_BASE_URL}/quote/{symbol}",
-                params={"apikey": settings.fmp_api_key},
+                f"{FMP_BASE_URL}/quote",
+                params={"symbol": symbol, "apikey": settings.fmp_api_key},
             )
             if resp.status_code == 429:
                 logger.warning("FMP rate limit exceeded, falling back to AV")
@@ -69,11 +84,11 @@ class DataService:
             data = resp.json()
             if not data:
                 return None
-            q = data[0]
+            q = data[0] if isinstance(data, list) else data
             return {
                 "symbol": symbol,
                 "price": q.get("price"),
-                "change_pct": q.get("changesPercentage"),
+                "change_pct": q.get("changePercentage"),
                 "pe_ratio": q.get("pe"),
                 "market_cap": q.get("marketCap"),
                 "volume": q.get("volume"),
@@ -84,7 +99,6 @@ class DataService:
                 "rsi": None,  # FMP quote 不含 RSI，需从历史数据计算
                 "timestamp": q.get("timestamp"),
                 "stale": False,
-                # Today's OHLC (if available)
                 "today_open": q.get("open"),
                 "today_high": q.get("dayHigh"),
                 "today_low": q.get("dayLow"),
@@ -198,24 +212,28 @@ class DataService:
         session: AsyncSession,
         from_date: Optional[str] = None,
     ) -> int:
-        """从 FMP 拉取历史数据并存入 DB，返回新增条数"""
+        """从 FMP stable 拉取历史数据并存入 DB，返回新增条数"""
         if not settings.fmp_api_key:
             logger.warning("FMP API key not set, skipping history fetch")
             return 0
 
         try:
             client = await self._get_client()
-            params: Dict[str, Any] = {"apikey": settings.fmp_api_key}
+            params: Dict[str, Any] = {
+                "symbol": symbol,
+                "apikey": settings.fmp_api_key,
+            }
             if from_date:
                 params["from"] = from_date
 
             resp = await client.get(
-                f"{FMP_BASE_URL}/historical-price-full/{symbol}",
+                f"{FMP_BASE_URL}/historical-price-eod/full",
                 params=params,
             )
             resp.raise_for_status()
             data = resp.json()
-            historical = data.get("historical", [])
+            # Stable endpoint returns flat array (not nested under "historical")
+            historical = data if isinstance(data, list) else data.get("historical", [])
             if not historical:
                 return 0
 
@@ -650,6 +668,7 @@ class DataService:
                 symbol=item["symbol"],
                 name=item["name"],
                 etf_type=item["etf_type"],
+                notes=item.get("notes"),
                 is_active=True,
             )
             session.add(w)

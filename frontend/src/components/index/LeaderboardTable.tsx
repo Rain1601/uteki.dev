@@ -107,7 +107,7 @@ export default function LeaderboardTable() {
           <Table size="small">
             <TableHead>
               <TableRow>
-                {['#', 'Model', 'Adoptions', 'Adoption %', 'Wins', 'Win %', 'Avg Return', 'CF Win %', 'Decisions'].map((h) => (
+                {['#', 'Model', 'Approve', 'Reject', 'Score', 'Adopted', 'Win %', 'Accuracy', 'Avg Return', 'Runs'].map((h) => (
                   <TableCell key={h} sx={tableHeadSx}>{h}</TableCell>
                 ))}
               </TableRow>
@@ -131,13 +131,25 @@ export default function LeaderboardTable() {
                       </Box>
                     </Box>
                   </TableCell>
-                  <TableCell sx={tableCellSx}>{entry.adoption_count}</TableCell>
-                  <TableCell sx={{ ...tableCellSx, color: pctColor(entry.adoption_rate), fontWeight: 500 }}>
-                    {entry.adoption_rate.toFixed(1)}%
+                  <TableCell sx={{ ...tableCellSx, color: entry.approve_vote_count > 0 ? '#4caf50' : theme.text.muted }}>
+                    {entry.approve_vote_count}
                   </TableCell>
-                  <TableCell sx={tableCellSx}>{entry.win_count}</TableCell>
+                  <TableCell sx={{ ...tableCellSx, color: entry.rejection_count > 0 ? '#f44336' : theme.text.muted }}>
+                    {entry.rejection_count}
+                  </TableCell>
+                  <TableCell sx={{
+                    ...tableCellSx,
+                    fontWeight: 700,
+                    color: entry.model_score > 0 ? '#4caf50' : entry.model_score < 0 ? '#f44336' : theme.text.muted,
+                  }}>
+                    {entry.model_score > 0 ? '+' : ''}{entry.model_score}
+                  </TableCell>
+                  <TableCell sx={tableCellSx}>{entry.adoption_count}</TableCell>
                   <TableCell sx={{ ...tableCellSx, color: pctColor(entry.win_rate), fontWeight: 500 }}>
                     {entry.win_rate.toFixed(1)}%
+                  </TableCell>
+                  <TableCell sx={{ ...tableCellSx, color: entry.decision_accuracy != null ? pctColor(entry.decision_accuracy) : theme.text.muted }}>
+                    {entry.decision_accuracy != null ? `${entry.decision_accuracy.toFixed(1)}%` : '—'}
                   </TableCell>
                   <TableCell
                     sx={{
@@ -147,9 +159,6 @@ export default function LeaderboardTable() {
                     }}
                   >
                     {entry.avg_return_pct >= 0 ? '+' : ''}{entry.avg_return_pct.toFixed(2)}%
-                  </TableCell>
-                  <TableCell sx={{ ...tableCellSx, color: pctColor(entry.counterfactual_win_rate), fontWeight: 500 }}>
-                    {entry.counterfactual_win_rate.toFixed(1)}%
                   </TableCell>
                   <TableCell sx={tableCellSx}>{entry.total_decisions}</TableCell>
                 </TableRow>

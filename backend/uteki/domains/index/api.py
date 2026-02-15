@@ -1,7 +1,11 @@
 """指数投资智能体 — FastAPI 路由"""
 
+import asyncio
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
@@ -9,11 +13,11 @@ from uteki.common.database import db_manager
 from uteki.domains.auth.deps import get_current_user_optional, get_current_user
 from uteki.domains.index.schemas import (
     WatchlistAddRequest, BacktestRequest, BacktestCompareRequest,
-    PromptUpdateRequest, MemoryWriteRequest,
+    PromptUpdateRequest, MemoryWriteRequest, ToolTestRequest,
     ArenaRunRequest, DecisionAdoptRequest, DecisionApproveRequest,
     DecisionSkipRequest, DecisionRejectRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest,
-    AgentChatRequest,
+    AgentChatRequest, AgentConfigUpdateRequest,
     IndexResponse,
 )
 from uteki.domains.index.services.data_service import DataService, get_data_service
@@ -77,6 +81,25 @@ async def remove_from_watchlist(
     return {"success": True, "message": f"{symbol} removed from watchlist"}
 
 
+@router.put("/watchlist/{symbol}/notes", summary="更新标的备注")
+async def update_watchlist_notes(
+    symbol: str,
+    request: dict,
+    session: AsyncSession = Depends(get_db_session),
+):
+    from uteki.domains.index.models.watchlist import Watchlist
+    query = select(Watchlist).where(
+        and_(Watchlist.symbol == symbol.upper(), Watchlist.is_active == True)
+    )
+    result = await session.execute(query)
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, f"Symbol {symbol} not found in watchlist")
+    item.notes = request.get("notes", "")
+    await session.commit()
+    return {"success": True, "data": item.to_dict()}
+
+
 @router.get("/quotes/{symbol}", summary="获取实时报价")
 async def get_quote(
     symbol: str,
@@ -106,6 +129,73 @@ async def refresh_data(
 ):
     results = await data_service.update_all_watchlist(session)
     return {"success": True, "data": results}
+
+
+@router.post("/data/sync", summary="检查并自动同步缺失数据")
+async def sync_data(
+    session: AsyncSession = Depends(get_db_session),
+    data_service: DataService = Depends(get_data_service),
+):
+    """
+    检查所有观察池标的的数据新鲜度，自动补齐缺失数据。
+    适合进入 Watchlist 页面时自动调用。
+    返回每个 symbol 的同步状态。
+    """
+    from uteki.domains.index.models.watchlist import Watchlist
+    from sqlalchemy import select, func
+    from uteki.domains.index.models.index_price import IndexPrice
+    from datetime import date, timedelta
+
+    query = select(Watchlist).where(Watchlist.is_active == True)
+    result = await session.execute(query)
+    symbols = result.scalars().all()
+
+    if not symbols:
+        return {"success": True, "data": {"synced": [], "already_fresh": [], "failed": []}}
+
+    today = date.today()
+    synced = []
+    already_fresh = []
+    failed = []
+
+    for w in symbols:
+        try:
+            # Check last available date
+            q = select(func.max(IndexPrice.date)).where(IndexPrice.symbol == w.symbol)
+            res = await session.execute(q)
+            last_date = res.scalar_one_or_none()
+
+            if not last_date:
+                # No data at all — do initial load
+                count = await data_service.initial_history_load(w.symbol, session)
+                synced.append({"symbol": w.symbol, "action": "initial_load", "records": count})
+                continue
+
+            # Count missing trading days
+            days_behind = 0
+            check = last_date + timedelta(days=1)
+            while check < today:
+                if check.weekday() < 5:
+                    days_behind += 1
+                check += timedelta(days=1)
+
+            if days_behind > 0:
+                backfill = await data_service.smart_backfill(w.symbol, session)
+                synced.append({"symbol": w.symbol, **backfill})
+            else:
+                already_fresh.append(w.symbol)
+        except Exception as e:
+            logger.error(f"Sync failed for {w.symbol}: {e}")
+            failed.append({"symbol": w.symbol, "error": str(e)})
+
+    return {
+        "success": True,
+        "data": {
+            "synced": synced,
+            "already_fresh": already_fresh,
+            "failed": failed,
+        },
+    }
 
 
 @router.post("/data/validate", summary="验证数据连续性")
@@ -168,34 +258,39 @@ async def replay_decision(
 
 
 # ══════════════════════════════════════════
-# System Prompt
+# Prompt (system / user)
 # ══════════════════════════════════════════
 
-@router.get("/prompt/current", summary="获取当前 System Prompt")
+@router.get("/prompt/current", summary="获取当前 Prompt")
 async def get_current_prompt(
+    prompt_type: str = Query("system", description="system / user"),
     session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    prompt = await prompt_service.get_current(session)
+    prompt = await prompt_service.get_current(session, prompt_type=prompt_type)
     return {"success": True, "data": prompt}
 
 
-@router.put("/prompt", summary="更新 System Prompt（创建新版本）")
+@router.put("/prompt", summary="更新 Prompt（创建新版本）")
 async def update_prompt(
     request: PromptUpdateRequest,
+    prompt_type: str = Query("system", description="system / user"),
     session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    version = await prompt_service.update_prompt(request.content, request.description, session)
+    version = await prompt_service.update_prompt(
+        request.content, request.description, session, prompt_type=prompt_type
+    )
     return {"success": True, "data": version}
 
 
 @router.get("/prompt/history", summary="获取 Prompt 版本历史")
 async def get_prompt_history(
+    prompt_type: str = Query("system", description="system / user"),
     session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    history = await prompt_service.get_history(session)
+    history = await prompt_service.get_history(session, prompt_type=prompt_type)
     return {"success": True, "data": history}
 
 
@@ -223,6 +318,21 @@ async def delete_prompt_version(
         return {"success": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/prompt/preview", summary="预览 User Prompt 模板渲染结果")
+async def preview_user_prompt(
+    session: AsyncSession = Depends(get_db_session),
+    data_service: DataService = Depends(get_data_service),
+    memory_service: MemoryService = Depends(get_memory_service),
+    prompt_service: PromptService = Depends(get_prompt_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    builder = HarnessBuilder(data_service, memory_service, prompt_service)
+    preview_data = await builder.build_preview_data(session, user_id=_get_user_id(user))
+    rendered = await prompt_service.render_user_prompt(session, preview_data)
+    variables = prompt_service._build_template_variables(preview_data)
+    return {"success": True, "data": {"rendered": rendered, "variables": variables}}
 
 
 # ══════════════════════════════════════════
@@ -255,6 +365,146 @@ async def write_memory(
     return {"success": True, "data": memory}
 
 
+@router.delete("/memory/{memory_id}", summary="删除 Agent 记忆")
+async def delete_memory(
+    memory_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    memory_service: MemoryService = Depends(get_memory_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    deleted = await memory_service.delete(memory_id, _get_user_id(user), session)
+    if not deleted:
+        raise HTTPException(404, "Memory not found")
+    return {"success": True, "message": "Memory deleted"}
+
+
+# ══════════════════════════════════════════
+# Tools
+# ══════════════════════════════════════════
+
+@router.get("/tools", summary="获取所有工具定义")
+async def get_tool_definitions():
+    from uteki.domains.index.services.agent_skills import TOOL_DEFINITIONS
+    return {"success": True, "data": TOOL_DEFINITIONS}
+
+
+@router.post("/tools/{tool_name}/test", summary="测试运行工具")
+async def test_tool(
+    tool_name: str,
+    request: ToolTestRequest,
+    session: AsyncSession = Depends(get_db_session),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    from uteki.domains.index.services.agent_skills import TOOL_DEFINITIONS, ToolExecutor
+    if tool_name not in TOOL_DEFINITIONS:
+        raise HTTPException(404, f"Tool '{tool_name}' not found")
+
+    executor = ToolExecutor(
+        session=session,
+        harness_data={},
+        agent_key="shared",
+        user_id=_get_user_id(user),
+    )
+    result = await executor.execute(tool_name, request.arguments)
+    return {"success": True, "data": json.loads(result)}
+
+
+# ══════════════════════════════════════════
+# Account & Agent Config
+# ══════════════════════════════════════════
+
+@router.get("/account/summary", summary="获取账户概览（总资产/现金/持仓市值）")
+async def get_account_summary(
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """从 SNB 获取实时账户数据"""
+    try:
+        from uteki.domains.snb.api import _require_client
+        client = _require_client()
+        balance = await client.get_balance()
+        positions = await client.get_positions()
+
+        bal_data = balance.get("data", {}) if balance.get("success") else {}
+        total = bal_data.get("total_value", 0) or 0
+        cash = bal_data.get("cash", 0) or 0
+        positions_value = total - cash
+
+        return {"success": True, "data": {
+            "total": total,
+            "cash": cash,
+            "positions_value": positions_value,
+        }}
+    except Exception as e:
+        logger.warning(f"Failed to get account summary: {e}")
+        return {"success": True, "data": {
+            "total": 0, "cash": 0, "positions_value": 0,
+            "error": str(e),
+        }}
+
+
+@router.get("/agent-config", summary="获取 Agent 配置")
+async def get_agent_config(
+    session: AsyncSession = Depends(get_db_session),
+    memory_service: MemoryService = Depends(get_memory_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """从 Memory 读取 agent_config 配置"""
+    import json
+    memories = await memory_service.read(
+        _get_user_id(user), session, category="agent_config", limit=1, agent_key="system"
+    )
+    if memories:
+        try:
+            config = json.loads(memories[0].get("content", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            config = {}
+    else:
+        config = {}
+    return {"success": True, "data": config}
+
+
+@router.put("/agent-config", summary="保存 Agent 配置")
+async def save_agent_config(
+    request: AgentConfigUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    memory_service: MemoryService = Depends(get_memory_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """保存 agent_config 到 Memory（覆盖式）"""
+    import json
+    from sqlalchemy import select, and_
+    from uteki.domains.index.models.agent_memory import AgentMemory
+
+    user_id = _get_user_id(user)
+
+    # 查找已有的 agent_config 记录
+    query = select(AgentMemory).where(
+        and_(
+            AgentMemory.user_id == user_id,
+            AgentMemory.category == "agent_config",
+            AgentMemory.agent_key == "system",
+        )
+    ).limit(1)
+    result = await session.execute(query)
+    existing = result.scalar_one_or_none()
+
+    config_json = json.dumps(request.config)
+
+    if existing:
+        existing.content = config_json
+    else:
+        mem = AgentMemory(
+            user_id=user_id,
+            category="agent_config",
+            content=config_json,
+            agent_key="system",
+        )
+        session.add(mem)
+
+    await session.commit()
+    return {"success": True, "data": request.config}
+
+
 # ══════════════════════════════════════════
 # Arena
 # ══════════════════════════════════════════
@@ -280,18 +530,10 @@ async def run_arena(
         constraints=request.constraints,
     )
 
-    # 2. 运行 Arena
-    model_ios = await arena_service.run(harness["id"], session)
+    # 2. 运行 Arena (3-phase pipeline: 决策 → 投票 → 计分)
+    arena_result = await arena_service.run(harness["id"], session)
 
-    # 3. 更新每个模型的参与计数
-    for mio in model_ios:
-        if mio.get("status") == "success":
-            await score_service.update_on_decision(
-                mio["model_provider"], mio["model_name"],
-                harness["prompt_version_id"], session
-            )
-
-    # 4. 获取 prompt 版本号
+    # 3. 获取 prompt 版本号
     prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"], session)
     prompt_version_str = prompt_ver["version"] if prompt_ver else None
 
@@ -302,9 +544,89 @@ async def run_arena(
             "harness_type": harness["harness_type"],
             "prompt_version_id": harness["prompt_version_id"],
             "prompt_version": prompt_version_str,
-            "models": model_ios,
+            "models": arena_result.get("model_ios", []),
+            "votes": arena_result.get("votes", []),
+            "final_decision": arena_result.get("final_decision"),
+            "pipeline_phases": arena_result.get("pipeline_phases", {}),
         },
     }
+
+
+@router.post("/arena/run/stream", summary="SSE 流式 Arena 分析")
+async def run_arena_stream(
+    request: ArenaRunRequest,
+    session: AsyncSession = Depends(get_db_session),
+    data_service: DataService = Depends(get_data_service),
+    memory_service: MemoryService = Depends(get_memory_service),
+    prompt_service: PromptService = Depends(get_prompt_service),
+    arena_service: ArenaService = Depends(get_arena_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    # 1. 构建 Harness
+    builder = HarnessBuilder(data_service, memory_service, prompt_service)
+    harness = await builder.build(
+        harness_type=request.harness_type,
+        session=session,
+        user_id=_get_user_id(user),
+        budget=request.budget,
+        constraints=request.constraints,
+    )
+
+    prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"], session)
+    prompt_version_str = prompt_ver["version"] if prompt_ver else None
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def emit_progress(event: dict):
+        queue.put_nowait(event)
+
+    async def run_arena_task():
+        try:
+            model_filter = [m.model_dump() for m in request.models] if request.models else None
+            result = await arena_service.run(
+                harness["id"], session, on_progress=emit_progress,
+                model_filter=model_filter,
+            )
+            queue.put_nowait({
+                "type": "result",
+                "data": {
+                    "harness_id": harness["id"],
+                    "harness_type": harness["harness_type"],
+                    "prompt_version_id": harness["prompt_version_id"],
+                    "prompt_version": prompt_version_str,
+                    "models": result.get("model_ios", []),
+                    "votes": result.get("votes", []),
+                    "final_decision": result.get("final_decision"),
+                    "pipeline_phases": result.get("pipeline_phases", {}),
+                },
+            })
+        except Exception as e:
+            logger.error(f"Arena stream error: {e}")
+            queue.put_nowait({"type": "error", "message": str(e)})
+        finally:
+            queue.put_nowait(None)  # sentinel
+
+    async def event_generator():
+        task = asyncio.create_task(run_arena_task())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/arena/timeline", summary="获取 Arena 时间线图表数据")
@@ -315,6 +637,27 @@ async def get_arena_timeline(
 ):
     timeline = await arena_service.get_arena_timeline(session, limit=limit)
     return {"success": True, "data": timeline}
+
+
+@router.get("/arena/backtest", summary="运行单 Agent 独立回测")
+async def run_agent_backtest(
+    agent_key: str = Query(..., description="Agent key, e.g. anthropic:claude-sonnet-4-20250514"),
+    start_date: str = Query(..., description="Start date, e.g. 2025-01-01"),
+    end_date: str = Query(..., description="End date, e.g. 2025-12-31"),
+    frequency: str = Query("monthly", description="weekly / biweekly / monthly"),
+    session: AsyncSession = Depends(get_db_session),
+):
+    from datetime import date as date_type
+    from uteki.domains.index.services.agent_backtest_service import get_agent_backtest_service
+    backtest_service = get_agent_backtest_service()
+    result = await backtest_service.run_backtest(
+        agent_key=agent_key,
+        start_date=date_type.fromisoformat(start_date),
+        end_date=date_type.fromisoformat(end_date),
+        frequency=frequency,
+        session=session,
+    )
+    return {"success": True, "data": result}
 
 
 @router.get("/arena/history", summary="获取 Arena 运行历史")
@@ -336,6 +679,16 @@ async def get_arena_results(
 ):
     results = await arena_service.get_arena_results(harness_id, session)
     return {"success": True, "data": results}
+
+
+@router.get("/arena/{harness_id}/votes", summary="获取 Arena 投票详情")
+async def get_arena_votes(
+    harness_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    arena_service: ArenaService = Depends(get_arena_service),
+):
+    votes = await arena_service.get_votes_for_harness(harness_id, session)
+    return {"success": True, "data": votes}
 
 
 @router.get("/arena/{harness_id}/model/{model_io_id}", summary="获取模型完整 I/O")
@@ -610,21 +963,17 @@ async def trigger_schedule(
             user_id=_get_user_id(user),
             budget=config.get("budget"),
         )
-        model_ios = await arena_service.run(harness["id"], session)
-
-        for mio in model_ios:
-            if mio.get("status") == "success":
-                await score_service.update_on_decision(
-                    mio["model_provider"], mio["model_name"],
-                    harness["prompt_version_id"], session
-                )
+        arena_result = await arena_service.run(harness["id"], session)
 
         await scheduler_service.update_run_status(task_id, "pending_user_action", session)
         return {
             "success": True,
             "data": {
                 "harness_id": harness["id"],
-                "models": model_ios,
+                "models": arena_result.get("model_ios", []),
+                "votes": arena_result.get("votes", []),
+                "final_decision": arena_result.get("final_decision"),
+                "pipeline_phases": arena_result.get("pipeline_phases", {}),
             },
         }
 
@@ -764,6 +1113,7 @@ async def create_index_tables():
 
     try:
         from uteki.common.config import settings as app_settings
+        migrations_applied = []
         async with db_manager.postgres_engine.begin() as conn:
             # PostgreSQL 需要先创建 schema
             if app_settings.database_type != "sqlite":
@@ -771,7 +1121,27 @@ async def create_index_tables():
 
             await conn.run_sync(Base.metadata.create_all)
 
-        return {"status": "completed", "message": "Index tables created successfully"}
+            # 增量迁移：为已存在的表添加新列
+            column_migrations = [
+                ("index", "watchlist", "notes", "TEXT"),
+                ("index", "model_io", "pipeline_steps", "JSONB"),
+                ("index", "prompt_version", "prompt_type", "VARCHAR(20) DEFAULT 'system'"),
+            ]
+            for schema, table, column, col_type in column_migrations:
+                try:
+                    if app_settings.database_type == "sqlite":
+                        await conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                        ))
+                    else:
+                        await conn.execute(text(
+                            f'ALTER TABLE "{schema}".{table} ADD COLUMN IF NOT EXISTS {column} {col_type}'
+                        ))
+                    migrations_applied.append(f"{schema}.{table}.{column}")
+                except Exception:
+                    pass  # Column already exists or other non-critical error
+
+        return {"status": "completed", "message": "Index tables created successfully", "migrations": migrations_applied}
     except Exception as e:
         logger.error(f"Failed to create index tables: {e}")
         return {"status": "error", "message": str(e)}

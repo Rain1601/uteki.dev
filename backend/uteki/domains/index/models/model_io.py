@@ -35,6 +35,7 @@ class ModelIO(Base, UUIDMixin, TimestampMixin):
     parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # structured / partial / raw_only / timeout / error
     status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # success / timeout / error
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pipeline_steps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=None)
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +52,7 @@ class ModelIO(Base, UUIDMixin, TimestampMixin):
             "parse_status": self.parse_status,
             "status": self.status,
             "error_message": self.error_message,
+            "pipeline_steps": getattr(self, 'pipeline_steps', None),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

@@ -44,19 +44,67 @@ class HarnessBuilder:
         4. 获取当前 prompt 版本
         5. 组装并写入 DB
         """
-        # 1. 市场数据快照
-        market_snapshot = {}
+        # 1. 市场数据快照（行情 + 技术指标 + 估值 + 宏观 + 情绪）
         watchlist = await self.data_service.get_watchlist(session)
+        watchlist_symbols = [item["symbol"] for item in watchlist]
+
+        quotes = {}
         for item in watchlist:
             symbol = item["symbol"]
             quote = await self.data_service.get_quote(symbol, session)
             indicators = await self.data_service.get_indicators(symbol, session)
-            market_snapshot[symbol] = {
+            quotes[symbol] = {
                 **quote,
                 "ma50": indicators.get("ma50"),
                 "ma200": indicators.get("ma200"),
                 "rsi": indicators.get("rsi"),
             }
+
+        # 估值数据（数据源待接入，先预留 null）
+        valuations = {}
+        for symbol in watchlist_symbols:
+            q = quotes.get(symbol, {})
+            pe = q.get("pe_ratio")
+            valuations[symbol] = {
+                "pe_ratio": pe,
+                "pe_percentile_5y": None,  # TODO: data source
+                "shiller_cape": None,      # TODO: data source (大盘指数)
+                "dividend_yield": None,    # TODO: data source
+                "earnings_yield": round(1.0 / pe, 4) if pe and pe > 0 else None,
+                "equity_risk_premium": None,  # TODO: earnings_yield - 10Y treasury yield
+            }
+
+        # 宏观经济数据（数据源待接入，先预留 null）
+        macro = {
+            "fed_funds_rate": None,
+            "fed_rate_direction": None,
+            "cpi_yoy": None,
+            "core_pce_yoy": None,
+            "gdp_growth_qoq": None,
+            "unemployment_rate": None,
+            "ism_manufacturing_pmi": None,
+            "ism_services_pmi": None,
+            "yield_curve_2y10y": None,
+            "vix": None,
+            "dxy": None,
+        }
+
+        # 情绪数据（数据源待接入，先预留 null）
+        sentiment = {
+            "fear_greed_index": None,
+            "aaii_bull_ratio": None,
+            "aaii_bear_ratio": None,
+            "put_call_ratio": None,
+            "news_sentiment_score": None,
+            "news_key_events": [],
+        }
+
+        market_snapshot = {
+            "quotes": quotes,
+            "valuations": valuations,
+            "macro": macro,
+            "sentiment": sentiment,
+        }
 
         # 2. 账户状态 (从 SNB 获取，如果不可用则用空状态)
         account_state = await self._get_account_state()
@@ -72,10 +120,18 @@ class HarnessBuilder:
             raise ValueError("No prompt version available")
 
         # 5. 组装任务定义
+        default_constraints = {
+            "max_holdings": 3,
+            "watchlist_only": True,
+            "max_single_position_pct": 40,
+            "risk_tolerance": "moderate",
+        }
+        merged_constraints = {**default_constraints, **(constraints or {})}
         task = {
             "type": harness_type,
             "budget": budget,
-            "constraints": constraints or {"max_holdings": 3, "watchlist_only": True},
+            "constraints": merged_constraints,
+            "watchlist": watchlist_symbols,
         }
 
         # 6. 持久化
@@ -94,6 +150,95 @@ class HarnessBuilder:
 
         logger.info(f"Harness built: {harness.id} type={harness_type}")
         return harness.to_dict()
+
+    async def build_preview_data(
+        self,
+        session: AsyncSession,
+        user_id: str = "default",
+        budget: Optional[float] = None,
+        constraints: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """构建预览数据（不写 DB），用于 user prompt 模板预览"""
+        import json
+        from datetime import datetime
+
+        watchlist = await self.data_service.get_watchlist(session)
+        watchlist_symbols = [item["symbol"] for item in watchlist]
+
+        quotes = {}
+        for item in watchlist:
+            symbol = item["symbol"]
+            quote = await self.data_service.get_quote(symbol, session)
+            indicators = await self.data_service.get_indicators(symbol, session)
+            quotes[symbol] = {
+                **quote,
+                "ma50": indicators.get("ma50"),
+                "ma200": indicators.get("ma200"),
+                "rsi": indicators.get("rsi"),
+            }
+
+        valuations = {}
+        for symbol in watchlist_symbols:
+            q = quotes.get(symbol, {})
+            pe = q.get("pe_ratio")
+            valuations[symbol] = {
+                "pe_ratio": pe,
+                "pe_percentile_5y": None,
+                "shiller_cape": None,
+                "dividend_yield": None,
+                "earnings_yield": round(1.0 / pe, 4) if pe and pe > 0 else None,
+                "equity_risk_premium": None,
+            }
+
+        macro = {
+            "fed_funds_rate": None, "fed_rate_direction": None,
+            "cpi_yoy": None, "core_pce_yoy": None,
+            "gdp_growth_qoq": None, "unemployment_rate": None,
+            "ism_manufacturing_pmi": None, "ism_services_pmi": None,
+            "yield_curve_2y10y": None, "vix": None, "dxy": None,
+        }
+        sentiment = {
+            "fear_greed_index": None, "aaii_bull_ratio": None,
+            "aaii_bear_ratio": None, "put_call_ratio": None,
+            "news_sentiment_score": None, "news_key_events": [],
+        }
+
+        account_state = await self._get_account_state()
+        memory_summary = await self.memory_service.get_summary(user_id, session)
+
+        default_constraints = {
+            "max_holdings": 3,
+            "watchlist_only": True,
+            "max_single_position_pct": 40,
+            "risk_tolerance": "moderate",
+        }
+        merged_constraints = {**default_constraints, **(constraints or {})}
+
+        cash = account_state.get("cash", 0)
+        total = account_state.get("total", 0) or cash
+        available_cash = cash
+        effective_budget = budget or available_cash
+
+        task = {
+            "type": "monthly_dca",
+            "budget": effective_budget,
+            "constraints": merged_constraints,
+            "watchlist": watchlist_symbols,
+        }
+
+        return {
+            "harness_type": "monthly_dca",
+            "created_at": datetime.now().isoformat(),
+            "market_snapshot": {
+                "quotes": quotes,
+                "valuations": valuations,
+                "macro": macro,
+                "sentiment": sentiment,
+            },
+            "account_state": account_state,
+            "memory_summary": memory_summary,
+            "task": task,
+        }
 
     async def _get_account_state(self) -> Dict[str, Any]:
         """从 SNB 获取账户状态"""

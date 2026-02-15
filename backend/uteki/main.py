@@ -37,27 +37,30 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to start news scheduler: {e}")
 
-    # Load index scheduler tasks from DB on startup
+    # Start index scheduler (daily price update)
     if settings.environment != "test":
         try:
-            from uteki.domains.index.services.scheduler_service import get_scheduler_service
-            async with db_manager.get_postgres_session() as session:
-                sched_svc = get_scheduler_service()
-                enabled = await sched_svc.get_enabled_tasks(session)
-                for task in enabled:
-                    await sched_svc.compute_next_run(task["id"], session)
-                logger.info(f"Index scheduler: loaded {len(enabled)} enabled tasks")
+            from uteki.schedulers import get_index_scheduler
+            index_scheduler = get_index_scheduler()
+            index_scheduler.start()
+            logger.info("Index scheduler started")
         except Exception as e:
-            logger.warning(f"Failed to load index schedules on startup: {e}")
+            logger.warning(f"Failed to start index scheduler: {e}")
 
     yield
 
-    # Shutdown scheduler
+    # Shutdown schedulers
     logger.info("Application shutting down...")
     try:
         from uteki.schedulers import get_news_scheduler
         news_scheduler = get_news_scheduler()
         news_scheduler.stop()
+    except Exception:
+        pass
+    try:
+        from uteki.schedulers import get_index_scheduler
+        index_scheduler = get_index_scheduler()
+        index_scheduler.stop()
     except Exception:
         pass
 

@@ -1,5 +1,5 @@
-import { Box, Avatar, Typography } from '@mui/material';
-import { Person as PersonIcon, SmartToy as SmartToyIcon } from '@mui/icons-material';
+import { Box, Typography } from '@mui/material';
+import { SmartToy as SmartToyIcon } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
 import ReactMarkdown from 'react-markdown';
@@ -15,10 +15,11 @@ interface Message {
 
 interface ChatMessageProps {
   message: Message;
+  modelIcon?: string;
 }
 
-export default function ChatMessage({ message }: ChatMessageProps) {
-  const { theme } = useTheme();
+export default function ChatMessage({ message, modelIcon }: ChatMessageProps) {
+  const { theme, isDark } = useTheme();
   const { isMobile, isSmallScreen } = useResponsive();
   const isUser = message.role === 'user';
 
@@ -26,43 +27,55 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     <Box
       sx={{
         display: 'flex',
-        gap: isMobile || isSmallScreen ? 1.5 : 2,
-        alignItems: 'flex-start',
+        justifyContent: isUser ? 'flex-end' : 'flex-start',
         px: isMobile || isSmallScreen ? 1 : 0,
       }}
     >
-      {/* 头像 */}
-      <Avatar
+      <Box
         sx={{
-          width: isMobile || isSmallScreen ? 32 : 36,
-          height: isMobile || isSmallScreen ? 32 : 36,
-          bgcolor: isUser ? theme.brand.primary : theme.brand.accent,
-          flexShrink: 0,
+          display: 'flex',
+          gap: 1.5,
+          alignItems: 'flex-start',
+          maxWidth: isUser ? '75%' : '100%',
+          flexDirection: isUser ? 'row-reverse' : 'row',
         }}
       >
-        {isUser ? <PersonIcon sx={{ fontSize: 20 }} /> : <SmartToyIcon sx={{ fontSize: 20 }} />}
-      </Avatar>
+        {/* Assistant avatar */}
+        {!isUser && (
+          <Box
+            sx={{
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              mt: 0.5,
+              overflow: 'hidden',
+            }}
+          >
+            {modelIcon ? (
+              <img src={modelIcon} alt="" style={{ width: 18, height: 18 }} />
+            ) : (
+              <SmartToyIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+            )}
+          </Box>
+        )}
 
-      {/* 消息内容 */}
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        {/* 角色标签 */}
-        <Typography
-          variant="caption"
-          sx={{
-            color: theme.text.muted,
-            fontWeight: 600,
-            display: 'block',
-            mb: 0.5,
-          }}
-        >
-          {isUser ? 'You' : 'Assistant'}
-        </Typography>
-
-        {/* 消息文本 */}
-        <Box
-          sx={{
-            color: theme.text.primary,
-            lineHeight: 1.7,
+        {/* Message content */}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box
+            sx={{
+              color: theme.text.primary,
+              lineHeight: 1.7,
+              ...(isUser && {
+                bgcolor: isDark ? 'rgba(100,149,237,0.12)' : 'rgba(100,149,237,0.08)',
+                borderRadius: '18px 18px 4px 18px',
+                px: 2,
+                py: 1.2,
+              }),
             '& p': {
               margin: 0,
               marginBottom: '0.8em',
@@ -168,8 +181,9 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           sx={{
             color: theme.text.muted,
             display: 'block',
-            mt: 1,
-            fontSize: '0.75rem',
+            mt: 0.5,
+            fontSize: '0.7rem',
+            textAlign: isUser ? 'right' : 'left',
           }}
         >
           {message.timestamp.toLocaleTimeString('zh-CN', {
@@ -177,6 +191,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             minute: '2-digit',
           })}
         </Typography>
+        </Box>
       </Box>
     </Box>
   );

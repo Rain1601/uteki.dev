@@ -8,12 +8,10 @@ import {
   IconButton,
   Typography,
   Button,
-  Drawer,
   List,
   ListItem,
   ListItemButton,
   ListItemText,
-  Chip,
   CircularProgress,
   Tooltip,
   SwipeableDrawer,
@@ -23,19 +21,13 @@ import {
   Add as AddIcon,
   History as HistoryIcon,
   Search as SearchIcon,
-  AutoAwesome as AutoAwesomeIcon,
-  Psychology as PsychologyIcon,
-  Code as CodeIcon,
-  TrendingUp as TrendingUpIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive, useKeyboardVisibility } from '../hooks/useResponsive';
 import ChatMessage from '../components/ChatMessage';
 import {
   EnhancedMessage,
-  ThoughtProcessCard,
   ResearchStatusCard,
-  SourcesList,
   TypingIndicator,
 } from '../components/chat';
 
@@ -44,6 +36,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  modelIcon?: string;
   research_data?: {
     thoughts?: string[];
     sources?: Record<string, number>;
@@ -63,15 +56,6 @@ interface Conversation {
   created_at: string;
 }
 
-// 快捷模式配置
-const chatModes = [
-  { id: 'research', label: 'Research', icon: <SearchIcon />, color: '#ff9800' },
-  { id: 'analysis', label: 'Analysis', icon: <PsychologyIcon />, color: '#64b5f6' },
-  { id: 'code', label: 'Code', icon: <CodeIcon />, color: '#9c27b0' },
-  { id: 'trading', label: 'Trading', icon: <TrendingUpIcon />, color: '#4caf50' },
-  { id: 'creative', label: 'Creative', icon: <AutoAwesomeIcon />, color: '#f48fb1' },
-];
-
 // 模型选项接口
 interface ModelOption {
   id: string;
@@ -81,47 +65,6 @@ interface ModelOption {
   available: boolean;
 }
 
-// 定义每个提供商的品牌颜色
-const getProviderColor = (provider: string): { bg: string; hover: string; text: string } => {
-  const colors: Record<string, { bg: string; hover: string; text: string }> = {
-    Claude: {
-      bg: 'rgba(204, 143, 104, 0.15)',      // 温暖的橙棕色
-      hover: 'rgba(204, 143, 104, 0.25)',
-      text: '#CC8F68',
-    },
-    OpenAI: {
-      bg: 'rgba(16, 163, 127, 0.15)',       // OpenAI 品牌青色
-      hover: 'rgba(16, 163, 127, 0.25)',
-      text: '#10A37F',
-    },
-    DeepSeek: {
-      bg: 'rgba(59, 130, 246, 0.15)',       // 蓝色
-      hover: 'rgba(59, 130, 246, 0.25)',
-      text: '#3B82F6',
-    },
-    Qwen: {
-      bg: 'rgba(168, 85, 247, 0.15)',       // 紫色
-      hover: 'rgba(168, 85, 247, 0.25)',
-      text: '#A855F7',
-    },
-    Google: {
-      bg: 'rgba(244, 143, 177, 0.15)',      // 粉色
-      hover: 'rgba(244, 143, 177, 0.25)',
-      text: '#F48FB1',
-    },
-    MiniMax: {
-      bg: 'rgba(255, 183, 77, 0.15)',       // 橙黄色
-      hover: 'rgba(255, 183, 77, 0.25)',
-      text: '#FFB74D',
-    },
-  };
-
-  return colors[provider] || {
-    bg: 'rgba(144, 202, 249, 0.15)',
-    hover: 'rgba(144, 202, 249, 0.25)',
-    text: '#90CAF9',
-  };
-};
 
 export default function AgentChatPage() {
   const { theme, isDark } = useTheme();
@@ -218,11 +161,13 @@ export default function AgentChatPage() {
 
     // Create assistant message placeholder
     const assistantMessageId = (Date.now() + 1).toString();
+    const currentIcon = modelOptions.find((m) => m.id === selectedModelId)?.icon;
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: 'assistant',
       content: '',
       timestamp: new Date(),
+      modelIcon: currentIcon,
       research_data: {
         thoughts: [],
         sources: {},
@@ -405,11 +350,13 @@ export default function AgentChatPage() {
 
     // 创建助手消息占位符
     const assistantMessageId = (Date.now() + 1).toString();
+    const currentIcon = modelOptions.find((m) => m.id === selectedModelId)?.icon;
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: 'assistant',
       content: '',
       timestamp: new Date(),
+      modelIcon: currentIcon,
     };
     setMessages((prev) => [...prev, assistantMessage]);
 
@@ -533,12 +480,14 @@ export default function AgentChatPage() {
   return (
     <Box
       sx={{
-        height: '100vh',
+        height: 'calc(100vh - 48px)',
+        m: -3,
         display: 'flex',
         flexDirection: 'column',
-        bgcolor: theme.background.deepest, // 极深黑背景
+        bgcolor: theme.background.deepest,
         color: theme.text.primary,
         position: 'relative',
+        overflow: 'hidden',
       }}
     >
       {/* 右上角固定按钮 */}
@@ -641,14 +590,15 @@ export default function AgentChatPage() {
       <Box
         sx={{
           flex: 1,
+          minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: isEmpty ? 'center' : 'flex-start',
+          overflow: 'hidden',
           px: isMobile || isSmallScreen ? 1.5 : 3,
           pt: isEmpty ? 0 : isMobile || isSmallScreen ? 6 : 10,
           pb: isMobile || isSmallScreen ? 1 : 3,
-          overflow: 'hidden',
         }}
       >
         {isEmpty ? (
@@ -875,7 +825,7 @@ export default function AgentChatPage() {
             sx={{
               flex: 1,
               width: '100%',
-              maxWidth: isMobile || isSmallScreen ? '100%' : '900px',
+              maxWidth: isMobile || isSmallScreen ? '100%' : '1000px',
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
@@ -883,14 +833,17 @@ export default function AgentChatPage() {
               px: isMobile || isSmallScreen ? 0 : 0,
               // 移动端底部留出空间给固定的输入框
               pb: isMobile || isSmallScreen ? 16 : 0,
+              '&::-webkit-scrollbar': { width: 6 },
+              '&::-webkit-scrollbar-track': { background: 'transparent' },
+              '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}50`, borderRadius: 3 },
             }}
           >
             {messages.map((msg) => {
               // Use EnhancedMessage if message has research_data
               if (msg.research_data) {
-                return <EnhancedMessage key={msg.id} message={msg} />;
+                return <EnhancedMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
               }
-              return <ChatMessage key={msg.id} message={msg} />;
+              return <ChatMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
             })}
 
             {/* Research Progress Cards */}
@@ -932,7 +885,7 @@ export default function AgentChatPage() {
             transition: 'bottom 0.2s ease-out',
           }}
         >
-          <Box sx={{ maxWidth: isMobile || isSmallScreen ? '100%' : '900px', mx: 'auto' }}>
+          <Box sx={{ maxWidth: isMobile || isSmallScreen ? '100%' : '1000px', mx: 'auto' }}>
             {/* Bottom Controls - Research & Model Selector */}
             <Box
               sx={{

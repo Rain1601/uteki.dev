@@ -87,11 +87,18 @@ class PromptUpdateRequest(BaseModel):
 
 class PromptVersionResponse(BaseModel):
     id: str
+    prompt_type: str = "system"
     version: str
     content: str
     description: str
     is_current: bool
     created_at: Optional[datetime] = None
+
+
+# ── Tools ──
+
+class ToolTestRequest(BaseModel):
+    arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Memory ──
@@ -112,10 +119,15 @@ class MemoryResponse(BaseModel):
 
 # ── Arena ──
 
+class ModelSelection(BaseModel):
+    provider: str
+    model: str
+
 class ArenaRunRequest(BaseModel):
     harness_type: str = Field("monthly_dca", description="monthly_dca / rebalance / weekly_check")
     budget: Optional[float] = Field(None, gt=0)
     constraints: Optional[Dict[str, Any]] = None
+    models: Optional[List[ModelSelection]] = Field(None, description="Subset of models to run; all if omitted")
 
 
 class ModelIOSummary(BaseModel):
@@ -197,6 +209,12 @@ class ScheduleResponse(BaseModel):
     last_run_status: Optional[str] = None
     next_run_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
+
+# ── Agent Config ──
+
+class AgentConfigUpdateRequest(BaseModel):
+    config: Dict[str, Any] = Field(..., description="Agent configuration key-values")
 
 
 # ── Generic ──

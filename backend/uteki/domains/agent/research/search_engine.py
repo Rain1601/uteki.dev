@@ -1,6 +1,6 @@
 """
 Search engine abstraction with strategy pattern.
-Supports Google Custom Search API and DuckDuckGo.
+Supports Google Custom Search API.
 """
 
 import logging
@@ -96,53 +96,6 @@ class GoogleSearchStrategy(SearchStrategy):
             return []
 
 
-class DuckDuckGoSearchStrategy(SearchStrategy):
-    """DuckDuckGo search strategy (no API key required)."""
-
-    def __init__(self):
-        """Initialize DuckDuckGo search."""
-        logger.info("Initialized DuckDuckGo search strategy")
-
-    async def search(self, query: str, max_results: int, region: str = "us-en") -> List[SearchResult]:
-        """Search using DuckDuckGo."""
-        logger.debug(f"🔍 DuckDuckGo Search: '{query}' (max_results={max_results}, region={region})")
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            logger.error("❌ ddgs not installed - install with: pip install ddgs")
-            return []
-
-        try:
-            results = []
-
-            with DDGS() as ddgs:
-                logger.debug(f"✓ DDGS client initialized")
-                search_results = ddgs.text(
-                    query,
-                    region=region.replace("-", "_"),
-                    max_results=max_results,
-                )
-
-                for i, result in enumerate(search_results, 1):
-                    url = result.get("href", result.get("link", ""))
-                    domain = urlparse(url).netloc
-                    logger.debug(f"  [{i}] {result.get('title', 'N/A')} - {url}")
-
-                    results.append(SearchResult(
-                        title=result.get("title", ""),
-                        url=url,
-                        snippet=result.get("body", result.get("description", "")),
-                        source=domain,
-                    ))
-
-            logger.info(f"✅ DuckDuckGo returned {len(results)} results for: '{query}'")
-            return results
-
-        except Exception as e:
-            logger.error(f"❌ DuckDuckGo search failed for '{query}': {type(e).__name__}: {e}", exc_info=True)
-            return []
-
-
 class QuotaExceededError(Exception):
     """Raised when search API quota is exceeded."""
     pass
@@ -150,13 +103,11 @@ class QuotaExceededError(Exception):
 
 class SearchEngine:
     """
-    Unified search interface with automatic fallback.
-    Uses Google Custom Search if configured, otherwise DuckDuckGo.
+    Unified search interface using Google Custom Search API.
     """
 
     def __init__(
         self,
-        engine: str = "google",  # 默认使用 Google（更准确）
         google_api_key: str | None = None,
         google_engine_id: str | None = None,
     ):
@@ -164,42 +115,30 @@ class SearchEngine:
         Initialize search engine.
 
         Args:
-            engine: Preferred engine ("google" or "duckduckgo")
             google_api_key: Google Custom Search API key
             google_engine_id: Google Custom Search Engine ID
         """
-        self.preferred_engine = engine
-        # 支持两种环境变量名称格式
         self.google_api_key = (
             google_api_key
-            or os.getenv("GOOGLE_SEARCH_API_KEY")  # 新格式（推荐）
-            or os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY")  # 旧格式（兼容）
+            or os.getenv("GOOGLE_SEARCH_API_KEY")
+            or os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY")
         )
         self.google_engine_id = (
             google_engine_id
-            or os.getenv("GOOGLE_SEARCH_ENGINE_ID")  # 新格式（推荐）
-            or os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID")  # 旧格式（兼容）
+            or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
+            or os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID")
         )
 
-        # Initialize strategies
-        self._google_strategy = None
-        self._duckduckgo_strategy = DuckDuckGoSearchStrategy()
+        self._strategy = None
 
         if self.google_api_key and self.google_engine_id:
-            self._google_strategy = GoogleSearchStrategy(
+            self._strategy = GoogleSearchStrategy(
                 self.google_api_key,
                 self.google_engine_id
             )
-            if engine == "google":
-                logger.info("Using Google Custom Search as primary engine")
-        elif engine == "google":
-            logger.warning(
-                "Google API not configured, falling back to DuckDuckGo"
-            )
-            self.preferred_engine = "duckduckgo"
-
-        if self.preferred_engine == "duckduckgo":
-            logger.info("Using DuckDuckGo as primary engine")
+            logger.info("Google Custom Search initialized")
+        else:
+            logger.warning("Google Custom Search API not configured — search disabled")
 
     async def search(
         self, query: str, max_results: int = 20, region: str = "us-en"
@@ -217,20 +156,24 @@ class SearchEngine:
         """
         logger.info(f"Searching for: {query} (max_results={max_results}, region={region})")
 
-        # Try primary engine
-        if self.preferred_engine == "google" and self._google_strategy:
-            try:
-                results = await self._google_strategy.search(query, max_results, region)
-                if results:
-                    return self._deduplicate(results)
-            except QuotaExceededError:
-                logger.warning("Google quota exceeded, falling back to DuckDuckGo")
-            except Exception as e:
-                logger.error(f"Google search failed, falling back to DuckDuckGo: {e}")
+        if not self._strategy:
+            logger.warning("No search engine configured")
+            return []
 
-        # Fallback to DuckDuckGo
-        results = await self._duckduckgo_strategy.search(query, max_results, region)
-        return self._deduplicate(results)
+        try:
+            results = await self._strategy.search(query, max_results, region)
+            if results:
+                logger.info(f"Google returned {len(results)} results")
+                return self._deduplicate(results)
+            else:
+                logger.warning(f"Google returned 0 results for: {query}")
+                return []
+        except QuotaExceededError:
+            logger.warning("Google quota exceeded, returning empty results")
+            return []
+        except Exception as e:
+            logger.error(f"Google search failed: {e}")
+            return []
 
     def _deduplicate(self, results: List[SearchResult]) -> List[SearchResult]:
         """

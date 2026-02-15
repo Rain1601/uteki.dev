@@ -8,6 +8,7 @@ from .decision_log import DecisionLog
 from .counterfactual import Counterfactual
 from .model_score import ModelScore
 from .schedule_task import ScheduleTask
+from .arena_vote import ArenaVote
 
 __all__ = [
     "Watchlist",
@@ -20,4 +21,5 @@ __all__ = [
     "Counterfactual",
     "ModelScore",
     "ScheduleTask",
+    "ArenaVote",
 ]

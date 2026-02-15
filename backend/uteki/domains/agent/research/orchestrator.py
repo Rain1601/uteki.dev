@@ -81,6 +81,20 @@ class DeepResearchOrchestrator:
             # Emit research start
             yield {"type": "research_start", "data": {"query": query}}
 
+            # Step 0: Route check — does this query need web search?
+            needs_search, clarification = await self._check_needs_search(query, llm)
+            if not needs_search:
+                logger.info(f"Query does not need web search: {query}")
+                yield {
+                    "type": "content_chunk",
+                    "data": {"content": clarification},
+                }
+                yield {
+                    "type": "research_complete",
+                    "data": {"sources_searched": 0, "sources_scraped": 0, "subtasks": []},
+                }
+                return
+
             # Step 1: Decompose query into subtasks
             logger.info(f"Decomposing query: {query}")
             subtasks = await self._decompose_query(query, llm)
@@ -199,27 +213,42 @@ class DeepResearchOrchestrator:
                     scrape_failures.append(url)
                     logger.warning(f"❌ Failed to scrape {i}/{len(urls_to_scrape)}: {url}")
 
-            logger.info(
-                f"📊 Scraping complete: {len(scraped_contents)}/{len(urls_to_scrape)} successful "
-                f"({len(scraped_contents) / len(urls_to_scrape) * 100:.1f}%)"
-            )
+            if urls_to_scrape:
+                logger.info(
+                    f"📊 Scraping complete: {len(scraped_contents)}/{len(urls_to_scrape)} successful "
+                    f"({len(scraped_contents) / len(urls_to_scrape) * 100:.1f}%)"
+                )
+            else:
+                logger.info("📊 No URLs to scrape")
 
             if scrape_failures:
                 logger.warning(f"⚠️ Failed URLs ({len(scrape_failures)}): {scrape_failures[:5]}{'...' if len(scrape_failures) > 5 else ''}")
 
             if not scraped_contents:
-                error_msg = (
-                    f"Failed to scrape any content from {len(urls_to_scrape)} URLs. "
-                    f"This could be due to: (1) anti-scraping protection, "
-                    f"(2) network issues, (3) timeout ({WEB_SCRAPER_TIMEOUT}s), "
-                    f"(4) content extraction failures. "
-                    f"Check logs for details."
-                )
-                logger.error(f"❌ {error_msg}")
-                logger.error(f"Failed URLs: {scrape_failures}")
+                if urls_to_scrape:
+                    logger.warning(f"❌ Failed to scrape any of {len(urls_to_scrape)} URLs: {scrape_failures}")
+                else:
+                    logger.info("No search results found, falling back to LLM knowledge")
+
+                # Fall back to LLM knowledge when no web content available
+                yield {"type": "status", "data": {"message": "No web sources found, answering from knowledge..."}}
+
+                fallback_prompt = f"""The user asked: {query}
+
+I searched the web but found no relevant results. Please provide a comprehensive answer based on your knowledge.
+Use markdown formatting. Use the same language as the user's query."""
+
+                async for chunk in llm.chat_stream([{"role": "user", "content": fallback_prompt}]):
+                    if chunk:
+                        yield {"type": "content_chunk", "data": {"content": chunk}}
+
                 yield {
-                    "type": "error",
-                    "data": {"message": error_msg},
+                    "type": "research_complete",
+                    "data": {
+                        "sources_searched": len(unique_results),
+                        "sources_scraped": 0,
+                        "subtasks": subtasks,
+                    },
                 }
                 return
 
@@ -250,6 +279,36 @@ class DeepResearchOrchestrator:
             logger.error(f"Research error: {e}", exc_info=True)
             yield {"type": "error", "data": {"message": str(e)}}
 
+    async def _check_needs_search(self, query: str, llm: BaseLLMAdapter) -> tuple[bool, str]:
+        """
+        Quick check: does this query actually need web search?
+        If not, LLM responds naturally instead of searching.
+
+        Returns:
+            (needs_search: bool, natural_reply: str if not needed)
+        """
+        prompt = f"""You are a research assistant with web search capability.
+
+User says: "{query}"
+
+If this query requires searching the web (current events, data, comparisons, factual topics, how-to guides, etc.), reply with exactly: [SEARCH]
+
+If NOT (greetings, test messages, vague single words, casual chat, questions you can answer from general knowledge without needing fresh web data), just respond naturally and helpfully to the user. Use the same language as the user."""
+
+        try:
+            chunks = []
+            async for chunk in llm.chat_stream([{"role": "user", "content": prompt}]):
+                if chunk:
+                    chunks.append(chunk)
+            response = "".join(chunks)
+            if "[SEARCH]" in response:
+                return True, ""
+            return False, response
+        except Exception as e:
+            logger.warning(f"Search route check failed, proceeding with search: {e}")
+
+        return True, ""
+
     async def _decompose_query(self, query: str, llm: BaseLLMAdapter) -> List[str]:
         """
         Decompose user query into 2-5 focused subtasks using LLM.
@@ -268,10 +327,15 @@ Research Query: {query}
 Return ONLY a JSON array of subtask strings, like:
 ["subtask 1", "subtask 2", "subtask 3"]
 
+IMPORTANT: All subtasks MUST be in English, as the search engine only indexes English-language sources. Translate any non-English query into English search terms.
 Make subtasks specific and searchable. Each should explore a different aspect of the topic."""
 
         try:
-            response = await llm.chat([{"role": "user", "content": prompt}])
+            chunks = []
+            async for chunk in llm.chat_stream([{"role": "user", "content": prompt}]):
+                if chunk:
+                    chunks.append(chunk)
+            response = "".join(chunks)
 
             # Try to parse JSON response
             import json

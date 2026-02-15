@@ -8,6 +8,7 @@ export interface WatchlistItem {
   name?: string;
   etf_type?: string;
   is_active: boolean;
+  notes?: string;
   created_at?: string;
 }
 
@@ -55,6 +56,7 @@ export interface BacktestResult {
 
 export interface PromptVersion {
   id: string;
+  prompt_type: string;
   version: string;
   content: string;
   description: string;
@@ -68,6 +70,14 @@ export interface MemoryItem {
   content: string;
   metadata?: Record<string, any>;
   created_at?: string;
+}
+
+export interface PipelineStep {
+  skill: string;
+  latency_ms?: number;
+  status: string;
+  output_summary?: string;
+  error?: string;
 }
 
 export interface ModelIOSummary {
@@ -84,13 +94,36 @@ export interface ModelIOSummary {
   parse_status?: string;
   status?: string;
   error_message?: string;
+  pipeline_steps?: PipelineStep[];
   created_at?: string;
 }
 
 export interface ModelIODetail extends ModelIOSummary {
   input_prompt: string;
   output_raw?: string;
+  output_structured?: Record<string, any>;
   error_message?: string;
+}
+
+export interface ArenaVote {
+  id: string;
+  harness_id: string;
+  voter_model_io_id: string;
+  target_model_io_id: string;
+  vote_type: 'approve' | 'reject';
+  reasoning?: string;
+  created_at?: string;
+}
+
+export interface ArenaFinalDecision {
+  winner_model_io_id: string;
+  winner_model_provider: string;
+  winner_model_name: string;
+  winner_action: string;
+  net_score: number;
+  total_approve: number;
+  total_reject: number;
+  vote_summary: Record<string, { approve: number; reject: number; net: number }>;
 }
 
 export interface ArenaResult {
@@ -99,6 +132,9 @@ export interface ArenaResult {
   prompt_version_id: string;
   prompt_version?: string;
   models: ModelIOSummary[];
+  votes?: ArenaVote[];
+  final_decision?: ArenaFinalDecision;
+  pipeline_phases?: Record<string, number>;
 }
 
 export interface ArenaHistoryItem {
@@ -108,6 +144,8 @@ export interface ArenaHistoryItem {
   budget: number | null;
   model_count: number;
   prompt_version?: string;
+  vote_winner_model?: string;
+  vote_winner_action?: string;
 }
 
 export interface ArenaTimelinePoint {
@@ -119,6 +157,8 @@ export interface ArenaTimelinePoint {
   model_count: number;
   prompt_version?: string;
   budget: number | null;
+  vote_winner_model?: string;
+  vote_winner_action?: string;
 }
 
 export interface DecisionLogItem {
@@ -160,11 +200,39 @@ export interface LeaderboardEntry {
   model_name: string;
   adoption_count: number;
   adoption_rate: number;
+  approve_vote_count: number;
+  rejection_count: number;
+  model_score: number;
   win_count: number;
   win_rate: number;
   avg_return_pct: number;
   counterfactual_win_rate: number;
   total_decisions: number;
+  simulated_return_pct?: number;
+  decision_accuracy?: number;
+  confidence_calibration?: number;
+}
+
+export interface AgentBacktestResult {
+  agent_key: string;
+  start_date: string;
+  end_date: string;
+  frequency: string;
+  total_decisions: number;
+  accuracy: number;
+  total_return_pct: number;
+  benchmark_return_pct: number;
+  alpha_pct: number;
+  max_drawdown_pct: number;
+  sharpe_ratio: number;
+  equity_curve: Array<{ date: string; value: number }>;
+  benchmark_curve: Array<{ date: string; value: number }>;
+  decisions: Array<{
+    date: string;
+    action: string;
+    confidence: number;
+    is_correct?: boolean;
+  }>;
 }
 
 export interface ScheduleTask {
@@ -211,6 +279,9 @@ export const addToWatchlist = (symbol: string, name?: string, etf_type?: string)
 export const removeFromWatchlist = (symbol: string) =>
   del<IndexResponse>(`/api/index/watchlist/${symbol}`);
 
+export const updateWatchlistNotes = (symbol: string, notes: string) =>
+  put<IndexResponse<WatchlistItem>>(`/api/index/watchlist/${symbol}/notes`, { notes });
+
 // ── Quotes & History ──
 
 export const fetchQuote = (symbol: string) =>
@@ -226,6 +297,9 @@ export const fetchHistory = (symbol: string, start?: string, end?: string) => {
 
 export const refreshData = () =>
   post<IndexResponse>('/api/index/data/refresh');
+
+export const syncData = () =>
+  post<IndexResponse<{ synced: any[]; already_fresh: string[]; failed: any[] }>>('/api/index/data/sync');
 
 export interface DataValidationResult {
   symbol: string;
@@ -256,22 +330,25 @@ export const runBacktestCompare = (params: {
   initial_capital?: number; monthly_dca?: number;
 }) => post<IndexResponse<BacktestResult[]>>('/api/index/backtest/compare', params);
 
-// ── System Prompt ──
+// ── Prompt (system / user) ──
 
-export const fetchCurrentPrompt = () =>
-  get<IndexResponse<PromptVersion>>('/api/index/prompt/current');
+export const fetchCurrentPrompt = (promptType: string = 'system') =>
+  get<IndexResponse<PromptVersion>>(`/api/index/prompt/current?prompt_type=${promptType}`);
 
-export const updatePrompt = (content: string, description: string) =>
-  put<IndexResponse<PromptVersion>>('/api/index/prompt', { content, description });
+export const updatePrompt = (content: string, description: string, promptType: string = 'system') =>
+  put<IndexResponse<PromptVersion>>(`/api/index/prompt?prompt_type=${promptType}`, { content, description });
 
-export const fetchPromptHistory = () =>
-  get<IndexResponse<PromptVersion[]>>('/api/index/prompt/history');
+export const fetchPromptHistory = (promptType: string = 'system') =>
+  get<IndexResponse<PromptVersion[]>>(`/api/index/prompt/history?prompt_type=${promptType}`);
 
 export const activatePromptVersion = (versionId: string) =>
   put<IndexResponse<PromptVersion>>(`/api/index/prompt/${versionId}/activate`);
 
 export const deletePromptVersion = (versionId: string) =>
   del<IndexResponse<void>>(`/api/index/prompt/${versionId}`);
+
+export const previewUserPrompt = () =>
+  post<IndexResponse<{ rendered: string; variables: Record<string, string> }>>('/api/index/prompt/preview');
 
 // ── Memory ──
 
@@ -286,11 +363,137 @@ export const fetchMemory = (category?: string, limit?: number) => {
 export const writeMemory = (category: string, content: string, metadata?: Record<string, any>) =>
   post<IndexResponse<MemoryItem>>('/api/index/memory', { category, content, metadata });
 
+export const deleteMemory = (memoryId: string) =>
+  del<IndexResponse>(`/api/index/memory/${memoryId}`);
+
+// ── Tools ──
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: {
+    type: string;
+    properties: Record<string, { type: string; description?: string; enum?: string[] }>;
+    required?: string[];
+  };
+}
+
+export const fetchToolDefinitions = () =>
+  get<IndexResponse<Record<string, ToolDefinition>>>('/api/index/tools');
+
+export const testTool = (toolName: string, args: Record<string, any>) =>
+  post<IndexResponse<any>>(`/api/index/tools/${toolName}/test`, { arguments: args });
+
+// ── Account & Agent Config ──
+
+export interface AccountSummary {
+  total: number;
+  cash: number;
+  positions_value: number;
+  error?: string;
+}
+
+export interface AgentConfig {
+  budget?: number;
+  [key: string]: any;
+}
+
+export const fetchAccountSummary = () =>
+  get<IndexResponse<AccountSummary>>('/api/index/account/summary');
+
+export const fetchAgentConfig = () =>
+  get<IndexResponse<AgentConfig>>('/api/index/agent-config');
+
+export const saveAgentConfig = (config: AgentConfig) =>
+  put<IndexResponse<AgentConfig>>('/api/index/agent-config', { config });
+
 // ── Arena ──
+
+export interface ArenaProgressEvent {
+  type: 'phase_start' | 'model_start' | 'skill_start' | 'skill_complete' | 'model_complete' | 'result' | 'error';
+  phase?: string;
+  model?: string;
+  skill?: string;
+  step?: number;
+  total?: number;
+  total_models?: number;
+  latency_ms?: number;
+  status?: string;
+  parse_status?: string;
+  error?: string;
+  message?: string;
+  data?: ArenaResult;
+}
 
 export const runArena = (params: {
   harness_type?: string; budget?: number; constraints?: Record<string, any>;
 }) => post<IndexResponse<ArenaResult>>('/api/index/arena/run', params, { timeout: 180000 });
+
+export const runArenaStream = (
+  params: { harness_type?: string; budget?: number; constraints?: Record<string, any>; models?: { provider: string; model: string }[] },
+  onEvent: (event: ArenaProgressEvent) => void,
+): { cancel: () => void } => {
+  const controller = new AbortController();
+  const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8888';
+  const token = localStorage.getItem('auth_token');
+
+  (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/index/arena/run/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        onEvent({ type: 'error', message: `HTTP ${response.status}` });
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) return;
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              onEvent(event);
+            } catch { /* ignore parse errors */ }
+          }
+        }
+      }
+
+      // Process remaining buffer
+      if (buffer.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(buffer.slice(6));
+          onEvent(event);
+        } catch { /* ignore */ }
+      }
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        onEvent({ type: 'error', message: e.message || 'Stream failed' });
+      }
+    }
+  })();
+
+  return { cancel: () => controller.abort() };
+};
 
 export const fetchArenaTimeline = (limit = 50) =>
   get<IndexResponse<ArenaTimelinePoint[]>>(`/api/index/arena/timeline?limit=${limit}`);
@@ -303,6 +506,23 @@ export const fetchArenaResults = (harnessId: string) =>
 
 export const fetchModelIODetail = (harnessId: string, modelIoId: string) =>
   get<IndexResponse<ModelIODetail>>(`/api/index/arena/${harnessId}/model/${modelIoId}`);
+
+export const fetchArenaVotes = (harnessId: string) =>
+  get<IndexResponse<ArenaVote[]>>(`/api/index/arena/${harnessId}/votes`);
+
+export const runAgentBacktest = (params: {
+  agent_key: string;
+  start_date: string;
+  end_date: string;
+  frequency?: string;
+}) => {
+  const p = new URLSearchParams();
+  p.set('agent_key', params.agent_key);
+  p.set('start_date', params.start_date);
+  p.set('end_date', params.end_date);
+  if (params.frequency) p.set('frequency', params.frequency);
+  return get<IndexResponse<AgentBacktestResult>>(`/api/index/arena/backtest?${p.toString()}`);
+};
 
 // ── Decisions ──
 
