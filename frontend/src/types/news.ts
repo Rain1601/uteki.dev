@@ -16,6 +16,8 @@ export interface NewsItem {
   summary?: string;
   content?: string;
   content_zh?: string;
+  content_full?: string;
+  content_full_zh?: string;
   tags: string[];
   important: boolean;
   publish_time?: string;

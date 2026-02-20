@@ -17,10 +17,11 @@ async def get_monthly_events_enriched(
     year: int,
     month: int,
     event_type: Optional[str] = Query(None, description="事件类型: all/fomc/employment/inflation/consumption,gdp"),
+    refresh: Optional[bool] = Query(None, description="强制刷新缓存"),
     session: AsyncSession = Depends(get_session)
 ):
     """
-    获取指定月份的经济事件（包含 FMP 数据增强）
+    获取指定月份的经济事件（包含 FMP 数据增强，DB 缓存优先）
 
     Returns:
         按日期分组的事件字典，包含 actual/forecast/previous 数据
@@ -28,7 +29,8 @@ async def get_monthly_events_enriched(
     try:
         service = get_fmp_calendar_service()
         result = await service.get_monthly_events_enriched(
-            session, year, month, event_type
+            session, year, month, event_type,
+            force_refresh=bool(refresh),
         )
 
         return result

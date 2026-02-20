@@ -24,6 +24,7 @@ import ArticleDetailDialog from '../components/ArticleDetailDialog';
 import LoadingDots from '../components/LoadingDots';
 import { NewsItem, NewsDataByDate, NewsFilterType, AnalysisResult, ImportanceLevel, ImpactDirection, ConfidenceLevel } from '../types/news';
 import { NewsLabelStrip } from '../components/news/NewsLabelBadges';
+import { useResponsive } from '../hooks/useResponsive';
 
 interface CalendarDay {
   day: number;
@@ -46,6 +47,8 @@ interface FeedbackState {
 export default function NewsTimelinePage() {
   const { theme } = useTheme();
   const isDark = theme.mode === 'dark';
+  const { isMobile, isSmallScreen } = useResponsive();
+  const isCompact = isMobile || isSmallScreen;
 
   // State
   const today = new Date();
@@ -441,7 +444,7 @@ export default function NewsTimelinePage() {
 
     analyzeNewsStream(
       newsItem.headline || newsItem.title_zh || newsItem.title || '',
-      newsItem.summary || newsItem.content_zh || newsItem.content || '',
+      newsItem.content_full_zh || newsItem.content_zh || newsItem.summary || newsItem.content_full || newsItem.content || '',
       newsItem.source,
       newsItem.id,
       (chunk) => {
@@ -591,14 +594,13 @@ export default function NewsTimelinePage() {
   return (
     <Box
       sx={{
-        height: 'calc(100vh - 48px)',
-        width: 'calc(100% + 48px)',
+        height: isCompact ? 'calc(100vh - 48px)' : '100vh',
+        width: isCompact ? 'calc(100% + 32px)' : 'calc(100% + 48px)',
         display: 'flex',
         bgcolor: theme.background.primary,
         color: theme.text.primary,
         overflow: 'hidden',
-        m: -3,
-        ml: -3,
+        m: isCompact ? -2 : -3,
       }}
     >
       {/* Left Calendar Panel */}
@@ -1074,7 +1076,9 @@ export default function NewsTimelinePage() {
           sx={{
             flex: 1,
             overflowY: 'auto',
-            p: 2.5,
+            px: 2.5,
+            pt: 2.5,
+            pb: 1,
             scrollBehavior: 'smooth',
           }}
         >
@@ -1095,17 +1099,16 @@ export default function NewsTimelinePage() {
                 </Box>
               )}
               {filteredNews.map((dateGroup) => (
-                <Box key={dateGroup.date} data-date={dateGroup.date} sx={{ mb: 4 }}>
+                <Box key={dateGroup.date} data-date={dateGroup.date} sx={{ '&:last-child': { mb: 0 } }}>
                   <Box
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
-                      m: '24px 0 16px 0',
+                      pb: 1,
                       position: 'sticky',
                       top: 0,
                       bgcolor: theme.background.primary,
                       zIndex: 5,
-                      py: 1,
                     }}
                   >
                     <Typography
@@ -1136,6 +1139,7 @@ export default function NewsTimelinePage() {
                         borderRadius: 2,
                         p: 2.5,
                         mb: 2,
+                        '&:last-child': { mb: 0 },
                         cursor: 'pointer',
                         transition: 'all 0.2s ease',
                         '&:hover': {
@@ -1193,7 +1197,7 @@ export default function NewsTimelinePage() {
                           textOverflow: 'ellipsis',
                         }}
                       >
-                        {newsItem.content_zh || newsItem.summary}
+                        {newsItem.content_full_zh || newsItem.content_zh || newsItem.summary || newsItem.content_full || newsItem.content}
                       </Typography>
 
                       {/* Bottom Row: Tags + Action Buttons */}

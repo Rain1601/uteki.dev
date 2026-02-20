@@ -36,6 +36,36 @@ ARENA_MODELS = [
 ]
 
 
+async def load_models_from_db(session: AsyncSession) -> List[Dict[str, Any]]:
+    """从 DB 加载 model_config，返回 enabled 的模型列表。
+
+    Returns empty list if no config found or no enabled models.
+    Shared by Arena, Agent Chat, Reflection, Backtest services.
+    """
+    from uteki.domains.index.models.agent_memory import AgentMemory
+
+    query = select(AgentMemory).where(
+        AgentMemory.category == "model_config",
+        AgentMemory.agent_key == "system",
+    ).limit(1)
+    result = await session.execute(query)
+    record = result.scalar_one_or_none()
+    if not record:
+        return []
+
+    try:
+        models = json.loads(record.content or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    # Filter enabled models with valid api_key
+    enabled = [
+        m for m in models
+        if m.get("enabled", True) and m.get("api_key")
+    ]
+    return enabled
+
+
 class ArenaService:
     """多模型 Arena — 3 阶段 Pipeline
 
@@ -60,14 +90,25 @@ class ArenaService:
         pipeline_start = time.time()
         phase_timings: Dict[str, int] = {}
 
+        # Load models: DB config preferred, fallback to hardcoded ARENA_MODELS
+        db_models = await load_models_from_db(session)
+        if db_models:
+            # DB models already have api_key directly
+            base_models = db_models
+            logger.info(f"Arena using {len(base_models)} models from DB config")
+        else:
+            # Fallback to hardcoded ARENA_MODELS + env keys
+            base_models = ARENA_MODELS
+            logger.info("Arena using hardcoded ARENA_MODELS (no DB config)")
+
         # Determine which models to run
         if model_filter:
             filter_keys = {(m["provider"], m["model"]) for m in model_filter}
-            active_models = [m for m in ARENA_MODELS if (m["provider"], m["model"]) in filter_keys]
+            active_models = [m for m in base_models if (m["provider"], m["model"]) in filter_keys]
             if not active_models:
-                active_models = ARENA_MODELS
+                active_models = base_models
         else:
-            active_models = ARENA_MODELS
+            active_models = base_models
 
         # 获取 Harness
         harness_q = select(DecisionHarness).where(DecisionHarness.id == harness_id)
@@ -184,9 +225,14 @@ class ArenaService:
         """Phase 1: 所有 Agent 并行执行 Skill Pipeline 决策"""
         available_models = []
         for m in (model_list or ARENA_MODELS):
-            api_key = getattr(settings, m["api_key_attr"], None)
-            if api_key:
-                available_models.append({**m, "api_key": api_key})
+            if "api_key" in m and m["api_key"]:
+                # DB config: api_key is directly in the model dict
+                available_models.append(m)
+            elif "api_key_attr" in m:
+                # Fallback config: resolve api_key from env settings
+                api_key = getattr(settings, m["api_key_attr"], None)
+                if api_key:
+                    available_models.append({**m, "api_key": api_key})
 
         if not available_models:
             logger.error("No models configured with API keys for Arena")
@@ -394,13 +440,18 @@ class ArenaService:
             if not provider:
                 raise ValueError(f"Unknown provider: {provider_name}")
 
-            base_url = settings.google_api_base_url if provider_name == "google" else None
+            # Resolve base_url: model_config > provider defaults
+            base_url = model_config.get("base_url") or (
+                settings.google_api_base_url if provider_name == "google" else None
+            )
+            temperature = model_config.get("temperature", 0)
+            max_tokens = model_config.get("max_tokens", 4096)
 
             adapter = LLMAdapterFactory.create_adapter(
                 provider=provider,
                 api_key=api_key,
                 model=model_name,
-                config=LLMConfig(temperature=0, max_tokens=4096),
+                config=LLMConfig(temperature=temperature, max_tokens=max_tokens),
                 base_url=base_url,
             )
 
@@ -546,16 +597,23 @@ class ArenaService:
         if not vote_prompt:
             return []
 
-        # 使用同一模型进行投票
-        api_key_attr = None
-        for m in ARENA_MODELS:
+        # 使用同一模型进行投票 — 先查 DB 配置的 active_models，再 fallback 到 ARENA_MODELS
+        api_key = None
+        model_base_url = None
+        # Try to find the model in the active run's model list (stored on instance is not available here)
+        # So we load from DB first, then fall back to ARENA_MODELS
+        async with db_manager.get_postgres_session() as cfg_session:
+            db_models = await load_models_from_db(cfg_session)
+        for m in db_models:
             if m["provider"] == voter_provider and m["model"] == voter_model:
-                api_key_attr = m["api_key_attr"]
+                api_key = m.get("api_key")
+                model_base_url = m.get("base_url")
                 break
-        if not api_key_attr:
-            return []
-
-        api_key = getattr(settings, api_key_attr, None)
+        if not api_key:
+            for m in ARENA_MODELS:
+                if m["provider"] == voter_provider and m["model"] == voter_model:
+                    api_key = getattr(settings, m.get("api_key_attr", ""), None)
+                    break
         if not api_key:
             return []
 
@@ -575,7 +633,9 @@ class ArenaService:
         if not provider:
             return []
 
-        base_url = settings.google_api_base_url if voter_provider == "google" else None
+        base_url = model_base_url or (
+            settings.google_api_base_url if voter_provider == "google" else None
+        )
 
         try:
             adapter = LLMAdapterFactory.create_adapter(
@@ -599,40 +659,54 @@ class ArenaService:
 
             output = await asyncio.wait_for(_collect(), timeout=MODEL_TIMEOUT)
 
+            logger.info(
+                f"[Vote Debug] voter={voter_provider}/{voter_model} "
+                f"voter_id={voter_id[:8]}... "
+                f"raw_output={output[:200]}..."
+            )
+
             # 解析投票结果
             parsed = self._parse_vote_output(output)
             if not parsed:
                 logger.warning(f"Vote parse failed for {voter_provider}/{voter_model}, treating as abstain")
                 return []
 
+            logger.info(
+                f"[Vote Debug] voter={voter_provider}/{voter_model} "
+                f"parsed={json.dumps({k: str(v)[:80] for k, v in parsed.items()}, ensure_ascii=False)}"
+            )
+
             # 构建 plan_label → model_io_id 映射
             plan_map = self._build_plan_map(voter_id, all_ios)
 
             votes: List[Dict[str, Any]] = []
+            fallback_reasoning = parsed.get("reasoning", "")
 
             # 2 approve votes
             for approve_key in ["approve_1", "approve_2"]:
                 plan_label = parsed.get(approve_key)
                 target_id = plan_map.get(plan_label) if plan_label else None
                 if target_id:
+                    reason = parsed.get(f"{approve_key}_reason") or fallback_reasoning
                     votes.append({
                         "harness_id": harness_id,
                         "voter_model_io_id": voter_id,
                         "target_model_io_id": target_id,
                         "vote_type": "approve",
-                        "reasoning": parsed.get("reasoning", ""),
+                        "reasoning": reason,
                     })
 
             # 0-1 reject vote
             reject_label = parsed.get("reject")
             reject_target = plan_map.get(reject_label) if reject_label else None
             if reject_target:
+                reason = parsed.get("reject_reason") or fallback_reasoning
                 votes.append({
                     "harness_id": harness_id,
                     "voter_model_io_id": voter_id,
                     "target_model_io_id": reject_target,
                     "vote_type": "reject",
-                    "reasoning": parsed.get("reasoning", ""),
+                    "reasoning": reason,
                 })
 
             return votes
@@ -648,6 +722,16 @@ class ArenaService:
         other_ios = [m for m in all_ios if m["id"] != voter_io_id]
         if len(other_ios) < 1:
             return None
+
+        plan_labels = [
+            f"Plan_{string.ascii_uppercase[i]}={io.get('model_provider')}/{io.get('model_name')}"
+            for i, io in enumerate(other_ios)
+        ]
+        logger.info(
+            f"[Vote Debug] Building prompt for voter={voter_io_id[:8]}... "
+            f"all_ios_count={len(all_ios)} other_ios_count={len(other_ios)} "
+            f"plan_labels={plan_labels}"
+        )
 
         lines = [
             "以下是本次 Arena 中其他 Agent 的投资决策方案（已匿名化）。",
@@ -693,7 +777,14 @@ class ArenaService:
     def _parse_vote_output(raw: str) -> Optional[Dict[str, Any]]:
         """解析投票结果
 
-        期望格式:
+        新格式（每票独立 reason）:
+        {
+            "approve_1": {"plan": "Plan_B", "reason": "..."},
+            "approve_2": {"plan": "Plan_D", "reason": "..."},
+            "reject": {"plan": "Plan_A", "reason": "..."} | null
+        }
+
+        兼容旧格式:
         {
             "approve_1": "Plan_B",
             "approve_2": "Plan_D",
@@ -701,34 +792,60 @@ class ArenaService:
             "reasoning": "..."
         }
         """
+        parsed = None
+
         # Try JSON block
         json_match = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
         if json_match:
             try:
                 parsed = json.loads(json_match.group(1))
-                if "approve_1" in parsed:
-                    return parsed
             except json.JSONDecodeError:
                 pass
 
         # Try direct JSON
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict) and "approve_1" in parsed:
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
+        if not parsed:
+            try:
+                candidate = json.loads(raw)
+                if isinstance(candidate, dict):
+                    parsed = candidate
+            except (json.JSONDecodeError, ValueError):
+                pass
 
         # Regex fallback
-        result: Dict[str, Any] = {}
-        for key in ["approve_1", "approve_2", "reject"]:
-            m = re.search(rf'"{key}"\s*:\s*"(Plan_[A-Z])"', raw)
-            if m:
-                result[key] = m.group(1)
+        if not parsed:
+            result: Dict[str, Any] = {}
+            for key in ["approve_1", "approve_2", "reject"]:
+                m = re.search(rf'"{key}"\s*:\s*"(Plan_[A-Z])"', raw)
+                if m:
+                    result[key] = m.group(1)
+            reasoning_m = re.search(r'"reasoning"\s*:\s*"(.*?)"', raw, re.DOTALL)
+            if reasoning_m:
+                result["reasoning"] = reasoning_m.group(1)
+            parsed = result if result.get("approve_1") else None
 
-        reasoning_m = re.search(r'"reasoning"\s*:\s*"(.*?)"', raw, re.DOTALL)
-        if reasoning_m:
-            result["reasoning"] = reasoning_m.group(1)
+        if not parsed or "approve_1" not in parsed:
+            return None
+
+        # Normalize: convert new format to unified internal format
+        # New format: {"approve_1": {"plan": "Plan_X", "reason": "..."}, ...}
+        # Old format: {"approve_1": "Plan_X", "reasoning": "..."}
+        # Unified:    {"approve_1": "Plan_X", "approve_1_reason": "...", ...}
+        result = {}
+        for key in ["approve_1", "approve_2", "reject"]:
+            val = parsed.get(key)
+            if val is None:
+                continue
+            if isinstance(val, dict):
+                # New format
+                result[key] = val.get("plan", "")
+                result[f"{key}_reason"] = val.get("reason", "")
+            else:
+                # Old format (string)
+                result[key] = val
+
+        # Old format fallback reasoning
+        if "reasoning" in parsed:
+            result["reasoning"] = parsed["reasoning"]
 
         return result if result.get("approve_1") else None
 
@@ -1569,13 +1686,12 @@ VOTE_SYSTEM_PROMPT = """你是一名专业的投资决策评审员。你需要�
 - 信心度是否与分析深度匹配
 - 是否考虑了宏观环境和市场趋势
 
-请输出 JSON 格式：
+请输出 JSON 格式，每个投票必须有独立的理由：
 ```json
 {
-  "approve_1": "Plan_X",
-  "approve_2": "Plan_Y",
-  "reject": "Plan_Z" 或 null,
-  "reasoning": "简要说明投票理由"
+  "approve_1": {"plan": "Plan_X", "reason": "为什么认可这个方案"},
+  "approve_2": {"plan": "Plan_Y", "reason": "为什么认可这个方案"},
+  "reject": {"plan": "Plan_Z", "reason": "为什么反对这个方案"} 或 null
 }
 ```"""
 

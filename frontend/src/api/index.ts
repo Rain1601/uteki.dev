@@ -590,6 +590,99 @@ export const triggerSchedule = (taskId: string) =>
 export const sendAgentMessage = (message: string) =>
   post<IndexResponse<{ response: string; tool_calls?: any[]; decision_card?: any }>>('/api/index/agent/chat', { message });
 
+// ── Model Config ──
+
+export interface ModelConfig {
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url?: string;
+  temperature: number;
+  max_tokens: number;
+  enabled: boolean;
+}
+
+export const fetchModelConfig = () =>
+  get<IndexResponse<ModelConfig[]>>('/api/index/model-config');
+
+export const saveModelConfig = (models: ModelConfig[]) =>
+  put<IndexResponse<ModelConfig[]>>('/api/index/model-config', { models });
+
+// ── Evaluation ──
+
+export interface EvalOverview {
+  total_arena_runs: number;
+  harness_breakdown: Record<string, number>;
+  total_decisions: number;
+  decision_breakdown: Record<string, number>;
+  best_model: string | null;
+  avg_win_rate: number;
+  avg_latency_ms: number;
+  avg_cost_usd: number;
+  total_cost_usd: number;
+}
+
+export interface VotingMatrixEntry {
+  voter: string;
+  target: string;
+  approve: number;
+  reject: number;
+}
+
+export interface VotingMatrix {
+  models: string[];
+  matrix: VotingMatrixEntry[];
+}
+
+export interface TrendDataPoint {
+  date: string;
+  latency: number;
+  cost: number;
+  success_rate: number;
+  runs: number;
+}
+
+export interface PerformanceTrend {
+  dates: string[];
+  models: Array<{ name: string; data: TrendDataPoint[] }>;
+}
+
+export interface CostModelEntry {
+  name: string;
+  avg_latency: number;
+  p95_latency: number;
+  avg_cost: number;
+  total_cost: number;
+  avg_input_tokens: number;
+  avg_output_tokens: number;
+  total_runs: number;
+  error_rate: number;
+}
+
+export interface CounterfactualModelEntry {
+  name: string;
+  adopted_avg_return: number;
+  adopted_count: number;
+  missed_avg_return: number;
+  missed_count: number;
+  opportunity_cost: number;
+}
+
+export const fetchEvalOverview = () =>
+  get<IndexResponse<EvalOverview>>('/api/index/evaluation/overview');
+
+export const fetchVotingMatrix = (limit = 20) =>
+  get<IndexResponse<VotingMatrix>>(`/api/index/evaluation/voting-matrix?limit=${limit}`);
+
+export const fetchPerformanceTrend = (days = 30) =>
+  get<IndexResponse<PerformanceTrend>>(`/api/index/evaluation/performance-trend?days=${days}`);
+
+export const fetchCostAnalysis = () =>
+  get<IndexResponse<{ models: CostModelEntry[] }>>('/api/index/evaluation/cost-analysis');
+
+export const fetchCounterfactualSummary = () =>
+  get<IndexResponse<{ models: CounterfactualModelEntry[] }>>('/api/index/evaluation/counterfactual-summary');
+
 // ── Debug ──
 
 export const createIndexTables = () =>

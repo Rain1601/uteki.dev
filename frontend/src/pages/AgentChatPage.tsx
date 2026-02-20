@@ -658,8 +658,6 @@ export default function AgentChatPage() {
                     },
                     '&.Mui-focused': {
                       bgcolor: theme.background.hover,
-                      transform: 'translateY(-2px)',
-                      boxShadow: theme.effects.shadow.lg,
                     },
                     '&.Mui-focused fieldset': {
                       borderColor: theme.border.active,

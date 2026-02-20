@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     # 其他数据源API Keys
     alpha_vantage_api_key: Optional[str] = None
     coingecko_api_key: Optional[str] = None
+    fred_api_key: Optional[str] = None
 
     # 安全配置
     encryption_key: Optional[str] = None

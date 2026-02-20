@@ -1,7 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
-import DemoPage from './pages/DemoPage';
 import AdminPage from './pages/AdminPage';
 import AgentChatPage from './pages/AgentChatPage';
 import LoginPage from './pages/LoginPage';
@@ -25,7 +24,7 @@ function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<DemoPage />} />
+        <Route index element={<Navigate to="/agent" replace />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="agent" element={<AgentChatPage />} />
         <Route path="news-timeline" element={<NewsTimelinePage />} />

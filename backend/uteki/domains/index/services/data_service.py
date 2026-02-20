@@ -339,12 +339,13 @@ class DataService:
             if date.fromisoformat(d) >= cutoff_date
         ]
 
-        # 3. 检查是否落后于当前日期（排除周末和今天）
+        # 3. 检查是否落后于当前日期（排除周末、假日和今天）
+        from uteki.domains.index.services.market_calendar import is_trading_day
         today = date.today()
         days_behind = 0
         check_date = last_date + timedelta(days=1)
         while check_date < today:
-            if check_date.weekday() < 5:  # 非周末
+            if is_trading_day(check_date):
                 days_behind += 1
             check_date += timedelta(days=1)
 
@@ -564,10 +565,11 @@ class DataService:
         date_set = set(dates)
 
         # Check each day between first and last date
+        from uteki.domains.index.services.market_calendar import is_trading_day
         current = first_date
         while current <= last_date:
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current.weekday() < 5 and current not in date_set:
+            # Skip weekends and US market holidays
+            if is_trading_day(current) and current not in date_set:
                 missing_dates.append(current.isoformat())
                 logger.warning(f"Missing trading day for {symbol}: {current.isoformat()}")
             current += timedelta(days=1)

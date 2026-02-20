@@ -22,10 +22,13 @@ import LoadingDots from '../components/LoadingDots';
 import { getMonthlyEventsEnriched, getEventStatistics } from '../api/economicCalendar';
 import { analyzeEventStream } from '../api/news';
 import { EconomicEvent, EventsByDate, EventStatistics, EventFilterType, EventAnalysisResult } from '../types/economicCalendar';
+import { useResponsive } from '../hooks/useResponsive';
 
 export default function FOMCCalendarPage() {
   const { theme } = useTheme();
   const isDark = theme.mode === 'dark';
+  const { isMobile, isSmallScreen } = useResponsive();
+  const isCompact = isMobile || isSmallScreen;
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [events, setEvents] = useState<EventsByDate>({});
@@ -575,7 +578,7 @@ export default function FOMCCalendarPage() {
     return (
       <Box
         sx={{
-          height: 'calc(100vh - 48px)',
+          height: isCompact ? 'calc(100vh - 48px)' : '100vh',
           width: '100%',
           display: 'flex',
           justifyContent: 'center',
@@ -583,7 +586,7 @@ export default function FOMCCalendarPage() {
           flexDirection: 'column',
           gap: 2,
           bgcolor: theme.background.primary,
-          m: -3,
+          m: isCompact ? -2 : -3,
         }}
       >
         <LoadingDots text="Loading events" fontSize={16} />
@@ -594,15 +597,14 @@ export default function FOMCCalendarPage() {
   return (
     <Box
       sx={{
-        height: 'calc(100vh - 48px)',
-        width: 'calc(100% + 48px)',
+        height: isCompact ? 'calc(100vh - 48px)' : '100vh',
+        width: isCompact ? 'calc(100% + 32px)' : 'calc(100% + 48px)',
         display: 'flex',
         flexDirection: 'row',
         bgcolor: theme.background.primary,
         color: theme.text.primary,
         overflow: 'hidden',
-        m: -3,
-        ml: -3,
+        m: isCompact ? -2 : -3,
       }}
     >
       {/* Left Panel: Calendar */}

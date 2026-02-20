@@ -63,7 +63,7 @@ class AgentService:
         )
 
         # 尝试所有可用 LLM（按优先级 fallback）
-        adapters = self._get_all_adapters()
+        adapters = await self._get_all_adapters(session)
         if not adapters:
             return {"response": "No LLM configured. Please set an API key.", "tool_calls": []}
 
@@ -116,8 +116,51 @@ class AgentService:
             "budget": harness_data.get("task", {}).get("budget"),
         }
 
-    def _get_all_adapters(self) -> List:
-        """获取所有可用的 LLM adapter，返回 [(name, adapter), ...]"""
+    async def _get_all_adapters(self, session: AsyncSession) -> List:
+        """获取所有可用的 LLM adapter，返回 [(name, adapter), ...]
+
+        优先从 DB model_config 加载，为空时 fallback 到 env key 硬编码列表。
+        """
+        from uteki.domains.index.services.arena_service import load_models_from_db
+
+        provider_map = {
+            "anthropic": LLMProvider.ANTHROPIC,
+            "openai": LLMProvider.OPENAI,
+            "deepseek": LLMProvider.DEEPSEEK,
+            "google": LLMProvider.GOOGLE,
+            "qwen": LLMProvider.QWEN,
+            "minimax": LLMProvider.MINIMAX,
+        }
+
+        # Try DB config first
+        db_models = await load_models_from_db(session)
+        if db_models:
+            adapters = []
+            for m in db_models:
+                provider = provider_map.get(m["provider"])
+                if not provider:
+                    continue
+                try:
+                    base_url = m.get("base_url") or (
+                        settings.google_api_base_url if m["provider"] == "google" else None
+                    )
+                    adapter = LLMAdapterFactory.create_adapter(
+                        provider=provider,
+                        api_key=m["api_key"],
+                        model=m["model"],
+                        config=LLMConfig(
+                            temperature=m.get("temperature", 0.3),
+                            max_tokens=m.get("max_tokens", 4096),
+                        ),
+                        base_url=base_url,
+                    )
+                    adapters.append((f"{m['provider']}/{m['model']}", adapter))
+                except Exception as e:
+                    logger.warning(f"Failed to create adapter for {m['provider']}/{m['model']}: {e}")
+            if adapters:
+                return adapters
+
+        # Fallback to env key hardcoded list
         providers = [
             (settings.anthropic_api_key, LLMProvider.ANTHROPIC, settings.llm_model or "claude-sonnet-4-20250514"),
             (settings.openai_api_key, LLMProvider.OPENAI, "gpt-4o"),

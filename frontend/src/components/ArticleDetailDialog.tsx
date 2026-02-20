@@ -482,11 +482,9 @@ export default function ArticleDetailDialog({
           <DialogContent
             sx={{
               p: 0,
-              overflowY: 'auto',
-              '&::-webkit-scrollbar': { width: '8px' },
-              '&::-webkit-scrollbar-track': { background: 'transparent' },
-              '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}30`, borderRadius: '4px' },
-              '&::-webkit-scrollbar-thumb:hover': { background: `${theme.brand.primary}50` },
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
             }}
           >
             {/* Two-column layout with responsive fallback */}
@@ -494,16 +492,22 @@ export default function ArticleDetailDialog({
               sx={{
                 display: 'flex',
                 flexDirection: { xs: 'column', md: 'row' },
-                minHeight: '100%',
+                flex: 1,
+                overflow: 'hidden',
               }}
             >
-              {/* Main Content Area (70%) */}
+              {/* Main Content Area (70%) — scrollable */}
               <Box
                 sx={{
                   flex: { xs: 1, md: '0 0 70%' },
                   p: 3,
                   borderRight: { xs: 'none', md: `1px solid ${theme.border.default}` },
                   order: { xs: 2, md: 1 },
+                  overflowY: 'auto',
+                  '&::-webkit-scrollbar': { width: '8px' },
+                  '&::-webkit-scrollbar-track': { background: 'transparent' },
+                  '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}30`, borderRadius: '4px' },
+                  '&::-webkit-scrollbar-thumb:hover': { background: `${theme.brand.primary}50` },
                 }}
               >
                 {/* Key Points Section */}

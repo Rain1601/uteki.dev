@@ -7,6 +7,7 @@ import {
   Leaderboard as LeaderboardIcon,
   Settings as SettingsIcon,
   Assessment as BacktestIcon,
+  Insights as EvaluationIcon,
 } from '@mui/icons-material';
 import { useTheme } from '../theme/ThemeProvider';
 import ArenaView from '../components/index/ArenaView';
@@ -15,6 +16,7 @@ import DecisionTimeline from '../components/index/DecisionTimeline';
 import LeaderboardTable from '../components/index/LeaderboardTable';
 import SettingsPanel from '../components/index/SettingsPanel';
 import BacktestPanel from '../components/index/BacktestPanel';
+import EvaluationPanel from '../components/index/EvaluationPanel';
 
 const tabs = [
   { label: 'Arena', icon: <ArenaIcon fontSize="small" /> },
@@ -22,6 +24,7 @@ const tabs = [
   { label: 'History', icon: <TimelineIcon fontSize="small" /> },
   { label: 'Leaderboard', icon: <LeaderboardIcon fontSize="small" /> },
   { label: 'Backtest', icon: <BacktestIcon fontSize="small" /> },
+  { label: 'Evaluation', icon: <EvaluationIcon fontSize="small" /> },
   { label: 'Settings', icon: <SettingsIcon fontSize="small" /> },
 ];
 
@@ -91,7 +94,8 @@ export default function IndexAgentPage() {
         {activeTab === 2 && <DecisionTimeline />}
         {activeTab === 3 && <LeaderboardTable />}
         {activeTab === 4 && <BacktestPanel />}
-        {activeTab === 5 && <SettingsPanel />}
+        {activeTab === 5 && <EvaluationPanel onNavigate={setActiveTab} />}
+        {activeTab === 6 && <SettingsPanel />}
       </Box>
     </Box>
   );

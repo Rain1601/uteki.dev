@@ -18,9 +18,10 @@ import {
   Logout as LogoutIcon,
   Login as LoginIcon,
   Person as PersonIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../hooks/useAuth';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 interface UserMenuProps {
   collapsed?: boolean;
@@ -85,35 +86,61 @@ export default function UserMenu({ collapsed = false }: UserMenuProps) {
   return (
     <>
       <Box
-        onClick={handleClick}
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 1,
-          cursor: 'pointer',
-          p: 1,
-          borderRadius: 1,
-          '&:hover': {
-            bgcolor: 'action.hover',
-          },
+          gap: 0.5,
         }}
       >
-        <Avatar
-          src={user?.avatar || undefined}
-          alt={user?.name || 'User'}
-          sx={{ width: 32, height: 32 }}
+        <Box
+          onClick={handleClick}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            cursor: 'pointer',
+            p: 1,
+            borderRadius: 1,
+            flex: 1,
+            overflow: 'hidden',
+            '&:hover': {
+              bgcolor: 'action.hover',
+            },
+          }}
         >
-          {user?.name?.[0] || <PersonIcon />}
-        </Avatar>
+          <Avatar
+            src={user?.avatar || undefined}
+            alt={user?.name || 'User'}
+            sx={{ width: 32, height: 32 }}
+          >
+            {user?.name?.[0] || <PersonIcon />}
+          </Avatar>
+          {!collapsed && (
+            <Box sx={{ overflow: 'hidden', flex: 1 }}>
+              <Typography variant="body2" noWrap>
+                {user?.name || '用户'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>
+                {user?.email || ''}
+              </Typography>
+            </Box>
+          )}
+        </Box>
         {!collapsed && (
-          <Box sx={{ overflow: 'hidden', flex: 1 }}>
-            <Typography variant="body2" noWrap>
-              {user?.name || '用户'}
-            </Typography>
-            <Typography variant="caption" color="text.secondary" noWrap>
-              {user?.email || ''}
-            </Typography>
-          </Box>
+          <IconButton
+            component={Link}
+            to="/admin"
+            size="small"
+            sx={{
+              color: 'text.secondary',
+              '&:hover': {
+                color: 'primary.main',
+                bgcolor: 'action.hover',
+              },
+            }}
+          >
+            <SettingsIcon fontSize="small" />
+          </IconButton>
         )}
       </Box>
 

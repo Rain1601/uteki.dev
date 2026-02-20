@@ -16,8 +16,6 @@ import {
 } from '@mui/material';
 import {
   Menu as MenuIcon,
-  Dashboard as DashboardIcon,
-  Settings as SettingsIcon,
   TrendingUp as TrendingUpIcon,
   Assessment as AssessmentIcon,
   SmartToy as SmartToyIcon,
@@ -55,8 +53,6 @@ const menuItems: MenuCategory[] = [
   {
     category: 'MAIN',
     items: [
-      { text: '演示页面', icon: <DashboardIcon />, path: '/' },
-      { text: 'Admin 管理', icon: <SettingsIcon />, path: '/admin' },
       { text: 'AI Agent', icon: <SmartToyIcon />, path: '/agent' },
       { text: '新闻时间线', icon: <ArticleIcon />, path: '/news-timeline' },
     ],

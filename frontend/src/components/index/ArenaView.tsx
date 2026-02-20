@@ -37,13 +37,15 @@ import {
   fetchAccountSummary,
   fetchAgentConfig,
   saveAgentConfig,
+  fetchModelConfig,
+  ModelConfig,
 } from '../../api/index';
 import { ModelLogo } from './ModelLogos';
 import ArenaTimelineChart from './ArenaTimelineChart';
 import AllocationBarChart from './AllocationBarChart';
 
-// 当前已配置的模型列表（用于生成占位卡片）
-const KNOWN_MODELS = [
+// 硬编码 fallback（DB 无配置时使用）
+const DEFAULT_MODELS = [
   { provider: 'anthropic', name: 'claude-sonnet-4-20250514' },
   { provider: 'openai', name: 'gpt-4o' },
   { provider: 'deepseek', name: 'deepseek-chat' },
@@ -102,6 +104,9 @@ export default function ArenaView() {
   const [budgetInput, setBudgetInput] = useState<string>('1000');
   const [budgetSaving, setBudgetSaving] = useState(false);
 
+  // Dynamic model list from DB config
+  const [knownModels, setKnownModels] = useState(DEFAULT_MODELS);
+
   // Run controls
   const [running, setRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -133,7 +138,7 @@ export default function ArenaView() {
 
   useEffect(() => { loadTimeline(); }, [loadTimeline]);
 
-  // Load account summary & agent config
+  // Load account summary, agent config, and model config
   useEffect(() => {
     fetchAccountSummary().then((res) => {
       if (res.success && res.data) setAccount(res.data);
@@ -142,6 +147,14 @@ export default function ArenaView() {
       if (res.success && res.data?.budget != null) {
         setAgentBudget(res.data.budget);
         setBudgetInput(String(res.data.budget));
+      }
+    }).catch(() => {});
+    fetchModelConfig().then((res) => {
+      if (res.success && res.data && res.data.length > 0) {
+        const enabled = res.data.filter((m: ModelConfig) => m.enabled);
+        if (enabled.length > 0) {
+          setKnownModels(enabled.map((m: ModelConfig) => ({ provider: m.provider, name: m.model })));
+        }
       }
     }).catch(() => {});
   }, []);
@@ -306,7 +319,7 @@ export default function ArenaView() {
     setFinalDecision(null);
     setSelectedModels([]);
 
-    const models = KNOWN_MODELS
+    const models = knownModels
       .map(m => ({ provider: m.provider, model: m.name }));
 
     const { cancel } = runArenaStream(
@@ -314,7 +327,7 @@ export default function ArenaView() {
       handleProgressEvent,
     );
     cancelRef.current = cancel;
-  }, [agentBudget, handleProgressEvent]);
+  }, [agentBudget, knownModels, handleProgressEvent]);
 
   const hasData = timeline.length > 0;
 
@@ -462,7 +475,7 @@ export default function ArenaView() {
               )}
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {KNOWN_MODELS.map((m) => {
+                {knownModels.map((m) => {
                   const key = `${m.provider}:${m.name}`;
                   const progress = modelProgress[key];
                   return (
@@ -519,7 +532,7 @@ export default function ArenaView() {
 
               {detailLoading && selectedModels.length === 0 ? (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {KNOWN_MODELS.map((m) => (
+                  {knownModels.map((m) => (
                     <ProgressModelCard
                       key={m.provider}
                       provider={m.provider}
@@ -579,6 +592,8 @@ export default function ArenaView() {
                               isDark={isDark}
                               voteSummary={finalDecision?.vote_summary?.[selectedDetail.id]}
                               isWinner={finalDecision?.winner_model_io_id === selectedDetail.id}
+                              votes={votesState[0]}
+                              allModels={selectedModels}
                             />
                           </Box>
                         )}
@@ -1019,6 +1034,86 @@ function RawOutputSection({ raw, theme }: { raw: string; theme: any }) {
   );
 }
 
+/* ── Voting Details (inside expanded model card) ── */
+function VotingDetails({
+  modelId,
+  votes,
+  allModels,
+  theme,
+  isDark,
+}: {
+  modelId: string;
+  votes: ArenaVote[];
+  allModels: ModelIOSummary[];
+  theme: any;
+  isDark: boolean;
+}) {
+  const modelMap = new Map(allModels.map(m => [m.id, m]));
+
+  // Votes where this model is the TARGET (received votes)
+  const receivedVotes = votes.filter(v => v.target_model_io_id === modelId);
+  // Votes where this model is the VOTER (cast votes)
+  const castVotes = votes.filter(v => v.voter_model_io_id === modelId);
+
+  if (receivedVotes.length === 0 && castVotes.length === 0) return null;
+
+  const renderVoteRow = (vote: ArenaVote, resolveId: string) => {
+    const resolved = modelMap.get(resolveId);
+    const isApprove = vote.vote_type === 'approve';
+    return (
+      <Box key={vote.id} sx={{ mb: 1, pl: 0.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.3 }}>
+          {resolved && <ModelLogo provider={resolved.model_provider} size={14} isDark={isDark} />}
+          <Typography sx={{ fontSize: 11, fontWeight: 600, color: theme.text.primary }}>
+            {resolved?.model_name || resolveId.slice(0, 8)}
+          </Typography>
+          <Chip
+            label={vote.vote_type}
+            size="small"
+            sx={{
+              fontSize: 9, height: 16, fontWeight: 600,
+              bgcolor: isApprove ? 'rgba(76,175,80,0.12)' : 'rgba(244,67,54,0.12)',
+              color: isApprove ? '#4caf50' : '#f44336',
+            }}
+          />
+        </Box>
+        {vote.reasoning && (
+          <Typography sx={{
+            fontSize: 10, color: theme.text.muted, lineHeight: 1.5,
+            pl: 2.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {vote.reasoning}
+          </Typography>
+        )}
+      </Box>
+    );
+  };
+
+  return (
+    <Box sx={{ mb: 1 }}>
+      {/* Received votes */}
+      {receivedVotes.length > 0 && (
+        <Box sx={{ mb: 1 }}>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.5 }}>
+            Received Votes ({receivedVotes.filter(v => v.vote_type === 'approve').length} approve / {receivedVotes.filter(v => v.vote_type === 'reject').length} reject)
+          </Typography>
+          {receivedVotes.map(v => renderVoteRow(v, v.voter_model_io_id))}
+        </Box>
+      )}
+
+      {/* Cast votes */}
+      {castVotes.length > 0 && (
+        <Box>
+          <Typography sx={{ fontSize: 10, color: theme.text.muted, fontWeight: 600, mb: 0.5 }}>
+            Cast Votes
+          </Typography>
+          {castVotes.map(v => renderVoteRow(v, v.target_model_io_id))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 /* ── Result Model Card ── */
 function ModelCard({
   model,
@@ -1027,6 +1122,8 @@ function ModelCard({
   isDark,
   voteSummary,
   isWinner,
+  votes,
+  allModels,
 }: {
   model: ModelIOSummary;
   harnessId: string;
@@ -1034,6 +1131,8 @@ function ModelCard({
   isDark: boolean;
   voteSummary?: { approve: number; reject: number; net: number };
   isWinner?: boolean;
+  votes?: ArenaVote[];
+  allModels?: ModelIOSummary[];
 }) {
   const { showToast } = useToast();
   const [expanded, setExpanded] = useState(false);
@@ -1248,6 +1347,17 @@ function ModelCard({
                 data={detail.output_structured || structured}
                 theme={theme}
               />
+
+              {/* Voting details */}
+              {votes && votes.length > 0 && allModels && (
+                <VotingDetails
+                  modelId={model.id}
+                  votes={votes}
+                  allModels={allModels}
+                  theme={theme}
+                  isDark={isDark}
+                />
+              )}
 
               {/* Raw output — collapsible */}
               {detail.output_raw && (

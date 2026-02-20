@@ -80,15 +80,25 @@ class AgentBacktestService:
             return {"error": f"Invalid agent_key format: {agent_key}"}
         provider, model = parts
 
-        # 查找 API key
-        from uteki.domains.index.services.arena_service import ARENA_MODELS
+        # 查找 API key: DB config first, then ARENA_MODELS fallback
+        from uteki.domains.index.services.arena_service import load_models_from_db, ARENA_MODELS
         model_config = None
-        for m in ARENA_MODELS:
+
+        # Try DB config
+        db_models = await load_models_from_db(session)
+        for m in db_models:
             if m["provider"] == provider and m["model"] == model:
-                api_key = getattr(settings, m["api_key_attr"], None)
-                if api_key:
-                    model_config = {**m, "api_key": api_key}
+                model_config = m
                 break
+
+        # Fallback to ARENA_MODELS
+        if not model_config:
+            for m in ARENA_MODELS:
+                if m["provider"] == provider and m["model"] == model:
+                    api_key = getattr(settings, m.get("api_key_attr", ""), None)
+                    if api_key:
+                        model_config = {**m, "api_key": api_key}
+                    break
 
         if not model_config:
             return {"error": f"Model not available: {agent_key}"}

@@ -62,7 +62,7 @@ class ReflectionService:
         reflection_prompt = self._build_reflection_prompt(decision_summaries)
 
         # 调用 LLM 生成反思
-        adapter = self._get_adapter()
+        adapter = await self._get_adapter(session)
         if not adapter:
             # 无 LLM 可用，生成统计摘要
             return await self._generate_statistical_reflection(
@@ -194,10 +194,42 @@ class ReflectionService:
                     break
         return experiences[:5]  # 最多 5 条
 
-    def _get_adapter(self):
+    async def _get_adapter(self, session: AsyncSession):
         from uteki.domains.agent.llm_adapter import (
             LLMAdapterFactory, LLMProvider, LLMConfig
         )
+        from uteki.domains.index.services.arena_service import load_models_from_db
+
+        provider_map = {
+            "anthropic": LLMProvider.ANTHROPIC,
+            "openai": LLMProvider.OPENAI,
+            "deepseek": LLMProvider.DEEPSEEK,
+            "google": LLMProvider.GOOGLE,
+            "qwen": LLMProvider.QWEN,
+            "minimax": LLMProvider.MINIMAX,
+        }
+
+        # Try DB config first
+        db_models = await load_models_from_db(session)
+        if db_models:
+            m = db_models[0]
+            provider = provider_map.get(m["provider"])
+            if provider:
+                try:
+                    base_url = m.get("base_url") or (
+                        settings.google_api_base_url if m["provider"] == "google" else None
+                    )
+                    return LLMAdapterFactory.create_adapter(
+                        provider=provider,
+                        api_key=m["api_key"],
+                        model=m["model"],
+                        config=LLMConfig(temperature=0.5, max_tokens=2048),
+                        base_url=base_url,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create adapter from DB config: {e}")
+
+        # Fallback to env keys
         if settings.anthropic_api_key:
             return LLMAdapterFactory.create_adapter(
                 provider=LLMProvider.ANTHROPIC,

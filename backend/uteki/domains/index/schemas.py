@@ -217,6 +217,22 @@ class AgentConfigUpdateRequest(BaseModel):
     config: Dict[str, Any] = Field(..., description="Agent configuration key-values")
 
 
+# ── Model Config ──
+
+class ModelConfigEntry(BaseModel):
+    provider: str = Field(..., description="LLM provider, e.g. anthropic / openai / deepseek")
+    model: str = Field(..., description="Model name, e.g. claude-sonnet-4-20250514")
+    api_key: str = Field(..., description="API key for this provider")
+    base_url: Optional[str] = Field(None, description="Custom base URL (required for some providers)")
+    temperature: float = Field(0, ge=0, le=2, description="Temperature 0-2")
+    max_tokens: int = Field(4096, gt=0, description="Max output tokens")
+    enabled: bool = Field(True, description="Whether this model participates in Arena")
+
+
+class ModelConfigUpdateRequest(BaseModel):
+    models: List[ModelConfigEntry] = Field(..., description="Full list of model configurations")
+
+
 # ── Generic ──
 
 class IndexResponse(BaseModel):

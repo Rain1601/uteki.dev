@@ -1,16 +1,19 @@
 """FMP Economic Calendar Service - 从 Financial Modeling Prep 获取经济日历数据"""
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uteki.common.config import settings
 from uteki.domains.macro.models import EconomicEvent
 
 logger = logging.getLogger(__name__)
+
+# DB 缓存 TTL（秒）— FMP 数据在 DB 中的有效期
+CACHE_TTL_SECONDS = 3600  # 1 小时
 
 
 # FOMC 会议日程表（手动维护）
@@ -208,15 +211,85 @@ class FMPCalendarService:
 
         return meetings
 
+    async def _save_events_to_db(self, session: AsyncSession, events: List[Dict]) -> int:
+        """将 FMP 事件 upsert 到 economic_events 表"""
+        saved = 0
+        now = datetime.utcnow()
+        for event in events:
+            try:
+                start_date = event.get("start_date")
+                if isinstance(start_date, str):
+                    start_date = datetime.fromisoformat(start_date)
+
+                db_event = EconomicEvent(
+                    id=event["id"],
+                    event_type=event.get("event_type", "economic_data"),
+                    title=event.get("title", ""),
+                    start_date=start_date,
+                    status=event.get("status", "upcoming"),
+                    importance=event.get("importance", "medium"),
+                    actual_value=event.get("actual_value"),
+                    expected_value=event.get("expected_value"),
+                    previous_value=event.get("previous_value"),
+                    source="fmp",
+                )
+                db_event.updated_at = now
+                await session.merge(db_event)
+                saved += 1
+            except Exception as e:
+                logger.warning(f"保存事件失败: {event.get('id')}, {e}")
+                continue
+        await session.commit()
+        logger.info(f"已保存 {saved} 条 FMP 事件到 DB")
+        return saved
+
+    async def _load_events_from_db(
+        self,
+        session: AsyncSession,
+        year: int,
+        month: int,
+        event_type: Optional[str] = None,
+    ) -> Tuple[List[Dict], Optional[datetime]]:
+        """从 DB 加载 FMP 缓存事件，返回 (events, max_updated_at)"""
+        start_date = datetime(year, month, 1)
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1)
+        else:
+            end_date = datetime(year, month + 1, 1)
+
+        query = select(EconomicEvent).where(
+            EconomicEvent.source == "fmp",
+            EconomicEvent.start_date >= start_date,
+            EconomicEvent.start_date < end_date,
+        )
+
+        if event_type and event_type != "all":
+            if "," in event_type:
+                types = event_type.split(",")
+                query = query.where(EconomicEvent.event_type.in_(types))
+            else:
+                query = query.where(EconomicEvent.event_type == event_type)
+
+        result = await session.execute(query)
+        rows = result.scalars().all()
+
+        if not rows:
+            return [], None
+
+        events = [row.to_dict() for row in rows]
+        max_updated = max(row.updated_at for row in rows if row.updated_at)
+        return events, max_updated
+
     async def get_monthly_events_enriched(
         self,
         session: AsyncSession,
         year: int,
         month: int,
-        event_type: Optional[str] = None
+        event_type: Optional[str] = None,
+        force_refresh: bool = False,
     ) -> Dict:
         """
-        获取指定月份的所有经济事件（包含 FMP 数据增强）
+        获取指定月份的所有经济事件（DB 缓存优先 + FMP 数据增强）
 
         Returns:
             {"success": bool, "data": Dict[str, List], "fmp_status": str}
@@ -228,17 +301,51 @@ class FMPCalendarService:
             else:
                 end_date = datetime(year, month + 1, 1)
 
-            # 1. 获取 FOMC 会议
+            # 1. 获取 FOMC 会议（内存数据，无延迟）
             fomc_meetings = self.get_fomc_meetings(year, month)
 
-            # 2. 获取 FMP 经济数据
-            fmp_result = await self.fetch_economic_calendar(
-                start_date.strftime("%Y-%m-%d"),
-                end_date.strftime("%Y-%m-%d")
+            # 2. DB-first 缓存策略获取 FMP 事件
+            fmp_events: List[Dict] = []
+            fmp_status = "failed"
+            fmp_error = None
+
+            # 先查 DB 缓存（event_type 过滤在 DB 层做，FOMC 过滤在合并后做）
+            db_events, max_updated = await self._load_events_from_db(
+                session, year, month
             )
 
-            fmp_events = fmp_result.get("data", []) if fmp_result["success"] else []
-            fmp_status = "success" if fmp_result["success"] else "failed"
+            cache_fresh = (
+                max_updated is not None
+                and (datetime.utcnow() - max_updated).total_seconds() < CACHE_TTL_SECONDS
+            )
+
+            if db_events and cache_fresh and not force_refresh:
+                # DB 缓存有效，直接使用
+                fmp_events = db_events
+                fmp_status = "cached"
+                logger.info(f"使用 DB 缓存: {year}-{month:02d}, {len(fmp_events)} 条事件")
+            else:
+                # 缓存过期或不存在，调用 FMP API
+                fmp_result = await self.fetch_economic_calendar(
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d")
+                )
+
+                if fmp_result["success"]:
+                    fmp_events = fmp_result.get("data", [])
+                    fmp_status = "success"
+                    # 写入 DB 缓存
+                    await self._save_events_to_db(session, fmp_events)
+                elif db_events:
+                    # FMP 失败但有旧缓存，使用旧数据
+                    fmp_events = db_events
+                    fmp_status = "cached_stale"
+                    fmp_error = fmp_result.get("error")
+                    logger.warning(f"FMP 失败，使用过期缓存: {fmp_error}")
+                else:
+                    # FMP 失败且无缓存
+                    fmp_status = "failed"
+                    fmp_error = fmp_result.get("error")
 
             # 3. 合并所有事件
             all_events = fomc_meetings + fmp_events
@@ -276,7 +383,7 @@ class FMPCalendarService:
                 "success": True,
                 "data": events_by_date,
                 "fmp_status": fmp_status,
-                "fmp_error": fmp_result.get("error") if not fmp_result["success"] else None,
+                "fmp_error": fmp_error,
                 "enriched_count": len(fmp_events)
             }
 
@@ -289,20 +396,37 @@ class FMPCalendarService:
             }
 
     async def get_statistics(self, session: AsyncSession) -> Dict:
-        """获取事件统计信息"""
+        """获取事件统计信息（优先从 DB 聚合）"""
         try:
-            # 简单统计：FOMC 会议数和当前年份
             current_year = datetime.now().year
             fomc_count = len([m for m in FOMC_MEETINGS_2024_2025
                             if datetime.strptime(m["date"], "%Y-%m-%d").year == current_year])
 
+            # 尝试从 DB 聚合 FMP 事件统计
+            query = (
+                select(EconomicEvent.event_type, func.count())
+                .where(
+                    EconomicEvent.source == "fmp",
+                    EconomicEvent.start_date >= datetime(current_year, 1, 1),
+                    EconomicEvent.start_date < datetime(current_year + 1, 1, 1),
+                )
+                .group_by(EconomicEvent.event_type)
+            )
+            result = await session.execute(query)
+            db_counts = {row[0]: row[1] for row in result.all()}
+
+            if db_counts:
+                by_type = {"fomc": fomc_count, **db_counts}
+                total = fomc_count + sum(db_counts.values())
+            else:
+                by_type = {"fomc": fomc_count}
+                total = fomc_count
+
             return {
                 "success": True,
                 "data": {
-                    "total": fomc_count,
-                    "by_type": {
-                        "fomc": fomc_count,
-                    }
+                    "total": total,
+                    "by_type": by_type,
                 }
             }
         except Exception as e:

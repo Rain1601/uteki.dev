@@ -75,7 +75,9 @@ export default function WatchlistPanel() {
             const symbols = synced.map((s: any) => s.symbol).join(', ');
             const totalRecords = synced.reduce((sum: number, s: any) => sum + (s.records || 0), 0);
             setSyncResult(`Synced ${symbols} (+${totalRecords} records)`);
-            showToast(`Data synced: ${symbols}`, 'success');
+            if (totalRecords > 0) {
+              showToast(`Data synced: ${symbols} (+${totalRecords} records)`, 'success');
+            }
             load(); // Reload watchlist to reflect fresh data
           }
           if (failed.length > 0) {

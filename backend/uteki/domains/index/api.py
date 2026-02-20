@@ -18,6 +18,7 @@ from uteki.domains.index.schemas import (
     DecisionSkipRequest, DecisionRejectRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest,
     AgentChatRequest, AgentConfigUpdateRequest,
+    ModelConfigUpdateRequest,
     IndexResponse,
 )
 from uteki.domains.index.services.data_service import DataService, get_data_service
@@ -27,6 +28,7 @@ from uteki.domains.index.services.memory_service import MemoryService, get_memor
 from uteki.domains.index.services.decision_service import DecisionService, get_decision_service
 from uteki.domains.index.services.arena_service import ArenaService, get_arena_service
 from uteki.domains.index.services.score_service import ScoreService, get_score_service
+from uteki.domains.index.services.evaluation_service import EvaluationService, get_evaluation_service
 from uteki.domains.index.services.scheduler_service import SchedulerService, get_scheduler_service
 from uteki.domains.index.services.harness_builder import HarnessBuilder
 
@@ -145,6 +147,7 @@ async def sync_data(
     from sqlalchemy import select, func
     from uteki.domains.index.models.index_price import IndexPrice
     from datetime import date, timedelta
+    from uteki.domains.index.services.market_calendar import is_trading_day
 
     query = select(Watchlist).where(Watchlist.is_active == True)
     result = await session.execute(query)
@@ -171,11 +174,11 @@ async def sync_data(
                 synced.append({"symbol": w.symbol, "action": "initial_load", "records": count})
                 continue
 
-            # Count missing trading days
+            # Count missing trading days (excluding weekends and US market holidays)
             days_behind = 0
             check = last_date + timedelta(days=1)
             while check < today:
-                if check.weekday() < 5:
+                if is_trading_day(check):
                     days_behind += 1
                 check += timedelta(days=1)
 
@@ -503,6 +506,93 @@ async def save_agent_config(
 
     await session.commit()
     return {"success": True, "data": request.config}
+
+
+# ══════════════════════════════════════════
+# Model Config
+# ══════════════════════════════════════════
+
+@router.get("/model-config", summary="获取 Arena 模型配置")
+async def get_model_config(
+    session: AsyncSession = Depends(get_db_session),
+    memory_service: MemoryService = Depends(get_memory_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """从 Memory 读取 model_config 配置列表，DB 无配置时返回 env 中已配置的模型"""
+    from uteki.common.config import settings as app_settings
+    from uteki.domains.index.services.arena_service import ARENA_MODELS
+
+    memories = await memory_service.read(
+        _get_user_id(user), session, category="model_config", limit=1, agent_key="system"
+    )
+    if memories:
+        try:
+            models = json.loads(memories[0].get("content", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            models = []
+        if models:
+            return {"success": True, "data": models}
+
+    # DB 为空时，从 ARENA_MODELS + env keys 构建默认配置
+    # 让用户看到当前实际可用的模型
+    defaults = []
+    base_url_map = {
+        "deepseek": "https://api.deepseek.com",
+        "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "minimax": "https://api.minimax.chat/v1",
+    }
+    for m in ARENA_MODELS:
+        api_key = getattr(app_settings, m.get("api_key_attr", ""), None)
+        if api_key:
+            defaults.append({
+                "provider": m["provider"],
+                "model": m["model"],
+                "api_key": api_key,
+                "base_url": base_url_map.get(m["provider"]),
+                "temperature": 0,
+                "max_tokens": 4096,
+                "enabled": True,
+            })
+    return {"success": True, "data": defaults}
+
+
+@router.put("/model-config", summary="保存 Arena 模型配置")
+async def save_model_config(
+    request: ModelConfigUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    memory_service: MemoryService = Depends(get_memory_service),
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """保存 model_config 到 Memory（覆盖式）"""
+    from uteki.domains.index.models.agent_memory import AgentMemory
+
+    user_id = _get_user_id(user)
+
+    query = select(AgentMemory).where(
+        and_(
+            AgentMemory.user_id == user_id,
+            AgentMemory.category == "model_config",
+            AgentMemory.agent_key == "system",
+        )
+    ).limit(1)
+    result = await session.execute(query)
+    existing = result.scalar_one_or_none()
+
+    models_json = json.dumps([m.model_dump() for m in request.models])
+
+    if existing:
+        existing.content = models_json
+    else:
+        mem = AgentMemory(
+            user_id=user_id,
+            category="model_config",
+            content=models_json,
+            agent_key="system",
+        )
+        session.add(mem)
+
+    await session.commit()
+    return {"success": True, "data": [m.model_dump() for m in request.models]}
 
 
 # ══════════════════════════════════════════
@@ -878,6 +968,57 @@ async def get_leaderboard(
 ):
     leaderboard = await score_service.get_leaderboard(session, prompt_version_id=prompt_version_id)
     return {"success": True, "data": leaderboard}
+
+
+# ══════════════════════════════════════════
+# Evaluation
+# ══════════════════════════════════════════
+
+@router.get("/evaluation/overview", summary="Evaluation 概览 KPI")
+async def get_evaluation_overview(
+    session: AsyncSession = Depends(get_db_session),
+    eval_service: EvaluationService = Depends(get_evaluation_service),
+):
+    data = await eval_service.get_overview(session)
+    return {"success": True, "data": data}
+
+
+@router.get("/evaluation/voting-matrix", summary="投票热力图矩阵")
+async def get_evaluation_voting_matrix(
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    eval_service: EvaluationService = Depends(get_evaluation_service),
+):
+    data = await eval_service.get_voting_matrix(session, limit=limit)
+    return {"success": True, "data": data}
+
+
+@router.get("/evaluation/performance-trend", summary="模型性能趋势")
+async def get_evaluation_performance_trend(
+    days: int = Query(30, ge=1, le=365),
+    session: AsyncSession = Depends(get_db_session),
+    eval_service: EvaluationService = Depends(get_evaluation_service),
+):
+    data = await eval_service.get_performance_trend(session, days=days)
+    return {"success": True, "data": data}
+
+
+@router.get("/evaluation/cost-analysis", summary="模型成本分析")
+async def get_evaluation_cost_analysis(
+    session: AsyncSession = Depends(get_db_session),
+    eval_service: EvaluationService = Depends(get_evaluation_service),
+):
+    data = await eval_service.get_cost_analysis(session)
+    return {"success": True, "data": data}
+
+
+@router.get("/evaluation/counterfactual-summary", summary="反事实对比概览")
+async def get_evaluation_counterfactual_summary(
+    session: AsyncSession = Depends(get_db_session),
+    eval_service: EvaluationService = Depends(get_evaluation_service),
+):
+    data = await eval_service.get_counterfactual_summary(session)
+    return {"success": True, "data": data}
 
 
 # ══════════════════════════════════════════
