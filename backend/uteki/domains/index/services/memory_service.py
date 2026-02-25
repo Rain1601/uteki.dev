@@ -73,9 +73,10 @@ class MemoryService:
         user_id: str,
         category: Optional[str] = None,
         limit: int = 20,
+        offset: int = 0,
         agent_key: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """读取记忆，按 category + agent_key 过滤 + 时间倒序
+        """读取记忆，按 category + agent_key 过滤 + 时间倒序（分页）
 
         Args:
             agent_key: None=不过滤, "shared"=仅共享, 具体key=仅该agent
@@ -86,7 +87,9 @@ class MemoryService:
         if agent_key is not None:
             filters["agent_key"] = agent_key
 
-        return self.repo.select_data(eq=filters, order="created_at.desc", limit=limit)
+        return self.repo.select_data(
+            eq=filters, order="created_at.desc", limit=limit, offset=offset,
+        )
 
     async def get_summary(
         self,

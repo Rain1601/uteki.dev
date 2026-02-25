@@ -318,14 +318,17 @@ async def preview_user_prompt(
 # Memory
 # ══════════════════════════════════════════
 
-@router.get("/memory", summary="获取 Agent 记忆")
+@router.get("/memory", summary="获取 Agent 记忆（分页）")
 async def get_memory(
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     memory_service: MemoryService = Depends(get_memory_service),
     user: dict = Depends(get_current_user),
 ):
-    memories = await memory_service.read(_get_user_id(user), category=category, limit=limit)
+    memories = await memory_service.read(
+        _get_user_id(user), category=category, limit=limit, offset=offset,
+    )
     return {"success": True, "data": memories}
 
 

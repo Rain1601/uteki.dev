@@ -352,10 +352,11 @@ export const previewUserPrompt = () =>
 
 // ── Memory ──
 
-export const fetchMemory = (category?: string, limit?: number) => {
+export const fetchMemory = (category?: string, limit?: number, offset?: number) => {
   const params = new URLSearchParams();
   if (category) params.set('category', category);
   if (limit) params.set('limit', String(limit));
+  if (offset) params.set('offset', String(offset));
   const qs = params.toString();
   return get<IndexResponse<MemoryItem[]>>(`/api/index/memory${qs ? `?${qs}` : ''}`);
 };

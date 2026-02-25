@@ -31,9 +31,13 @@ const CATEGORIES = [
   { key: 'arena_vote_reasoning', label: 'Vote Reasoning' },
 ];
 
+const PAGE_SIZE = 20;
+
 export default function MemoryTab({ theme, isDark, showToast }: Props) {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [category, setCategory] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -43,14 +47,30 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setHasMore(true);
     try {
-      const res = await fetchMemory(category || undefined, 100);
-      if (res.success && res.data) setMemories(res.data);
+      const res = await fetchMemory(category || undefined, PAGE_SIZE, 0);
+      if (res.success && res.data) {
+        setMemories(res.data);
+        setHasMore(res.data.length >= PAGE_SIZE);
+      }
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, [category]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const res = await fetchMemory(category || undefined, PAGE_SIZE, memories.length);
+      if (res.success && res.data) {
+        setMemories((prev) => [...prev, ...res.data]);
+        setHasMore(res.data.length >= PAGE_SIZE);
+      }
+    } catch { /* ignore */ }
+    finally { setLoadingMore(false); }
+  };
 
   const handleDelete = async (id: string) => {
     try {
@@ -191,55 +211,69 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
           No memories
         </Typography>
       ) : (
-        memories.map((m) => {
-          const isExpanded = expandedId === m.id;
-          const preview = m.content.length > 120 ? m.content.slice(0, 120) + '...' : m.content;
+        <>
+          {memories.map((m) => {
+            const isExpanded = expandedId === m.id;
+            const preview = m.content.length > 120 ? m.content.slice(0, 120) + '...' : m.content;
 
-          return (
-            <Box
-              key={m.id}
-              sx={{
-                py: 1, px: 0.5,
-                borderBottom: `1px solid ${theme.border.subtle}`,
-                cursor: 'pointer',
-                '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' },
-              }}
-              onClick={() => setExpandedId(isExpanded ? null : m.id)}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Chip
-                  label={m.category}
-                  size="small"
-                  sx={{
-                    fontSize: 10, height: 20, fontWeight: 600,
-                    bgcolor: `${categoryColor(m.category)}15`,
-                    color: categoryColor(m.category),
-                  }}
-                />
-                {(m as any).agent_key && (m as any).agent_key !== 'shared' && (
-                  <Typography sx={{ fontSize: 10, color: theme.text.muted, fontFamily: 'monospace' }}>
-                    {(m as any).agent_key}
-                  </Typography>
-                )}
-                <Typography sx={{ fontSize: 12, color: theme.text.secondary, flex: 1 }} noWrap={!isExpanded}>
-                  {isExpanded ? m.content : preview}
-                </Typography>
-                <Typography sx={{ fontSize: 10, color: theme.text.muted, flexShrink: 0 }}>
-                  {m.created_at ? new Date(m.created_at).toLocaleDateString() : ''}
-                </Typography>
-                <Tooltip title="Delete">
-                  <IconButton
+            return (
+              <Box
+                key={m.id}
+                sx={{
+                  py: 1, px: 0.5,
+                  borderBottom: `1px solid ${theme.border.subtle}`,
+                  cursor: 'pointer',
+                  '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' },
+                }}
+                onClick={() => setExpandedId(isExpanded ? null : m.id)}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Chip
+                    label={m.category}
                     size="small"
-                    onClick={(e) => { e.stopPropagation(); handleDelete(m.id); }}
-                    sx={{ color: theme.text.muted, p: 0.5, '&:hover': { color: '#f44336' } }}
-                  >
-                    <DeleteIcon sx={{ fontSize: 14 }} />
-                  </IconButton>
-                </Tooltip>
+                    sx={{
+                      fontSize: 10, height: 20, fontWeight: 600,
+                      bgcolor: `${categoryColor(m.category)}15`,
+                      color: categoryColor(m.category),
+                    }}
+                  />
+                  {(m as any).agent_key && (m as any).agent_key !== 'shared' && (
+                    <Typography sx={{ fontSize: 10, color: theme.text.muted, fontFamily: 'monospace' }}>
+                      {(m as any).agent_key}
+                    </Typography>
+                  )}
+                  <Typography sx={{ fontSize: 12, color: theme.text.secondary, flex: 1 }} noWrap={!isExpanded}>
+                    {isExpanded ? m.content : preview}
+                  </Typography>
+                  <Typography sx={{ fontSize: 10, color: theme.text.muted, flexShrink: 0 }}>
+                    {m.created_at ? new Date(m.created_at).toLocaleDateString() : ''}
+                  </Typography>
+                  <Tooltip title="Delete">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => { e.stopPropagation(); handleDelete(m.id); }}
+                      sx={{ color: theme.text.muted, p: 0.5, '&:hover': { color: '#f44336' } }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
               </Box>
+            );
+          })}
+          {hasMore && (
+            <Box sx={{ textAlign: 'center', py: 1.5 }}>
+              <Button
+                size="small"
+                onClick={loadMore}
+                disabled={loadingMore}
+                sx={{ textTransform: 'none', fontSize: 12, color: theme.text.muted }}
+              >
+                {loadingMore ? <LoadingDots text="Loading" fontSize={11} /> : 'Load more'}
+              </Button>
             </Box>
-          );
-        })
+          )}
+        </>
       )}
     </Box>
   );
