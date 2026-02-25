@@ -101,11 +101,10 @@ class NewsScheduler:
     async def _translate_pending(self, source: str = 'cnbc_jeff_cox'):
         """翻译所有待处理的文章"""
         try:
-            async with db_manager.get_postgres_session() as session:
-                svc = get_translation_service()
-                stats = await svc.translate_pending_articles(session, limit=10, source_filter=source)
-                if stats['success'] > 0 or stats['failed'] > 0:
-                    logger.info(f"Auto-translate [{source}]: {stats['success']} ok, {stats['failed']} failed")
+            svc = get_translation_service()
+            stats = await svc.translate_pending_articles(limit=10, source_filter=source)
+            if stats['success'] > 0 or stats['failed'] > 0:
+                logger.info(f"Auto-translate [{source}]: {stats['success']} ok, {stats['failed']} failed")
         except Exception as e:
             logger.error(f"Auto-translate failed: {e}", exc_info=True)
 
@@ -115,30 +114,28 @@ class NewsScheduler:
             logger.info("Starting scheduled news scrape...")
             self._last_run = datetime.utcnow()
 
-            # 检查数据库是否可用
-            if not db_manager.postgres_available:
-                logger.warning("PostgreSQL not available, skipping news scrape")
+            # 检查 Supabase 是否可用
+            if not db_manager.supabase_available:
+                logger.warning("Supabase not available, skipping news scrape")
                 return
 
-            # 获取数据库会话
-            async with db_manager.get_postgres_session() as session:
-                try:
-                    service = get_jeff_cox_service()
-                    result = await service.collect_and_enrich(session, max_news=10)
-                    self._last_result = result
+            try:
+                service = get_jeff_cox_service()
+                result = await service.collect_and_enrich(max_news=10)
+                self._last_result = result
 
-                    if result.get('success'):
-                        logger.info(
-                            f"Scheduled scrape completed: "
-                            f"{result.get('new_articles_saved', 0)} new articles, "
-                            f"duration: {result.get('duration', 0):.2f}s"
-                        )
-                    else:
-                        logger.warning(f"Scheduled scrape failed: {result.get('error')}")
+                if result.get('success'):
+                    logger.info(
+                        f"Scheduled scrape completed: "
+                        f"{result.get('new_articles_saved', 0)} new articles, "
+                        f"duration: {result.get('duration', 0):.2f}s"
+                    )
+                else:
+                    logger.warning(f"Scheduled scrape failed: {result.get('error')}")
 
-                except Exception as e:
-                    logger.error(f"Error in scheduled scrape: {e}", exc_info=True)
-                    self._last_result = {'success': False, 'error': str(e)}
+            except Exception as e:
+                logger.error(f"Error in scheduled scrape: {e}", exc_info=True)
+                self._last_result = {'success': False, 'error': str(e)}
 
             # 采集后自动翻译待处理文章
             await self._translate_pending('cnbc_jeff_cox')
@@ -151,25 +148,24 @@ class NewsScheduler:
         try:
             logger.info("Starting daily deep news scrape...")
 
-            if not db_manager.postgres_available:
-                logger.warning("PostgreSQL not available, skipping deep scrape")
+            if not db_manager.supabase_available:
+                logger.warning("Supabase not available, skipping deep scrape")
                 return
 
-            async with db_manager.get_postgres_session() as session:
-                try:
-                    service = get_jeff_cox_service()
-                    result = await service.collect_and_enrich(session, max_news=30)
+            try:
+                service = get_jeff_cox_service()
+                result = await service.collect_and_enrich(max_news=30)
 
-                    if result.get('success'):
-                        logger.info(
-                            f"Daily deep scrape completed: "
-                            f"{result.get('new_articles_saved', 0)} new articles"
-                        )
-                    else:
-                        logger.warning(f"Daily deep scrape failed: {result.get('error')}")
+                if result.get('success'):
+                    logger.info(
+                        f"Daily deep scrape completed: "
+                        f"{result.get('new_articles_saved', 0)} new articles"
+                    )
+                else:
+                    logger.warning(f"Daily deep scrape failed: {result.get('error')}")
 
-                except Exception as e:
-                    logger.error(f"Error in daily deep scrape: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error in daily deep scrape: {e}", exc_info=True)
 
             # 采集后自动翻译待处理文章
             await self._translate_pending('cnbc_jeff_cox')
@@ -182,26 +178,25 @@ class NewsScheduler:
         try:
             logger.info("Starting scheduled Bloomberg news scrape...")
 
-            if not db_manager.postgres_available:
-                logger.warning("PostgreSQL not available, skipping Bloomberg scrape")
+            if not db_manager.supabase_available:
+                logger.warning("Supabase not available, skipping Bloomberg scrape")
                 return
 
-            async with db_manager.get_postgres_session() as session:
-                try:
-                    service = get_bloomberg_service()
-                    result = await service.collect_and_enrich(session, max_news=10)
+            try:
+                service = get_bloomberg_service()
+                result = await service.collect_and_enrich(max_news=10)
 
-                    if result.get('success'):
-                        logger.info(
-                            f"Bloomberg scheduled scrape completed: "
-                            f"{result.get('new_articles_saved', 0)} new articles, "
-                            f"duration: {result.get('duration', 0):.2f}s"
-                        )
-                    else:
-                        logger.warning(f"Bloomberg scheduled scrape failed: {result.get('error')}")
+                if result.get('success'):
+                    logger.info(
+                        f"Bloomberg scheduled scrape completed: "
+                        f"{result.get('new_articles_saved', 0)} new articles, "
+                        f"duration: {result.get('duration', 0):.2f}s"
+                    )
+                else:
+                    logger.warning(f"Bloomberg scheduled scrape failed: {result.get('error')}")
 
-                except Exception as e:
-                    logger.error(f"Error in Bloomberg scheduled scrape: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error in Bloomberg scheduled scrape: {e}", exc_info=True)
 
             # 采集后自动翻译待处理文章
             await self._translate_pending('bloomberg')
@@ -214,16 +209,13 @@ class NewsScheduler:
         try:
             logger.info(f"Manual scrape triggered (max_news={max_news})")
 
-            if not db_manager.postgres_available:
-                return {'success': False, 'error': 'Database not available'}
+            if not db_manager.supabase_available:
+                return {'success': False, 'error': 'Supabase not available'}
 
-            async with db_manager.get_postgres_session() as session:
-                service = get_jeff_cox_service()
-                result = await service.collect_and_enrich(session, max_news=max_news)
-                self._last_result = result
-                return result
-
-            return {'success': False, 'error': 'No database session available'}
+            service = get_jeff_cox_service()
+            result = await service.collect_and_enrich(max_news=max_news)
+            self._last_result = result
+            return result
 
         except Exception as e:
             logger.error(f"Manual scrape failed: {e}", exc_info=True)

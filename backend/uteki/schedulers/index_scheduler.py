@@ -80,30 +80,27 @@ class IndexScheduler:
         from uteki.domains.index.services.scheduler_service import get_scheduler_service
         sched_svc = get_scheduler_service()
 
-        async with db_manager.get_postgres_session() as session:
-            tasks = await sched_svc.list_tasks(session)
-            for t in tasks:
-                if t["name"] == TASK_NAME:
-                    return t
+        tasks = await sched_svc.list_tasks()
+        for t in tasks:
+            if t["name"] == TASK_NAME:
+                return t
 
-            # Seed
-            task = await sched_svc.create_task(
-                name=TASK_NAME,
-                cron_expression="0 5 * * *",
-                task_type="price_update",
-                session=session,
-                config={"validate_after_update": True, "enable_backfill": True},
-            )
-            logger.info(f"Seeded {TASK_NAME} schedule task: {task['id']}")
-            return task
+        # Seed
+        task = await sched_svc.create_task(
+            name=TASK_NAME,
+            cron_expression="0 5 * * *",
+            task_type="price_update",
+            config={"validate_after_update": True, "enable_backfill": True},
+        )
+        logger.info(f"Seeded {TASK_NAME} schedule task: {task['id']}")
+        return task
 
     async def _update_run_status(self, task_id: str, status: str):
         """更新 DB 中的 last_run_at 和 last_run_status"""
         from uteki.domains.index.services.scheduler_service import get_scheduler_service
         sched_svc = get_scheduler_service()
 
-        async with db_manager.get_postgres_session() as session:
-            await sched_svc.update_run_status(task_id, status, session)
+        await sched_svc.update_run_status(task_id, status)
 
     async def _is_already_run_today(self) -> bool:
         """检查今天是否已经执行过"""
@@ -164,36 +161,34 @@ class IndexScheduler:
             logger.info("Starting daily index price update...")
             self._last_run = datetime.now(timezone.utc)
 
-            async with db_manager.get_postgres_session() as session:
-                data_service = get_data_service()
-                results = await data_service.robust_update_all(
-                    session,
-                    validate=True,
-                    backfill=True,
+            data_service = get_data_service()
+            results = await data_service.robust_update_all(
+                validate=True,
+                backfill=True,
+            )
+
+            has_failures = len(results['failed']) > 0
+            status = "partial_failure" if has_failures else "success"
+
+            self._last_result = {
+                'success': not has_failures,
+                'total_records': results['total_records'],
+                'success_count': len(results['success']),
+                'failed': results['failed'],
+                'backfilled': len(results['backfilled']),
+                'anomalies': len(results['anomalies']),
+                'run_at': self._last_run.isoformat(),
+            }
+
+            if has_failures:
+                logger.warning(f"Daily price update partial failure: {results['failed']}")
+            else:
+                logger.info(
+                    f"Daily price update completed: "
+                    f"{results['total_records']} records, "
+                    f"{len(results['success'])} symbols OK, "
+                    f"{len(results['backfilled'])} backfilled"
                 )
-
-                has_failures = len(results['failed']) > 0
-                status = "partial_failure" if has_failures else "success"
-
-                self._last_result = {
-                    'success': not has_failures,
-                    'total_records': results['total_records'],
-                    'success_count': len(results['success']),
-                    'failed': results['failed'],
-                    'backfilled': len(results['backfilled']),
-                    'anomalies': len(results['anomalies']),
-                    'run_at': self._last_run.isoformat(),
-                }
-
-                if has_failures:
-                    logger.warning(f"Daily price update partial failure: {results['failed']}")
-                else:
-                    logger.info(
-                        f"Daily price update completed: "
-                        f"{results['total_records']} records, "
-                        f"{len(results['success'])} symbols OK, "
-                        f"{len(results['backfilled'])} backfilled"
-                    )
 
             # 更新 DB 运行状态
             if task:
