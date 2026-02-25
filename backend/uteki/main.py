@@ -217,6 +217,7 @@ from uteki.domains.news.analysis_api import router as news_analysis_router
 from uteki.domains.news.bloomberg_api import router as bloomberg_news_router
 from uteki.domains.macro.api import router as macro_router
 from uteki.domains.macro.fred_api import router as fred_router
+from uteki.domains.macro.dashboard_api import router as dashboard_router
 from uteki.domains.snb.api import router as snb_router
 from uteki.domains.index.api import router as index_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
@@ -233,6 +234,7 @@ app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["new
 app.include_router(bloomberg_news_router, prefix="/api/news", tags=["bloomberg-news"])
 app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
 app.include_router(fred_router, prefix="/api/macro/fred", tags=["fred"])
+app.include_router(dashboard_router, prefix="/api/macro/dashboard", tags=["market-dashboard"])
 app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
 app.include_router(index_router, prefix="/api/index", tags=["index"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现

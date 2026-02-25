@@ -8,6 +8,7 @@ import NewsTimelinePage from './pages/NewsTimelinePage';
 import FOMCCalendarPage from './pages/FOMCCalendarPage';
 import SnbTradingPage from './pages/SnbTradingPage';
 import IndexAgentPage from './pages/IndexAgentPage';
+import MarketDashboardPage from './pages/MarketDashboardPage';
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
         <Route path="agent" element={<AgentChatPage />} />
         <Route path="news-timeline" element={<NewsTimelinePage />} />
         <Route path="macro/fomc-calendar" element={<FOMCCalendarPage />} />
+        <Route path="macro/market-dashboard" element={<MarketDashboardPage />} />
         <Route path="trading/snb" element={<SnbTradingPage />} />
         <Route path="index-agent" element={<IndexAgentPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
