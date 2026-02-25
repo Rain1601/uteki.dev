@@ -1,11 +1,17 @@
 """
-Admin domain repository - 数据访问层
+Admin domain repository - Supabase REST API 数据访问层
 """
 
-from sqlalchemy import select, func, update, delete
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
+from uuid import uuid4
 
+from uteki.common.database import SupabaseRepository, db_manager
+
+logger = logging.getLogger(__name__)
+
+# ORM models — only imported for SQLite backup
 from uteki.domains.admin.models import (
     APIKey,
     User,
@@ -17,487 +23,426 @@ from uteki.domains.admin.models import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_rows(table: str, model_class, rows: list):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(model_class, k)}
+                await session.merge(model_class(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {table}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# APIKeyRepository
+# ---------------------------------------------------------------------------
+
 class APIKeyRepository:
-    """API密钥数据访问"""
+    TABLE = "api_keys"
 
     @staticmethod
-    async def create(session: AsyncSession, api_key: APIKey) -> APIKey:
-        """创建API密钥"""
-        session.add(api_key)
-        await session.flush()
-        await session.refresh(api_key)
-        return api_key
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(APIKeyRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(APIKeyRepository.TABLE, APIKey, [row])
+        return row
 
     @staticmethod
-    async def get_by_id(session: AsyncSession, api_key_id: str) -> Optional[APIKey]:
-        """根据ID获取API密钥"""
-        stmt = select(APIKey).where(APIKey.id == api_key_id)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+    async def get_by_id(api_key_id: str) -> Optional[dict]:
+        return SupabaseRepository(APIKeyRepository.TABLE).select_one(
+            eq={"id": api_key_id}
+        )
 
     @staticmethod
     async def get_by_provider(
-        session: AsyncSession, provider: str, environment: str = "production"
-    ) -> Optional[APIKey]:
-        """根据提供商获取API密钥"""
-        stmt = (
-            select(APIKey)
-            .where(APIKey.provider == provider)
-            .where(APIKey.environment == environment)
-            .where(APIKey.is_active == True)
+        provider: str, environment: str = "production"
+    ) -> Optional[dict]:
+        return SupabaseRepository(APIKeyRepository.TABLE).select_one(
+            eq={"provider": provider, "environment": environment, "is_active": True}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[APIKey], int]:
-        """列出所有API密钥（分页）"""
-        # 查询总数
-        count_stmt = select(func.count()).select_from(APIKey)
-        total = await session.scalar(count_stmt)
-
-        # 查询数据
-        stmt = select(APIKey).offset(skip).limit(limit)
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
-
-    @staticmethod
-    async def update(session: AsyncSession, api_key_id: str, **kwargs) -> Optional[APIKey]:
-        """更新API密钥"""
-        stmt = (
-            update(APIKey)
-            .where(APIKey.id == api_key_id)
-            .values(**kwargs)
-            .returning(APIKey)
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(APIKeyRepository.TABLE).select(
+            "*", count="exact", offset=skip, limit=limit
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.data, result.count or 0
 
     @staticmethod
-    async def delete(session: AsyncSession, api_key_id: str) -> bool:
-        """删除API密钥"""
-        stmt = delete(APIKey).where(APIKey.id == api_key_id)
-        result = await session.execute(stmt)
-        return result.rowcount > 0
+    async def update(api_key_id: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(APIKeyRepository.TABLE).update(
+            data=kwargs, eq={"id": api_key_id}
+        )
+        if result.data:
+            await _backup_rows(APIKeyRepository.TABLE, APIKey, result.data)
+            return result.data[0]
+        return None
 
+    @staticmethod
+    async def delete(api_key_id: str) -> bool:
+        result = SupabaseRepository(APIKeyRepository.TABLE).delete(
+            eq={"id": api_key_id}
+        )
+        return bool(result.data)
+
+
+# ---------------------------------------------------------------------------
+# UserRepository
+# ---------------------------------------------------------------------------
 
 class UserRepository:
-    """用户数据访问"""
+    TABLE = "users"
 
     @staticmethod
-    async def create(session: AsyncSession, user: User) -> User:
-        """创建用户"""
-        session.add(user)
-        await session.flush()
-        await session.refresh(user)
-        return user
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(UserRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(UserRepository.TABLE, User, [row])
+        return row
 
     @staticmethod
-    async def get_by_id(session: AsyncSession, user_id: str) -> Optional[User]:
-        """根据ID获取用户"""
-        stmt = select(User).where(User.id == user_id)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+    async def get_by_id(user_id: str) -> Optional[dict]:
+        return SupabaseRepository(UserRepository.TABLE).select_one(
+            eq={"id": user_id}
+        )
 
     @staticmethod
-    async def get_by_email(session: AsyncSession, email: str) -> Optional[User]:
-        """根据邮箱获取用户"""
-        stmt = select(User).where(User.email == email)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+    async def get_by_email(email: str) -> Optional[dict]:
+        return SupabaseRepository(UserRepository.TABLE).select_one(
+            eq={"email": email}
+        )
 
     @staticmethod
     async def get_by_oauth(
-        session: AsyncSession, oauth_provider: str, oauth_id: str
-    ) -> Optional[User]:
-        """根据OAuth信息获取用户"""
-        stmt = (
-            select(User)
-            .where(User.oauth_provider == oauth_provider)
-            .where(User.oauth_id == oauth_id)
+        oauth_provider: str, oauth_id: str
+    ) -> Optional[dict]:
+        return SupabaseRepository(UserRepository.TABLE).select_one(
+            eq={"oauth_provider": oauth_provider, "oauth_id": oauth_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[User], int]:
-        """列出所有用户（分页）"""
-        count_stmt = select(func.count()).select_from(User)
-        total = await session.scalar(count_stmt)
-
-        stmt = select(User).offset(skip).limit(limit)
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(UserRepository.TABLE).select(
+            "*", count="exact", offset=skip, limit=limit
+        )
+        return result.data, result.count or 0
 
     @staticmethod
-    async def update(session: AsyncSession, user_id: str, **kwargs) -> Optional[User]:
-        """更新用户"""
-        stmt = update(User).where(User.id == user_id).values(**kwargs).returning(User)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+    async def update(user_id: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(UserRepository.TABLE).update(
+            data=kwargs, eq={"id": user_id}
+        )
+        if result.data:
+            await _backup_rows(UserRepository.TABLE, User, result.data)
+            return result.data[0]
+        return None
 
+
+# ---------------------------------------------------------------------------
+# SystemConfigRepository
+# ---------------------------------------------------------------------------
 
 class SystemConfigRepository:
-    """系统配置数据访问"""
+    TABLE = "system_config"
 
     @staticmethod
-    async def create(session: AsyncSession, config: SystemConfig) -> SystemConfig:
-        """创建配置"""
-        session.add(config)
-        await session.flush()
-        await session.refresh(config)
-        return config
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(SystemConfigRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(SystemConfigRepository.TABLE, SystemConfig, [row])
+        return row
 
     @staticmethod
-    async def get_by_key(session: AsyncSession, config_key: str) -> Optional[SystemConfig]:
-        """根据键获取配置"""
-        stmt = select(SystemConfig).where(SystemConfig.config_key == config_key)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def list_all(session: AsyncSession) -> List[SystemConfig]:
-        """列出所有配置"""
-        stmt = select(SystemConfig)
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
-
-    @staticmethod
-    async def update(
-        session: AsyncSession, config_key: str, **kwargs
-    ) -> Optional[SystemConfig]:
-        """更新配置"""
-        stmt = (
-            update(SystemConfig)
-            .where(SystemConfig.config_key == config_key)
-            .values(**kwargs)
-            .returning(SystemConfig)
+    async def get_by_key(config_key: str) -> Optional[dict]:
+        return SupabaseRepository(SystemConfigRepository.TABLE).select_one(
+            eq={"config_key": config_key}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
-    async def delete(session: AsyncSession, config_key: str) -> bool:
-        """删除配置"""
-        stmt = delete(SystemConfig).where(SystemConfig.config_key == config_key)
-        result = await session.execute(stmt)
-        return result.rowcount > 0
+    async def list_all() -> List[dict]:
+        return SupabaseRepository(SystemConfigRepository.TABLE).select_data()
 
+    @staticmethod
+    async def update(config_key: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(SystemConfigRepository.TABLE).update(
+            data=kwargs, eq={"config_key": config_key}
+        )
+        if result.data:
+            await _backup_rows(SystemConfigRepository.TABLE, SystemConfig, result.data)
+            return result.data[0]
+        return None
+
+    @staticmethod
+    async def delete(config_key: str) -> bool:
+        result = SupabaseRepository(SystemConfigRepository.TABLE).delete(
+            eq={"config_key": config_key}
+        )
+        return bool(result.data)
+
+
+# ---------------------------------------------------------------------------
+# AuditLogRepository
+# ---------------------------------------------------------------------------
 
 class AuditLogRepository:
-    """审计日志数据访问"""
+    TABLE = "audit_logs"
 
     @staticmethod
-    async def create(session: AsyncSession, log: AuditLog) -> AuditLog:
-        """创建审计日志"""
-        session.add(log)
-        await session.flush()
-        await session.refresh(log)
-        return log
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(AuditLogRepository.TABLE).insert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(AuditLogRepository.TABLE, AuditLog, [row])
+        return row
 
     @staticmethod
     async def list_by_user(
-        session: AsyncSession, user_id: str, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[AuditLog], int]:
-        """列出用户的审计日志"""
-        count_stmt = (
-            select(func.count()).select_from(AuditLog).where(AuditLog.user_id == user_id)
+        user_id: str, skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(AuditLogRepository.TABLE).select(
+            "*", count="exact",
+            eq={"user_id": user_id},
+            order="created_at.desc",
+            offset=skip, limit=limit,
         )
-        total = await session.scalar(count_stmt)
-
-        stmt = (
-            select(AuditLog)
-            .where(AuditLog.user_id == user_id)
-            .order_by(AuditLog.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
+        return result.data, result.count or 0
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[AuditLog], int]:
-        """列出所有审计日志"""
-        count_stmt = select(func.count()).select_from(AuditLog)
-        total = await session.scalar(count_stmt)
-
-        stmt = (
-            select(AuditLog)
-            .order_by(AuditLog.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(AuditLogRepository.TABLE).select(
+            "*", count="exact",
+            order="created_at.desc",
+            offset=skip, limit=limit,
         )
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
+        return result.data, result.count or 0
 
-        return items, total or 0
 
+# ---------------------------------------------------------------------------
+# LLMProviderRepository
+# ---------------------------------------------------------------------------
 
 class LLMProviderRepository:
-    """LLM提供商数据访问"""
+    TABLE = "llm_providers"
 
     @staticmethod
-    async def create(session: AsyncSession, provider: LLMProvider) -> LLMProvider:
-        """创建LLM提供商配置"""
-        session.add(provider)
-        await session.flush()
-        await session.refresh(provider)
-        return provider
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(LLMProviderRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(LLMProviderRepository.TABLE, LLMProvider, [row])
+        return row
 
     @staticmethod
-    async def get_by_id(session: AsyncSession, provider_id: str) -> Optional[LLMProvider]:
-        """根据ID获取LLM提供商"""
-        stmt = select(LLMProvider).where(LLMProvider.id == provider_id)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def get_default_provider(session: AsyncSession) -> Optional[LLMProvider]:
-        """获取默认LLM提供商"""
-        stmt = (
-            select(LLMProvider)
-            .where(LLMProvider.is_default == True)
-            .where(LLMProvider.is_active == True)
-            .order_by(LLMProvider.priority)
+    async def get_by_id(provider_id: str) -> Optional[dict]:
+        return SupabaseRepository(LLMProviderRepository.TABLE).select_one(
+            eq={"id": provider_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
-    async def list_active_providers(session: AsyncSession) -> List[LLMProvider]:
-        """列出所有激活的LLM提供商（按优先级排序）"""
-        stmt = (
-            select(LLMProvider)
-            .where(LLMProvider.is_active == True)
-            .order_by(LLMProvider.priority)
+    async def get_default_provider() -> Optional[dict]:
+        return SupabaseRepository(LLMProviderRepository.TABLE).select_one(
+            eq={"is_default": True, "is_active": True},
+            order="priority.asc",
         )
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_active_providers() -> List[dict]:
+        return SupabaseRepository(LLMProviderRepository.TABLE).select_data(
+            eq={"is_active": True},
+            order="priority.asc",
+        )
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[LLMProvider], int]:
-        """列出所有LLM提供商（分页）"""
-        count_stmt = select(func.count()).select_from(LLMProvider)
-        total = await session.scalar(count_stmt)
-
-        stmt = (
-            select(LLMProvider)
-            .order_by(LLMProvider.priority, LLMProvider.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(LLMProviderRepository.TABLE).select(
+            "*", count="exact",
+            order="priority.asc",
+            offset=skip, limit=limit,
         )
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
+        return result.data, result.count or 0
 
     @staticmethod
-    async def update(
-        session: AsyncSession, provider_id: str, **kwargs
-    ) -> Optional[LLMProvider]:
-        """更新LLM提供商"""
-        stmt = (
-            update(LLMProvider)
-            .where(LLMProvider.id == provider_id)
-            .values(**kwargs)
-            .returning(LLMProvider)
+    async def update(provider_id: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(LLMProviderRepository.TABLE).update(
+            data=kwargs, eq={"id": provider_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        if result.data:
+            await _backup_rows(LLMProviderRepository.TABLE, LLMProvider, result.data)
+            return result.data[0]
+        return None
 
     @staticmethod
-    async def delete(session: AsyncSession, provider_id: str) -> bool:
-        """删除LLM提供商"""
-        stmt = delete(LLMProvider).where(LLMProvider.id == provider_id)
-        result = await session.execute(stmt)
-        return result.rowcount > 0
+    async def delete(provider_id: str) -> bool:
+        result = SupabaseRepository(LLMProviderRepository.TABLE).delete(
+            eq={"id": provider_id}
+        )
+        return bool(result.data)
 
+
+# ---------------------------------------------------------------------------
+# ExchangeConfigRepository
+# ---------------------------------------------------------------------------
 
 class ExchangeConfigRepository:
-    """交易所配置数据访问"""
+    TABLE = "exchange_configs"
 
     @staticmethod
-    async def create(session: AsyncSession, exchange: ExchangeConfig) -> ExchangeConfig:
-        """创建交易所配置"""
-        session.add(exchange)
-        await session.flush()
-        await session.refresh(exchange)
-        return exchange
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(ExchangeConfigRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(ExchangeConfigRepository.TABLE, ExchangeConfig, [row])
+        return row
 
     @staticmethod
-    async def get_by_id(session: AsyncSession, config_id: str) -> Optional[ExchangeConfig]:
-        """根据ID获取交易所配置"""
-        stmt = select(ExchangeConfig).where(ExchangeConfig.id == config_id)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def get_by_exchange(
-        session: AsyncSession, exchange: str
-    ) -> Optional[ExchangeConfig]:
-        """根据交易所名称获取配置"""
-        stmt = (
-            select(ExchangeConfig)
-            .where(ExchangeConfig.exchange == exchange)
-            .where(ExchangeConfig.is_active == True)
+    async def get_by_id(config_id: str) -> Optional[dict]:
+        return SupabaseRepository(ExchangeConfigRepository.TABLE).select_one(
+            eq={"id": config_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
-    async def list_active_exchanges(session: AsyncSession) -> List[ExchangeConfig]:
-        """列出所有激活的交易所配置"""
-        stmt = select(ExchangeConfig).where(ExchangeConfig.is_active == True)
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
+    async def get_by_exchange(exchange: str) -> Optional[dict]:
+        return SupabaseRepository(ExchangeConfigRepository.TABLE).select_one(
+            eq={"exchange": exchange, "is_active": True}
+        )
+
+    @staticmethod
+    async def list_active_exchanges() -> List[dict]:
+        return SupabaseRepository(ExchangeConfigRepository.TABLE).select_data(
+            eq={"is_active": True}
+        )
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[ExchangeConfig], int]:
-        """列出所有交易所配置（分页）"""
-        count_stmt = select(func.count()).select_from(ExchangeConfig)
-        total = await session.scalar(count_stmt)
-
-        stmt = select(ExchangeConfig).offset(skip).limit(limit)
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
-
-    @staticmethod
-    async def update(
-        session: AsyncSession, config_id: str, **kwargs
-    ) -> Optional[ExchangeConfig]:
-        """更新交易所配置"""
-        stmt = (
-            update(ExchangeConfig)
-            .where(ExchangeConfig.id == config_id)
-            .values(**kwargs)
-            .returning(ExchangeConfig)
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(ExchangeConfigRepository.TABLE).select(
+            "*", count="exact", offset=skip, limit=limit
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.data, result.count or 0
 
     @staticmethod
-    async def delete(session: AsyncSession, config_id: str) -> bool:
-        """删除交易所配置"""
-        stmt = delete(ExchangeConfig).where(ExchangeConfig.id == config_id)
-        result = await session.execute(stmt)
-        return result.rowcount > 0
+    async def update(config_id: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(ExchangeConfigRepository.TABLE).update(
+            data=kwargs, eq={"id": config_id}
+        )
+        if result.data:
+            await _backup_rows(ExchangeConfigRepository.TABLE, ExchangeConfig, result.data)
+            return result.data[0]
+        return None
 
+    @staticmethod
+    async def delete(config_id: str) -> bool:
+        result = SupabaseRepository(ExchangeConfigRepository.TABLE).delete(
+            eq={"id": config_id}
+        )
+        return bool(result.data)
+
+
+# ---------------------------------------------------------------------------
+# DataSourceConfigRepository
+# ---------------------------------------------------------------------------
 
 class DataSourceConfigRepository:
-    """数据源配置数据访问"""
+    TABLE = "data_source_configs"
 
     @staticmethod
-    async def create(
-        session: AsyncSession, data_source: DataSourceConfig
-    ) -> DataSourceConfig:
-        """创建数据源配置"""
-        session.add(data_source)
-        await session.flush()
-        await session.refresh(data_source)
-        return data_source
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        result = SupabaseRepository(DataSourceConfigRepository.TABLE).upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows(DataSourceConfigRepository.TABLE, DataSourceConfig, [row])
+        return row
 
     @staticmethod
-    async def get_by_id(
-        session: AsyncSession, config_id: str
-    ) -> Optional[DataSourceConfig]:
-        """根据ID获取数据源配置"""
-        stmt = select(DataSourceConfig).where(DataSourceConfig.id == config_id)
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def get_by_source_type(
-        session: AsyncSession, source_type: str
-    ) -> Optional[DataSourceConfig]:
-        """根据数据源类型获取配置"""
-        stmt = (
-            select(DataSourceConfig)
-            .where(DataSourceConfig.source_type == source_type)
-            .where(DataSourceConfig.is_active == True)
-            .order_by(DataSourceConfig.priority)
+    async def get_by_id(config_id: str) -> Optional[dict]:
+        return SupabaseRepository(DataSourceConfigRepository.TABLE).select_one(
+            eq={"id": config_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
 
     @staticmethod
-    async def list_active_sources(session: AsyncSession) -> List[DataSourceConfig]:
-        """列出所有激活的数据源配置（按优先级排序）"""
-        stmt = (
-            select(DataSourceConfig)
-            .where(DataSourceConfig.is_active == True)
-            .order_by(DataSourceConfig.priority)
+    async def get_by_source_type(source_type: str) -> Optional[dict]:
+        return SupabaseRepository(DataSourceConfigRepository.TABLE).select_one(
+            eq={"source_type": source_type, "is_active": True},
+            order="priority.asc",
         )
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
 
     @staticmethod
-    async def list_by_data_type(
-        session: AsyncSession, data_type: str
-    ) -> List[DataSourceConfig]:
-        """根据数据类型列出数据源（如"stock", "crypto"）"""
-        stmt = (
-            select(DataSourceConfig)
-            .where(DataSourceConfig.data_types.contains([data_type]))
-            .where(DataSourceConfig.is_active == True)
-            .order_by(DataSourceConfig.priority)
+    async def list_active_sources() -> List[dict]:
+        return SupabaseRepository(DataSourceConfigRepository.TABLE).select_data(
+            eq={"is_active": True},
+            order="priority.asc",
         )
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_by_data_type(data_type: str) -> List[dict]:
+        # JSON array contains — fetch all active and filter client-side
+        # (data_source_configs is a small table)
+        all_active = SupabaseRepository(DataSourceConfigRepository.TABLE).select_data(
+            eq={"is_active": True},
+            order="priority.asc",
+        )
+        return [ds for ds in all_active if data_type in (ds.get("data_types") or [])]
 
     @staticmethod
     async def list_all(
-        session: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[DataSourceConfig], int]:
-        """列出所有数据源配置（分页）"""
-        count_stmt = select(func.count()).select_from(DataSourceConfig)
-        total = await session.scalar(count_stmt)
-
-        stmt = (
-            select(DataSourceConfig)
-            .order_by(DataSourceConfig.priority, DataSourceConfig.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+        skip: int = 0, limit: int = 100
+    ) -> Tuple[List[dict], int]:
+        result = SupabaseRepository(DataSourceConfigRepository.TABLE).select(
+            "*", count="exact",
+            order="priority.asc",
+            offset=skip, limit=limit,
         )
-        result = await session.execute(stmt)
-        items = list(result.scalars().all())
-
-        return items, total or 0
+        return result.data, result.count or 0
 
     @staticmethod
-    async def update(
-        session: AsyncSession, config_id: str, **kwargs
-    ) -> Optional[DataSourceConfig]:
-        """更新数据源配置"""
-        stmt = (
-            update(DataSourceConfig)
-            .where(DataSourceConfig.id == config_id)
-            .values(**kwargs)
-            .returning(DataSourceConfig)
+    async def update(config_id: str, **kwargs) -> Optional[dict]:
+        kwargs["updated_at"] = _now_iso()
+        result = SupabaseRepository(DataSourceConfigRepository.TABLE).update(
+            data=kwargs, eq={"id": config_id}
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        if result.data:
+            await _backup_rows(DataSourceConfigRepository.TABLE, DataSourceConfig, result.data)
+            return result.data[0]
+        return None
 
     @staticmethod
-    async def delete(session: AsyncSession, config_id: str) -> bool:
-        """删除数据源配置"""
-        stmt = delete(DataSourceConfig).where(DataSourceConfig.id == config_id)
-        result = await session.execute(stmt)
-        return result.rowcount > 0
+    async def delete(config_id: str) -> bool:
+        result = SupabaseRepository(DataSourceConfigRepository.TABLE).delete(
+            eq={"id": config_id}
+        )
+        return bool(result.data)

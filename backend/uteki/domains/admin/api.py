@@ -3,20 +3,12 @@ Admin domain API routes - FastAPI路由
 """
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, status, Query
 from typing import List
 
 from uteki.common.database import db_manager
 from uteki.domains.admin import schemas
 from uteki.domains.admin.service import (
-    APIKeyService,
-    UserService,
-    SystemConfigService,
-    AuditLogService,
-    LLMProviderService,
-    ExchangeConfigService,
-    DataSourceConfigService,
     get_api_key_service,
     get_user_service,
     get_system_config_service,
@@ -28,16 +20,14 @@ from uteki.domains.admin.service import (
 
 router = APIRouter()
 
-
-# ============================================================================
-# Dependency: 获取数据库会话
-# ============================================================================
-
-
-async def get_db_session():
-    """获取数据库会话依赖"""
-    async with db_manager.get_postgres_session() as session:
-        yield session
+# Module-level service instances (no longer need session injection)
+api_key_svc = get_api_key_service()
+user_svc = get_user_service()
+config_svc = get_system_config_service()
+audit_svc = get_audit_log_service()
+llm_svc = get_llm_provider_service()
+exchange_svc = get_exchange_config_service()
+datasource_svc = get_data_source_config_service()
 
 
 # ============================================================================
@@ -51,11 +41,7 @@ async def get_db_session():
     status_code=status.HTTP_201_CREATED,
     summary="创建API密钥",
 )
-async def create_api_key(
-    data: schemas.APIKeyCreate, session: AsyncSession = Depends(get_db_session),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-    api_key_svc: APIKeyService = Depends(get_api_key_service),
-):
+async def create_api_key(data: schemas.APIKeyCreate):
     """
     创建新的API密钥配置
 
@@ -64,29 +50,26 @@ async def create_api_key(
     - **api_secret**: API密钥Secret（可选，会被加密存储）
     - **environment**: 环境 (production, sandbox, testnet)
     """
-    api_key = await api_key_svc.create_api_key(session, data)
+    api_key = await api_key_svc.create_api_key(data)
 
-    # 记录审计日志
     await audit_svc.log_action(
-        session,
         action="api_key.create",
         resource_type="api_key",
-        resource_id=api_key.id,
+        resource_id=api_key["id"],
         status="success",
         details={"provider": data.provider, "environment": data.environment},
     )
 
-    # 返回响应（不包含敏感信息）
     return schemas.APIKeyResponse(
-        id=api_key.id,
-        provider=api_key.provider,
-        display_name=api_key.display_name,
-        environment=api_key.environment,
-        description=api_key.description,
-        is_active=api_key.is_active,
-        has_secret=api_key.api_secret is not None,
-        created_at=api_key.created_at,
-        updated_at=api_key.updated_at,
+        id=api_key["id"],
+        provider=api_key["provider"],
+        display_name=api_key["display_name"],
+        environment=api_key["environment"],
+        description=api_key.get("description"),
+        is_active=api_key["is_active"],
+        has_secret=api_key.get("api_secret") is not None,
+        created_at=api_key["created_at"],
+        updated_at=api_key["updated_at"],
     )
 
 
@@ -96,11 +79,9 @@ async def create_api_key(
 async def list_api_keys(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    api_key_svc: APIKeyService = Depends(get_api_key_service),
 ):
     """列出所有API密钥配置（不包含敏感信息）"""
-    items, total = await api_key_svc.list_api_keys(session, skip, limit)
+    items, total = await api_key_svc.list_api_keys(skip, limit)
 
     return schemas.PaginatedAPIKeysResponse(
         items=items,
@@ -112,41 +93,33 @@ async def list_api_keys(
 
 
 @router.get("/api-keys/{api_key_id}", response_model=schemas.APIKeyResponse, summary="获取API密钥")
-async def get_api_key(api_key_id: str, session: AsyncSession = Depends(get_db_session)):
+async def get_api_key(api_key_id: str):
     """获取指定API密钥（不包含敏感信息）"""
-    api_key = await api_key_svc.get_api_key(session, api_key_id, decrypt=False)
+    api_key = await api_key_svc.get_api_key(api_key_id, decrypt=False)
     if not api_key:
         raise HTTPException(status_code=404, detail="API key not found")
 
     return schemas.APIKeyResponse(
-        id=api_key.id,
-        provider=api_key.provider,
-        display_name=api_key.display_name,
-        environment=api_key.environment,
-        description=api_key.description,
-        is_active=api_key.is_active,
-        has_secret=api_key.api_secret is not None,
-        created_at=api_key.created_at,
-        updated_at=api_key.updated_at,
+        id=api_key["id"],
+        provider=api_key["provider"],
+        display_name=api_key["display_name"],
+        environment=api_key["environment"],
+        description=api_key.get("description"),
+        is_active=api_key["is_active"],
+        has_secret=api_key.get("api_secret") is not None,
+        created_at=api_key["created_at"],
+        updated_at=api_key["updated_at"],
     )
 
 
 @router.patch("/api-keys/{api_key_id}", response_model=schemas.APIKeyResponse, summary="更新API密钥")
-async def update_api_key(
-    api_key_id: str,
-    data: schemas.APIKeyUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-    api_key_svc: APIKeyService = Depends(get_api_key_service),
-):
+async def update_api_key(api_key_id: str, data: schemas.APIKeyUpdate):
     """更新API密钥配置"""
-    api_key = await api_key_svc.update_api_key(session, api_key_id, data)
+    api_key = await api_key_svc.update_api_key(api_key_id, data)
     if not api_key:
         raise HTTPException(status_code=404, detail="API key not found")
 
-    # 记录审计日志
     await audit_svc.log_action(
-        session,
         action="api_key.update",
         resource_type="api_key",
         resource_id=api_key_id,
@@ -154,28 +127,26 @@ async def update_api_key(
     )
 
     return schemas.APIKeyResponse(
-        id=api_key.id,
-        provider=api_key.provider,
-        display_name=api_key.display_name,
-        environment=api_key.environment,
-        description=api_key.description,
-        is_active=api_key.is_active,
-        has_secret=api_key.api_secret is not None,
-        created_at=api_key.created_at,
-        updated_at=api_key.updated_at,
+        id=api_key["id"],
+        provider=api_key["provider"],
+        display_name=api_key["display_name"],
+        environment=api_key["environment"],
+        description=api_key.get("description"),
+        is_active=api_key["is_active"],
+        has_secret=api_key.get("api_secret") is not None,
+        created_at=api_key["created_at"],
+        updated_at=api_key["updated_at"],
     )
 
 
 @router.delete("/api-keys/{api_key_id}", response_model=schemas.MessageResponse, summary="删除API密钥")
-async def delete_api_key(api_key_id: str, session: AsyncSession = Depends(get_db_session)):
+async def delete_api_key(api_key_id: str):
     """删除API密钥"""
-    success = await api_key_svc.delete_api_key(session, api_key_id)
+    success = await api_key_svc.delete_api_key(api_key_id)
     if not success:
         raise HTTPException(status_code=404, detail="API key not found")
 
-    # 记录审计日志
     await audit_svc.log_action(
-        session,
         action="api_key.delete",
         resource_type="api_key",
         resource_id=api_key_id,
@@ -191,17 +162,13 @@ async def delete_api_key(api_key_id: str, session: AsyncSession = Depends(get_db
 
 
 @router.post("/users", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED, summary="创建用户")
-async def create_user(
-    data: schemas.UserCreate, session: AsyncSession = Depends(get_db_session),
-    user_svc: UserService = Depends(get_user_service),
-):
+async def create_user(data: schemas.UserCreate):
     """创建新用户"""
-    # 检查邮箱是否已存在
-    existing = await user_svc.get_user_by_email(session, data.email)
+    existing = await user_svc.get_user_by_email(data.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    user = await user_svc.create_user(session, data)
+    user = await user_svc.create_user(data)
     return user
 
 
@@ -209,11 +176,9 @@ async def create_user(
 async def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    user_svc: UserService = Depends(get_user_service),
 ):
     """列出所有用户"""
-    items, total = await user_svc.list_users(session, skip, limit)
+    items, total = await user_svc.list_users(skip, limit)
 
     return schemas.PaginatedUsersResponse(
         items=items,
@@ -225,21 +190,18 @@ async def list_users(
 
 
 @router.get("/users/{user_id}", response_model=schemas.UserResponse, summary="获取用户")
-async def get_user(user_id: str, session: AsyncSession = Depends(get_db_session)):
+async def get_user(user_id: str):
     """获取指定用户"""
-    user = await user_svc.get_user(session, user_id)
+    user = await user_svc.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
 
 @router.patch("/users/{user_id}", response_model=schemas.UserResponse, summary="更新用户")
-async def update_user(
-    user_id: str, data: schemas.UserUpdate, session: AsyncSession = Depends(get_db_session),
-    user_svc: UserService = Depends(get_user_service),
-):
+async def update_user(user_id: str, data: schemas.UserUpdate):
     """更新用户信息"""
-    user = await user_svc.update_user(session, user_id, data)
+    user = await user_svc.update_user(user_id, data)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
@@ -251,35 +213,32 @@ async def update_user(
 
 
 @router.post("/config", response_model=schemas.SystemConfigResponse, summary="设置系统配置")
-async def set_config(
-    data: schemas.SystemConfigCreate, session: AsyncSession = Depends(get_db_session),
-    config_svc: SystemConfigService = Depends(get_system_config_service),
-):
+async def set_config(data: schemas.SystemConfigCreate):
     """设置系统配置（创建或更新）"""
-    config = await config_svc.set_config(session, data)
+    config = await config_svc.set_config(data)
     return config
 
 
 @router.get("/config", response_model=List[schemas.SystemConfigResponse], summary="列出所有配置")
-async def list_configs(session: AsyncSession = Depends(get_db_session)):
+async def list_configs():
     """列出所有系统配置"""
-    configs = await config_svc.list_all_configs(session)
+    configs = await config_svc.list_all_configs()
     return configs
 
 
 @router.get("/config/{config_key}", response_model=schemas.SystemConfigResponse, summary="获取配置")
-async def get_config(config_key: str, session: AsyncSession = Depends(get_db_session)):
+async def get_config(config_key: str):
     """获取指定配置"""
-    config = await config_svc.get_config(session, config_key)
+    config = await config_svc.get_config(config_key)
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
     return config
 
 
 @router.delete("/config/{config_key}", response_model=schemas.MessageResponse, summary="删除配置")
-async def delete_config(config_key: str, session: AsyncSession = Depends(get_db_session)):
+async def delete_config(config_key: str):
     """删除配置"""
-    success = await config_svc.delete_config(session, config_key)
+    success = await config_svc.delete_config(config_key)
     if not success:
         raise HTTPException(status_code=404, detail="Config not found")
     return schemas.MessageResponse(message="Config deleted successfully")
@@ -294,11 +253,9 @@ async def delete_config(config_key: str, session: AsyncSession = Depends(get_db_
 async def list_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
 ):
     """列出所有审计日志"""
-    items, total = await audit_svc.list_all_logs(session, skip, limit)
+    items, total = await audit_svc.list_all_logs(skip, limit)
 
     return schemas.PaginatedAuditLogsResponse(
         items=items,
@@ -314,11 +271,9 @@ async def list_user_audit_logs(
     user_id: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
 ):
     """列出指定用户的审计日志"""
-    items, total = await audit_svc.list_user_logs(session, user_id, skip, limit)
+    items, total = await audit_svc.list_user_logs(user_id, skip, limit)
 
     return schemas.PaginatedAuditLogsResponse(
         items=items,
@@ -340,11 +295,7 @@ async def list_user_audit_logs(
     status_code=status.HTTP_201_CREATED,
     summary="创建LLM提供商配置",
 )
-async def create_llm_provider(
-    data: schemas.LLMProviderCreate, session: AsyncSession = Depends(get_db_session),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def create_llm_provider(data: schemas.LLMProviderCreate):
     """
     创建LLM提供商配置
 
@@ -352,13 +303,12 @@ async def create_llm_provider(
     - **model**: 模型名称 (gpt-4, claude-3-5-sonnet-20241022, qwen-max)
     - **api_key_id**: 关联的API密钥ID
     """
-    provider = await llm_svc.create_provider(session, data)
+    provider = await llm_svc.create_provider(data)
 
     await audit_svc.log_action(
-        session,
         action="llm_provider.create",
         resource_type="llm_provider",
-        resource_id=provider.id,
+        resource_id=provider["id"],
         status="success",
         details={"provider": data.provider, "model": data.model},
     )
@@ -374,11 +324,9 @@ async def create_llm_provider(
 async def list_llm_providers(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
 ):
     """列出所有LLM提供商配置"""
-    items, total = await llm_svc.list_providers(session, skip, limit)
+    items, total = await llm_svc.list_providers(skip, limit)
 
     return schemas.PaginatedLLMProvidersResponse(
         items=items,
@@ -394,9 +342,9 @@ async def list_llm_providers(
     response_model=List[schemas.LLMProviderResponse],
     summary="列出激活的LLM提供商",
 )
-async def list_active_llm_providers(session: AsyncSession = Depends(get_db_session)):
+async def list_active_llm_providers():
     """列出所有激活的LLM提供商（按优先级排序）"""
-    providers = await llm_svc.list_active_providers(session)
+    providers = await llm_svc.list_active_providers()
     return providers
 
 
@@ -405,9 +353,9 @@ async def list_active_llm_providers(session: AsyncSession = Depends(get_db_sessi
     response_model=schemas.LLMProviderResponse,
     summary="获取默认LLM提供商",
 )
-async def get_default_llm_provider(session: AsyncSession = Depends(get_db_session)):
+async def get_default_llm_provider():
     """获取默认LLM提供商"""
-    provider = await llm_svc.get_default_provider(session)
+    provider = await llm_svc.get_default_provider()
     if not provider:
         raise HTTPException(status_code=404, detail="No default LLM provider configured")
     return provider
@@ -418,12 +366,9 @@ async def get_default_llm_provider(session: AsyncSession = Depends(get_db_sessio
     response_model=schemas.LLMProviderResponse,
     summary="获取LLM提供商",
 )
-async def get_llm_provider(
-    provider_id: str, session: AsyncSession = Depends(get_db_session),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
-):
+async def get_llm_provider(provider_id: str):
     """获取指定LLM提供商"""
-    provider = await llm_svc.get_provider(session, provider_id)
+    provider = await llm_svc.get_provider(provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="LLM provider not found")
     return provider
@@ -434,20 +379,13 @@ async def get_llm_provider(
     response_model=schemas.LLMProviderResponse,
     summary="更新LLM提供商",
 )
-async def update_llm_provider(
-    provider_id: str,
-    data: schemas.LLMProviderUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def update_llm_provider(provider_id: str, data: schemas.LLMProviderUpdate):
     """更新LLM提供商配置"""
-    provider = await llm_svc.update_provider(session, provider_id, data)
+    provider = await llm_svc.update_provider(provider_id, data)
     if not provider:
         raise HTTPException(status_code=404, detail="LLM provider not found")
 
     await audit_svc.log_action(
-        session,
         action="llm_provider.update",
         resource_type="llm_provider",
         resource_id=provider_id,
@@ -462,18 +400,13 @@ async def update_llm_provider(
     response_model=schemas.MessageResponse,
     summary="删除LLM提供商",
 )
-async def delete_llm_provider(
-    provider_id: str, session: AsyncSession = Depends(get_db_session),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def delete_llm_provider(provider_id: str):
     """删除LLM提供商"""
-    success = await llm_svc.delete_provider(session, provider_id)
+    success = await llm_svc.delete_provider(provider_id)
     if not success:
         raise HTTPException(status_code=404, detail="LLM provider not found")
 
     await audit_svc.log_action(
-        session,
         action="llm_provider.delete",
         resource_type="llm_provider",
         resource_id=provider_id,
@@ -494,11 +427,7 @@ async def delete_llm_provider(
     status_code=status.HTTP_201_CREATED,
     summary="创建交易所配置",
 )
-async def create_exchange_config(
-    data: schemas.ExchangeConfigCreate, session: AsyncSession = Depends(get_db_session),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def create_exchange_config(data: schemas.ExchangeConfigCreate):
     """
     创建交易所配置
 
@@ -506,13 +435,12 @@ async def create_exchange_config(
     - **api_key_id**: 关联的API密钥ID
     - **trading_enabled**: 是否启用交易
     """
-    exchange = await exchange_svc.create_exchange(session, data)
+    exchange = await exchange_svc.create_exchange(data)
 
     await audit_svc.log_action(
-        session,
         action="exchange_config.create",
         resource_type="exchange_config",
-        resource_id=exchange.id,
+        resource_id=exchange["id"],
         status="success",
         details={"exchange": data.exchange},
     )
@@ -528,11 +456,9 @@ async def create_exchange_config(
 async def list_exchange_configs(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
 ):
     """列出所有交易所配置"""
-    items, total = await exchange_svc.list_exchanges(session, skip, limit)
+    items, total = await exchange_svc.list_exchanges(skip, limit)
 
     return schemas.PaginatedExchangeConfigsResponse(
         items=items,
@@ -548,9 +474,9 @@ async def list_exchange_configs(
     response_model=List[schemas.ExchangeConfigResponse],
     summary="列出激活的交易所",
 )
-async def list_active_exchanges(session: AsyncSession = Depends(get_db_session)):
+async def list_active_exchanges():
     """列出所有激活的交易所配置"""
-    exchanges = await exchange_svc.list_active_exchanges(session)
+    exchanges = await exchange_svc.list_active_exchanges()
     return exchanges
 
 
@@ -559,12 +485,9 @@ async def list_active_exchanges(session: AsyncSession = Depends(get_db_session))
     response_model=schemas.ExchangeConfigResponse,
     summary="获取交易所配置",
 )
-async def get_exchange_config(
-    config_id: str, session: AsyncSession = Depends(get_db_session),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
-):
+async def get_exchange_config(config_id: str):
     """获取指定交易所配置"""
-    exchange = await exchange_svc.get_exchange(session, config_id)
+    exchange = await exchange_svc.get_exchange(config_id)
     if not exchange:
         raise HTTPException(status_code=404, detail="Exchange config not found")
     return exchange
@@ -575,20 +498,13 @@ async def get_exchange_config(
     response_model=schemas.ExchangeConfigResponse,
     summary="更新交易所配置",
 )
-async def update_exchange_config(
-    config_id: str,
-    data: schemas.ExchangeConfigUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def update_exchange_config(config_id: str, data: schemas.ExchangeConfigUpdate):
     """更新交易所配置"""
-    exchange = await exchange_svc.update_exchange(session, config_id, data)
+    exchange = await exchange_svc.update_exchange(config_id, data)
     if not exchange:
         raise HTTPException(status_code=404, detail="Exchange config not found")
 
     await audit_svc.log_action(
-        session,
         action="exchange_config.update",
         resource_type="exchange_config",
         resource_id=config_id,
@@ -603,18 +519,13 @@ async def update_exchange_config(
     response_model=schemas.MessageResponse,
     summary="删除交易所配置",
 )
-async def delete_exchange_config(
-    config_id: str, session: AsyncSession = Depends(get_db_session),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def delete_exchange_config(config_id: str):
     """删除交易所配置"""
-    success = await exchange_svc.delete_exchange(session, config_id)
+    success = await exchange_svc.delete_exchange(config_id)
     if not success:
         raise HTTPException(status_code=404, detail="Exchange config not found")
 
     await audit_svc.log_action(
-        session,
         action="exchange_config.delete",
         resource_type="exchange_config",
         resource_id=config_id,
@@ -635,11 +546,7 @@ async def delete_exchange_config(
     status_code=status.HTTP_201_CREATED,
     summary="创建数据源配置",
 )
-async def create_data_source_config(
-    data: schemas.DataSourceConfigCreate, session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def create_data_source_config(data: schemas.DataSourceConfigCreate):
     """
     创建数据源配置
 
@@ -647,13 +554,12 @@ async def create_data_source_config(
     - **data_types**: 支持的数据类型 (["stock", "crypto", "forex"])
     - **api_key_id**: 关联的API密钥ID（可选）
     """
-    data_source = await datasource_svc.create_data_source(session, data)
+    data_source = await datasource_svc.create_data_source(data)
 
     await audit_svc.log_action(
-        session,
         action="data_source_config.create",
         resource_type="data_source_config",
-        resource_id=data_source.id,
+        resource_id=data_source["id"],
         status="success",
         details={"source_type": data.source_type},
     )
@@ -669,11 +575,9 @@ async def create_data_source_config(
 async def list_data_source_configs(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
 ):
     """列出所有数据源配置"""
-    items, total = await datasource_svc.list_data_sources(session, skip, limit)
+    items, total = await datasource_svc.list_data_sources(skip, limit)
 
     return schemas.PaginatedDataSourceConfigsResponse(
         items=items,
@@ -689,9 +593,9 @@ async def list_data_source_configs(
     response_model=List[schemas.DataSourceConfigResponse],
     summary="列出激活的数据源",
 )
-async def list_active_data_sources(session: AsyncSession = Depends(get_db_session)):
+async def list_active_data_sources():
     """列出所有激活的数据源配置（按优先级排序）"""
-    data_sources = await datasource_svc.list_active_data_sources(session)
+    data_sources = await datasource_svc.list_active_data_sources()
     return data_sources
 
 
@@ -700,12 +604,9 @@ async def list_active_data_sources(session: AsyncSession = Depends(get_db_sessio
     response_model=List[schemas.DataSourceConfigResponse],
     summary="根据数据类型列出数据源",
 )
-async def list_data_sources_by_type(
-    data_type: str, session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-):
+async def list_data_sources_by_type(data_type: str):
     """根据数据类型列出数据源（如"stock", "crypto"）"""
-    data_sources = await datasource_svc.list_by_data_type(session, data_type)
+    data_sources = await datasource_svc.list_by_data_type(data_type)
     return data_sources
 
 
@@ -714,12 +615,9 @@ async def list_data_sources_by_type(
     response_model=schemas.DataSourceConfigResponse,
     summary="获取数据源配置",
 )
-async def get_data_source_config(
-    config_id: str, session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-):
+async def get_data_source_config(config_id: str):
     """获取指定数据源配置"""
-    data_source = await datasource_svc.get_data_source(session, config_id)
+    data_source = await datasource_svc.get_data_source(config_id)
     if not data_source:
         raise HTTPException(status_code=404, detail="Data source config not found")
     return data_source
@@ -730,20 +628,13 @@ async def get_data_source_config(
     response_model=schemas.DataSourceConfigResponse,
     summary="更新数据源配置",
 )
-async def update_data_source_config(
-    config_id: str,
-    data: schemas.DataSourceConfigUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def update_data_source_config(config_id: str, data: schemas.DataSourceConfigUpdate):
     """更新数据源配置"""
-    data_source = await datasource_svc.update_data_source(session, config_id, data)
+    data_source = await datasource_svc.update_data_source(config_id, data)
     if not data_source:
         raise HTTPException(status_code=404, detail="Data source config not found")
 
     await audit_svc.log_action(
-        session,
         action="data_source_config.update",
         resource_type="data_source_config",
         resource_id=config_id,
@@ -758,18 +649,13 @@ async def update_data_source_config(
     response_model=schemas.MessageResponse,
     summary="删除数据源配置",
 )
-async def delete_data_source_config(
-    config_id: str, session: AsyncSession = Depends(get_db_session),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def delete_data_source_config(config_id: str):
     """删除数据源配置"""
-    success = await datasource_svc.delete_data_source(session, config_id)
+    success = await datasource_svc.delete_data_source(config_id)
     if not success:
         raise HTTPException(status_code=404, detail="Data source config not found")
 
     await audit_svc.log_action(
-        session,
         action="data_source_config.delete",
         resource_type="data_source_config",
         resource_id=config_id,
@@ -777,78 +663,6 @@ async def delete_data_source_config(
     )
 
     return schemas.MessageResponse(message="Data source config deleted successfully")
-
-
-# ============================================================================
-# Debug Routes
-# ============================================================================
-
-
-@router.post("/debug/create-admin-tables", summary="创建Admin域所有表")
-async def create_admin_tables(session: AsyncSession = Depends(get_db_session)):
-    """
-    创建Admin域的所有数据库表
-    """
-    from sqlalchemy import text
-
-    sqls = [
-        # 创建 admin schema
-        "CREATE SCHEMA IF NOT EXISTS admin;",
-        # 创建 users 表
-        """
-        CREATE TABLE IF NOT EXISTS admin.users (
-            id VARCHAR(36) PRIMARY KEY,
-            email VARCHAR(255) NOT NULL UNIQUE,
-            username VARCHAR(100) NOT NULL,
-            oauth_provider VARCHAR(50) NOT NULL DEFAULT 'local',
-            oauth_id VARCHAR(255),
-            avatar_url VARCHAR(500),
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-            preferences JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """,
-        # 创建索引
-        "CREATE INDEX IF NOT EXISTS idx_users_email ON admin.users (email);",
-        "CREATE INDEX IF NOT EXISTS idx_users_oauth ON admin.users (oauth_provider, oauth_id);",
-        # 创建 api_keys 表
-        """
-        CREATE TABLE IF NOT EXISTS admin.api_keys (
-            id VARCHAR(36) PRIMARY KEY,
-            user_id VARCHAR(36) NOT NULL DEFAULT 'default',
-            provider VARCHAR(50) NOT NULL,
-            display_name VARCHAR(200) NOT NULL,
-            api_key VARCHAR(500) NOT NULL,
-            api_secret VARCHAR(500),
-            extra_config JSONB,
-            environment VARCHAR(20) NOT NULL DEFAULT 'production',
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            description VARCHAR(500),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_api_keys_provider_env ON admin.api_keys (provider, environment);",
-        "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON admin.api_keys (user_id);",
-    ]
-
-    results = []
-    for sql in sqls:
-        try:
-            await session.execute(text(sql))
-            await session.commit()
-            results.append({"sql": sql[:60] + "...", "status": "success"})
-        except Exception as e:
-            await session.rollback()
-            results.append({"sql": sql[:60] + "...", "status": "error", "error": str(e)})
-
-    return {
-        "status": "completed",
-        "message": "Admin tables creation completed",
-        "results": results
-    }
 
 
 # ============================================================================
@@ -870,14 +684,7 @@ async def get_server_ip():
 
 
 @router.get("/system/health", summary="系统健康检查")
-async def system_health_check(
-    session: AsyncSession = Depends(get_db_session),
-    api_key_svc: APIKeyService = Depends(get_api_key_service),
-    llm_svc: LLMProviderService = Depends(get_llm_provider_service),
-    exchange_svc: ExchangeConfigService = Depends(get_exchange_config_service),
-    datasource_svc: DataSourceConfigService = Depends(get_data_source_config_service),
-    audit_svc: AuditLogService = Depends(get_audit_log_service),
-):
+async def system_health_check():
     """
     详细的系统健康检查
 
@@ -896,7 +703,7 @@ async def system_health_check(
 
     # 检查API密钥配置
     try:
-        api_keys, total = await api_key_svc.list_api_keys(session, 0, 100)
+        api_keys, total = await api_key_svc.list_api_keys(0, 100)
         active_keys = [k for k in api_keys if k.is_active]
         health_info["configurations"]["api_keys"] = {
             "total": total,
@@ -911,8 +718,8 @@ async def system_health_check(
 
     # 检查LLM提供商配置
     try:
-        llm_providers = await llm_svc.list_active_providers(session)
-        default_provider = await llm_svc.get_default_provider(session)
+        llm_providers = await llm_svc.list_active_providers()
+        default_provider = await llm_svc.get_default_provider()
         health_info["configurations"]["llm_providers"] = {
             "total_active": len(llm_providers),
             "has_default": default_provider is not None,
@@ -926,10 +733,10 @@ async def system_health_check(
 
     # 检查交易所配置
     try:
-        exchanges = await exchange_svc.list_active_exchanges(session)
+        exchanges = await exchange_svc.list_active_exchanges()
         health_info["configurations"]["exchanges"] = {
             "total_active": len(exchanges),
-            "trading_enabled": sum(1 for e in exchanges if e.trading_enabled),
+            "trading_enabled": sum(1 for e in exchanges if e.get("trading_enabled")),
             "status": "ok" if exchanges else "info"
         }
         if not exchanges:
@@ -939,7 +746,7 @@ async def system_health_check(
 
     # 检查数据源配置
     try:
-        data_sources = await datasource_svc.list_active_data_sources(session)
+        data_sources = await datasource_svc.list_active_data_sources()
         health_info["configurations"]["data_sources"] = {
             "total_active": len(data_sources),
             "status": "ok" if data_sources else "info"
@@ -951,7 +758,7 @@ async def system_health_check(
 
     # 检查审计日志功能
     try:
-        logs, total = await audit_svc.list_all_logs(session, 0, 1)
+        logs, total = await audit_svc.list_all_logs(0, 1)
         health_info["components"]["audit_log"] = {
             "total_logs": total,
             "status": "ok"
@@ -960,10 +767,10 @@ async def system_health_check(
         health_info["components"]["audit_log"] = {"status": "error", "error": str(e)}
         health_info["status"] = "degraded"
 
-    # 数据库连接状态（从db_manager获取）
-    from uteki.common.database import db_manager
+    # 数据库连接状态
     health_info["databases"] = {
         "postgresql": {"status": "connected" if db_manager.postgres_available else "disconnected"},
+        "supabase": {"status": "connected" if db_manager.supabase_available else "disconnected"},
         "redis": {"status": "connected" if db_manager.redis_available else "disconnected"},
         "clickhouse": {"status": "connected" if db_manager.clickhouse_available else "disabled"},
         "qdrant": {"status": "connected" if db_manager.qdrant_available else "disabled"},
