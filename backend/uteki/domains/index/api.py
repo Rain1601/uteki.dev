@@ -5,12 +5,10 @@ import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, and_
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
-from uteki.common.database import db_manager
-from uteki.domains.auth.deps import get_current_user_optional, get_current_user
+from uteki.common.database import SupabaseRepository, db_manager
+from uteki.domains.auth.deps import get_current_user
 from uteki.domains.index.schemas import (
     WatchlistAddRequest, BacktestRequest, BacktestCompareRequest,
     PromptUpdateRequest, MemoryWriteRequest, ToolTestRequest,
@@ -37,13 +35,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def get_db_session():
-    async with db_manager.get_postgres_session() as session:
-        yield session
-
-
-def _get_user_id(user: Optional[dict]) -> str:
-    return user["user_id"] if user else "default"
+def _get_user_id(user: dict) -> str:
+    return user["user_id"]
 
 
 # ══════════════════════════════════════════
@@ -52,21 +45,19 @@ def _get_user_id(user: Optional[dict]) -> str:
 
 @router.get("/watchlist", summary="获取观察池")
 async def get_watchlist(
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
-    items = await data_service.get_watchlist(session)
+    items = data_service.get_watchlist()
     return {"success": True, "data": items}
 
 
 @router.post("/watchlist", summary="添加标的到观察池")
 async def add_to_watchlist(
     request: WatchlistAddRequest,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
     item = await data_service.add_to_watchlist(
-        request.symbol, session, name=request.name, etf_type=request.etf_type
+        request.symbol, name=request.name, etf_type=request.etf_type
     )
     return {"success": True, "data": item}
 
@@ -74,10 +65,9 @@ async def add_to_watchlist(
 @router.delete("/watchlist/{symbol}", summary="从观察池移除")
 async def remove_from_watchlist(
     symbol: str,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
-    removed = await data_service.remove_from_watchlist(symbol, session)
+    removed = await data_service.remove_from_watchlist(symbol)
     if not removed:
         raise HTTPException(404, f"Symbol {symbol} not found in watchlist")
     return {"success": True, "message": f"{symbol} removed from watchlist"}
@@ -87,28 +77,26 @@ async def remove_from_watchlist(
 async def update_watchlist_notes(
     symbol: str,
     request: dict,
-    session: AsyncSession = Depends(get_db_session),
 ):
-    from uteki.domains.index.models.watchlist import Watchlist
-    query = select(Watchlist).where(
-        and_(Watchlist.symbol == symbol.upper(), Watchlist.is_active == True)
-    )
-    result = await session.execute(query)
-    item = result.scalar_one_or_none()
-    if not item:
+    repo = SupabaseRepository("watchlist")
+    rows = repo.select_data(eq={"symbol": symbol.upper(), "is_active": True}, limit=1)
+    if not rows:
         raise HTTPException(404, f"Symbol {symbol} not found in watchlist")
-    item.notes = request.get("notes", "")
-    await session.commit()
-    return {"success": True, "data": item.to_dict()}
+    item = rows[0]
+    repo.update(
+        data={"notes": request.get("notes", "")},
+        eq={"id": item["id"]},
+    )
+    item["notes"] = request.get("notes", "")
+    return {"success": True, "data": item}
 
 
 @router.get("/quotes/{symbol}", summary="获取实时报价")
 async def get_quote(
     symbol: str,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
-    quote = await data_service.get_quote(symbol, session)
+    quote = await data_service.get_quote(symbol)
     return {"success": True, "data": quote}
 
 
@@ -117,25 +105,22 @@ async def get_history(
     symbol: str,
     start: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
     end: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
-    data = await data_service.get_history(symbol, session, start=start, end=end)
+    data = data_service.get_history(symbol, start=start, end=end)
     return {"success": True, "data": data, "count": len(data)}
 
 
 @router.post("/data/refresh", summary="手动刷新所有观察池数据")
 async def refresh_data(
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
-    results = await data_service.update_all_watchlist(session)
+    results = await data_service.update_all_watchlist()
     return {"success": True, "data": results}
 
 
 @router.post("/data/sync", summary="检查并自动同步缺失数据")
 async def sync_data(
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
     """
@@ -143,17 +128,12 @@ async def sync_data(
     适合进入 Watchlist 页面时自动调用。
     返回每个 symbol 的同步状态。
     """
-    from uteki.domains.index.models.watchlist import Watchlist
-    from sqlalchemy import select, func
-    from uteki.domains.index.models.index_price import IndexPrice
     from datetime import date, timedelta
     from uteki.domains.index.services.market_calendar import is_trading_day
 
-    query = select(Watchlist).where(Watchlist.is_active == True)
-    result = await session.execute(query)
-    symbols = result.scalars().all()
+    watchlist_rows = SupabaseRepository("watchlist").select_data(eq={"is_active": True})
 
-    if not symbols:
+    if not watchlist_rows:
         return {"success": True, "data": {"synced": [], "already_fresh": [], "failed": []}}
 
     today = date.today()
@@ -161,18 +141,24 @@ async def sync_data(
     already_fresh = []
     failed = []
 
-    for w in symbols:
+    price_repo = SupabaseRepository("index_prices")
+
+    for w in watchlist_rows:
+        symbol = w["symbol"]
         try:
             # Check last available date
-            q = select(func.max(IndexPrice.date)).where(IndexPrice.symbol == w.symbol)
-            res = await session.execute(q)
-            last_date = res.scalar_one_or_none()
+            last_rows = price_repo.select_data(
+                eq={"symbol": symbol}, order="date.desc", limit=1
+            )
 
-            if not last_date:
+            if not last_rows:
                 # No data at all — do initial load
-                count = await data_service.initial_history_load(w.symbol, session)
-                synced.append({"symbol": w.symbol, "action": "initial_load", "records": count})
+                count = await data_service.initial_history_load(symbol)
+                synced.append({"symbol": symbol, "action": "initial_load", "records": count})
                 continue
+
+            last_date_str = str(last_rows[0]["date"])[:10]
+            last_date = date.fromisoformat(last_date_str)
 
             # Count missing trading days (excluding weekends and US market holidays)
             days_behind = 0
@@ -183,13 +169,13 @@ async def sync_data(
                 check += timedelta(days=1)
 
             if days_behind > 0:
-                backfill = await data_service.smart_backfill(w.symbol, session)
-                synced.append({"symbol": w.symbol, **backfill})
+                backfill = await data_service.smart_backfill(symbol)
+                synced.append({"symbol": symbol, **backfill})
             else:
-                already_fresh.append(w.symbol)
+                already_fresh.append(symbol)
         except Exception as e:
-            logger.error(f"Sync failed for {w.symbol}: {e}")
-            failed.append({"symbol": w.symbol, "error": str(e)})
+            logger.error(f"Sync failed for {symbol}: {e}")
+            failed.append({"symbol": symbol, "error": str(e)})
 
     return {
         "success": True,
@@ -204,15 +190,14 @@ async def sync_data(
 @router.post("/data/validate", summary="验证数据连续性")
 async def validate_data(
     symbol: Optional[str] = Query(None, description="Symbol to validate, or all if omitted"),
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
 ):
     """检测缺失的交易日（排除周末），返回 missing_dates 数组"""
     if symbol:
-        result = await data_service.validate_data_continuity(symbol, session)
+        result = data_service.validate_data_continuity(symbol)
         return {"success": True, "data": result}
     else:
-        results = await data_service.validate_all_watchlist(session)
+        results = data_service.validate_all_watchlist()
         return {"success": True, "data": results}
 
 
@@ -223,12 +208,11 @@ async def validate_data(
 @router.post("/backtest", summary="单指数回测")
 async def run_backtest(
     request: BacktestRequest,
-    session: AsyncSession = Depends(get_db_session),
     backtest_service: BacktestService = Depends(get_backtest_service),
 ):
     result = await backtest_service.run(
         request.symbol, request.start, request.end,
-        request.initial_capital, request.monthly_dca, session
+        request.initial_capital, request.monthly_dca,
     )
     if "error" in result:
         raise HTTPException(400, result["error"])
@@ -238,12 +222,11 @@ async def run_backtest(
 @router.post("/backtest/compare", summary="多指数对比回测")
 async def compare_backtest(
     request: BacktestCompareRequest,
-    session: AsyncSession = Depends(get_db_session),
     backtest_service: BacktestService = Depends(get_backtest_service),
 ):
     results = await backtest_service.compare(
         request.symbols, request.start, request.end,
-        request.initial_capital, request.monthly_dca, session
+        request.initial_capital, request.monthly_dca,
     )
     return {"success": True, "data": results}
 
@@ -251,10 +234,9 @@ async def compare_backtest(
 @router.post("/backtest/replay/{harness_id}", summary="决策重放")
 async def replay_decision(
     harness_id: str,
-    session: AsyncSession = Depends(get_db_session),
     backtest_service: BacktestService = Depends(get_backtest_service),
 ):
-    result = await backtest_service.replay_decision(harness_id, session)
+    result = await backtest_service.replay_decision(harness_id)
     if "error" in result:
         raise HTTPException(400, result["error"])
     return {"success": True, "data": result}
@@ -267,10 +249,9 @@ async def replay_decision(
 @router.get("/prompt/current", summary="获取当前 Prompt")
 async def get_current_prompt(
     prompt_type: str = Query("system", description="system / user"),
-    session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    prompt = await prompt_service.get_current(session, prompt_type=prompt_type)
+    prompt = await prompt_service.get_current(prompt_type=prompt_type)
     return {"success": True, "data": prompt}
 
 
@@ -278,11 +259,10 @@ async def get_current_prompt(
 async def update_prompt(
     request: PromptUpdateRequest,
     prompt_type: str = Query("system", description="system / user"),
-    session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
     version = await prompt_service.update_prompt(
-        request.content, request.description, session, prompt_type=prompt_type
+        request.content, request.description, prompt_type=prompt_type
     )
     return {"success": True, "data": version}
 
@@ -290,21 +270,19 @@ async def update_prompt(
 @router.get("/prompt/history", summary="获取 Prompt 版本历史")
 async def get_prompt_history(
     prompt_type: str = Query("system", description="system / user"),
-    session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    history = await prompt_service.get_history(session, prompt_type=prompt_type)
+    history = await prompt_service.get_history(prompt_type=prompt_type)
     return {"success": True, "data": history}
 
 
 @router.put("/prompt/{version_id}/activate", summary="切换当前 Prompt 版本")
 async def activate_prompt_version(
     version_id: str,
-    session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
     try:
-        version = await prompt_service.activate_version(version_id, session)
+        version = await prompt_service.activate_version(version_id)
         return {"success": True, "data": version}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -313,11 +291,10 @@ async def activate_prompt_version(
 @router.delete("/prompt/{version_id}", summary="删除 Prompt 版本")
 async def delete_prompt_version(
     version_id: str,
-    session: AsyncSession = Depends(get_db_session),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
     try:
-        await prompt_service.delete_version(version_id, session)
+        await prompt_service.delete_version(version_id)
         return {"success": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -325,15 +302,14 @@ async def delete_prompt_version(
 
 @router.post("/prompt/preview", summary="预览 User Prompt 模板渲染结果")
 async def preview_user_prompt(
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
     memory_service: MemoryService = Depends(get_memory_service),
     prompt_service: PromptService = Depends(get_prompt_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     builder = HarnessBuilder(data_service, memory_service, prompt_service)
-    preview_data = await builder.build_preview_data(session, user_id=_get_user_id(user))
-    rendered = await prompt_service.render_user_prompt(session, preview_data)
+    preview_data = await builder.build_preview_data(user_id=_get_user_id(user))
+    rendered = await prompt_service.render_user_prompt(preview_data)
     variables = prompt_service._build_template_variables(preview_data)
     return {"success": True, "data": {"rendered": rendered, "variables": variables}}
 
@@ -346,23 +322,21 @@ async def preview_user_prompt(
 async def get_memory(
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
-    memories = await memory_service.read(_get_user_id(user), session, category=category, limit=limit)
+    memories = await memory_service.read(_get_user_id(user), category=category, limit=limit)
     return {"success": True, "data": memories}
 
 
 @router.post("/memory", summary="写入 Agent 记忆")
 async def write_memory(
     request: MemoryWriteRequest,
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     memory = await memory_service.write(
-        _get_user_id(user), request.category, request.content, session,
+        _get_user_id(user), request.category, request.content,
         metadata=request.metadata
     )
     return {"success": True, "data": memory}
@@ -371,11 +345,10 @@ async def write_memory(
 @router.delete("/memory/{memory_id}", summary="删除 Agent 记忆")
 async def delete_memory(
     memory_id: str,
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
-    deleted = await memory_service.delete(memory_id, _get_user_id(user), session)
+    deleted = await memory_service.delete(memory_id, _get_user_id(user))
     if not deleted:
         raise HTTPException(404, "Memory not found")
     return {"success": True, "message": "Memory deleted"}
@@ -395,15 +368,13 @@ async def get_tool_definitions():
 async def test_tool(
     tool_name: str,
     request: ToolTestRequest,
-    session: AsyncSession = Depends(get_db_session),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     from uteki.domains.index.services.agent_skills import TOOL_DEFINITIONS, ToolExecutor
     if tool_name not in TOOL_DEFINITIONS:
         raise HTTPException(404, f"Tool '{tool_name}' not found")
 
     executor = ToolExecutor(
-        session=session,
         harness_data={},
         agent_key="shared",
         user_id=_get_user_id(user),
@@ -418,7 +389,7 @@ async def test_tool(
 
 @router.get("/account/summary", summary="获取账户概览（总资产/现金/持仓市值）")
 async def get_account_summary(
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """从 SNB 获取实时账户数据"""
     try:
@@ -447,14 +418,12 @@ async def get_account_summary(
 
 @router.get("/agent-config", summary="获取 Agent 配置")
 async def get_agent_config(
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """从 Memory 读取 agent_config 配置"""
-    import json
     memories = await memory_service.read(
-        _get_user_id(user), session, category="agent_config", limit=1, agent_key="system"
+        _get_user_id(user), category="agent_config", limit=1, agent_key="system"
     )
     if memories:
         try:
@@ -469,42 +438,38 @@ async def get_agent_config(
 @router.put("/agent-config", summary="保存 Agent 配置")
 async def save_agent_config(
     request: AgentConfigUpdateRequest,
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """保存 agent_config 到 Memory（覆盖式）"""
-    import json
-    from sqlalchemy import select, and_
-    from uteki.domains.index.models.agent_memory import AgentMemory
-
     user_id = _get_user_id(user)
-
-    # 查找已有的 agent_config 记录
-    query = select(AgentMemory).where(
-        and_(
-            AgentMemory.user_id == user_id,
-            AgentMemory.category == "agent_config",
-            AgentMemory.agent_key == "system",
-        )
-    ).limit(1)
-    result = await session.execute(query)
-    existing = result.scalar_one_or_none()
-
     config_json = json.dumps(request.config)
 
-    if existing:
-        existing.content = config_json
-    else:
-        mem = AgentMemory(
-            user_id=user_id,
-            category="agent_config",
-            content=config_json,
-            agent_key="system",
-        )
-        session.add(mem)
+    # 查找已有的 agent_config 记录
+    repo = SupabaseRepository("agent_memory")
+    rows = repo.select_data(
+        eq={"user_id": user_id, "category": "agent_config", "agent_key": "system"},
+        limit=1,
+    )
 
-    await session.commit()
+    if rows:
+        repo.update(
+            data={"content": config_json},
+            eq={"id": rows[0]["id"]},
+        )
+    else:
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        repo.insert({
+            "id": str(uuid4()),
+            "user_id": user_id,
+            "category": "agent_config",
+            "content": config_json,
+            "agent_key": "system",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
     return {"success": True, "data": request.config}
 
 
@@ -514,16 +479,12 @@ async def save_agent_config(
 
 @router.get("/model-config", summary="获取 Arena 模型配置")
 async def get_model_config(
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
-    """从 Memory 读取 model_config 配置列表，DB 无配置时返回 env 中已配置的模型"""
-    from uteki.common.config import settings as app_settings
-    from uteki.domains.index.services.arena_service import ARENA_MODELS
-
+    """从 Memory 读取 model_config 配置列表"""
     memories = await memory_service.read(
-        _get_user_id(user), session, category="model_config", limit=1, agent_key="system"
+        _get_user_id(user), category="model_config", limit=1, agent_key="system"
     )
     if memories:
         try:
@@ -533,65 +494,47 @@ async def get_model_config(
         if models:
             return {"success": True, "data": models}
 
-    # DB 为空时，从 ARENA_MODELS + env keys 构建默认配置
-    # 让用户看到当前实际可用的模型
-    defaults = []
-    base_url_map = {
-        "deepseek": "https://api.deepseek.com",
-        "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "minimax": "https://api.minimax.chat/v1",
+    return {
+        "success": True,
+        "data": [],
+        "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key 后使用 Arena 分析。",
     }
-    for m in ARENA_MODELS:
-        api_key = getattr(app_settings, m.get("api_key_attr", ""), None)
-        if api_key:
-            defaults.append({
-                "provider": m["provider"],
-                "model": m["model"],
-                "api_key": api_key,
-                "base_url": base_url_map.get(m["provider"]),
-                "temperature": 0,
-                "max_tokens": 4096,
-                "enabled": True,
-            })
-    return {"success": True, "data": defaults}
 
 
 @router.put("/model-config", summary="保存 Arena 模型配置")
 async def save_model_config(
     request: ModelConfigUpdateRequest,
-    session: AsyncSession = Depends(get_db_session),
     memory_service: MemoryService = Depends(get_memory_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """保存 model_config 到 Memory（覆盖式）"""
-    from uteki.domains.index.models.agent_memory import AgentMemory
-
     user_id = _get_user_id(user)
-
-    query = select(AgentMemory).where(
-        and_(
-            AgentMemory.user_id == user_id,
-            AgentMemory.category == "model_config",
-            AgentMemory.agent_key == "system",
-        )
-    ).limit(1)
-    result = await session.execute(query)
-    existing = result.scalar_one_or_none()
-
     models_json = json.dumps([m.model_dump() for m in request.models])
 
-    if existing:
-        existing.content = models_json
-    else:
-        mem = AgentMemory(
-            user_id=user_id,
-            category="model_config",
-            content=models_json,
-            agent_key="system",
-        )
-        session.add(mem)
+    repo = SupabaseRepository("agent_memory")
+    rows = repo.select_data(
+        eq={"user_id": user_id, "category": "model_config", "agent_key": "system"},
+        limit=1,
+    )
 
-    await session.commit()
+    if rows:
+        repo.update(
+            data={"content": models_json},
+            eq={"id": rows[0]["id"]},
+        )
+    else:
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        repo.insert({
+            "id": str(uuid4()),
+            "user_id": user_id,
+            "category": "model_config",
+            "content": models_json,
+            "agent_key": "system",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
     return {"success": True, "data": [m.model_dump() for m in request.models]}
 
 
@@ -602,29 +545,27 @@ async def save_model_config(
 @router.post("/arena/run", summary="手动触发 Arena 分析")
 async def run_arena(
     request: ArenaRunRequest,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
     memory_service: MemoryService = Depends(get_memory_service),
     prompt_service: PromptService = Depends(get_prompt_service),
     arena_service: ArenaService = Depends(get_arena_service),
     score_service: ScoreService = Depends(get_score_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     # 1. 构建 Harness
     builder = HarnessBuilder(data_service, memory_service, prompt_service)
     harness = await builder.build(
         harness_type=request.harness_type,
-        session=session,
         user_id=_get_user_id(user),
         budget=request.budget,
         constraints=request.constraints,
     )
 
     # 2. 运行 Arena (3-phase pipeline: 决策 → 投票 → 计分)
-    arena_result = await arena_service.run(harness["id"], session)
+    arena_result = await arena_service.run(harness["id"])
 
     # 3. 获取 prompt 版本号
-    prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"], session)
+    prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"])
     prompt_version_str = prompt_ver["version"] if prompt_ver else None
 
     return {
@@ -645,24 +586,22 @@ async def run_arena(
 @router.post("/arena/run/stream", summary="SSE 流式 Arena 分析")
 async def run_arena_stream(
     request: ArenaRunRequest,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
     memory_service: MemoryService = Depends(get_memory_service),
     prompt_service: PromptService = Depends(get_prompt_service),
     arena_service: ArenaService = Depends(get_arena_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     # 1. 构建 Harness
     builder = HarnessBuilder(data_service, memory_service, prompt_service)
     harness = await builder.build(
         harness_type=request.harness_type,
-        session=session,
         user_id=_get_user_id(user),
         budget=request.budget,
         constraints=request.constraints,
     )
 
-    prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"], session)
+    prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"])
     prompt_version_str = prompt_ver["version"] if prompt_ver else None
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -674,7 +613,7 @@ async def run_arena_stream(
         try:
             model_filter = [m.model_dump() for m in request.models] if request.models else None
             result = await arena_service.run(
-                harness["id"], session, on_progress=emit_progress,
+                harness["id"], on_progress=emit_progress,
                 model_filter=model_filter,
             )
             queue.put_nowait({
@@ -722,10 +661,9 @@ async def run_arena_stream(
 @router.get("/arena/timeline", summary="获取 Arena 时间线图表数据")
 async def get_arena_timeline(
     limit: int = Query(50, ge=1, le=200),
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    timeline = await arena_service.get_arena_timeline(session, limit=limit)
+    timeline = await arena_service.get_arena_timeline(limit=limit)
     return {"success": True, "data": timeline}
 
 
@@ -735,7 +673,6 @@ async def run_agent_backtest(
     start_date: str = Query(..., description="Start date, e.g. 2025-01-01"),
     end_date: str = Query(..., description="End date, e.g. 2025-12-31"),
     frequency: str = Query("monthly", description="weekly / biweekly / monthly"),
-    session: AsyncSession = Depends(get_db_session),
 ):
     from datetime import date as date_type
     from uteki.domains.index.services.agent_backtest_service import get_agent_backtest_service
@@ -745,7 +682,6 @@ async def run_agent_backtest(
         start_date=date_type.fromisoformat(start_date),
         end_date=date_type.fromisoformat(end_date),
         frequency=frequency,
-        session=session,
     )
     return {"success": True, "data": result}
 
@@ -754,30 +690,27 @@ async def run_agent_backtest(
 async def get_arena_history(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    history = await arena_service.get_arena_history(session, limit=limit, offset=offset)
+    history = await arena_service.get_arena_history(limit=limit, offset=offset)
     return {"success": True, "data": history}
 
 
 @router.get("/arena/{harness_id}", summary="获取 Arena 结果")
 async def get_arena_results(
     harness_id: str,
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    results = await arena_service.get_arena_results(harness_id, session)
+    results = arena_service.get_arena_results(harness_id)
     return {"success": True, "data": results}
 
 
 @router.get("/arena/{harness_id}/votes", summary="获取 Arena 投票详情")
 async def get_arena_votes(
     harness_id: str,
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    votes = await arena_service.get_votes_for_harness(harness_id, session)
+    votes = arena_service.get_votes_for_harness(harness_id)
     return {"success": True, "data": votes}
 
 
@@ -785,10 +718,9 @@ async def get_arena_votes(
 async def get_model_io_detail(
     harness_id: str,
     model_io_id: str,
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    detail = await arena_service.get_model_io_detail(model_io_id, session)
+    detail = arena_service.get_model_io_detail(model_io_id)
     if not detail:
         raise HTTPException(404, "Model I/O not found")
     return {"success": True, "data": detail}
@@ -806,11 +738,10 @@ async def get_decisions(
     harness_type: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
     timeline = await decision_service.get_timeline(
-        session, limit=limit, offset=offset,
+        limit=limit, offset=offset,
         user_action=user_action, harness_type=harness_type,
         start_date=start_date, end_date=end_date,
     )
@@ -820,10 +751,9 @@ async def get_decisions(
 @router.get("/decisions/{decision_id}", summary="获取决策详情")
 async def get_decision_detail(
     decision_id: str,
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
-    detail = await decision_service.get_by_id(decision_id, session)
+    detail = await decision_service.get_by_id(decision_id)
     if not detail:
         raise HTTPException(404, "Decision not found")
     return {"success": True, "data": detail}
@@ -833,28 +763,19 @@ async def get_decision_detail(
 async def approve_decision(
     harness_id: str,
     request: DecisionApproveRequest,
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
     score_service: ScoreService = Depends(get_score_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
-    # TOTP 验证
+    # TOTP 验证 — 通过数据库中用户密钥验证
     from uteki.domains.snb.services.totp_service import get_totp_service
     totp_service = get_totp_service()
     user_id = _get_user_id(user)
 
-    if user:
+    async with db_manager.get_postgres_session() as session:
         valid = await totp_service.verify_totp(session, user_id, request.totp_code)
-    else:
-        from uteki.common.config import settings as app_settings
-        import pyotp
-        if not app_settings.snb_totp_secret:
-            raise HTTPException(403, "TOTP not configured")
-        totp = pyotp.TOTP(app_settings.snb_totp_secret)
-        valid = totp.verify(request.totp_code, valid_window=1)
-
     if not valid:
-        raise HTTPException(403, "Invalid TOTP code")
+        raise HTTPException(403, "TOTP验证码无效或已过期")
 
     # 执行实际下单 (SNB place_order)
     execution_results = []
@@ -906,7 +827,6 @@ async def approve_decision(
     log = await decision_service.create_log(
         harness_id=harness_id,
         user_action="approved",
-        session=session,
         executed_allocations=allocations,
         execution_results=execution_results,
         user_notes=request.notes,
@@ -918,13 +838,11 @@ async def approve_decision(
 async def skip_decision(
     harness_id: str,
     request: DecisionSkipRequest,
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
     log = await decision_service.create_log(
         harness_id=harness_id,
         user_action="skipped",
-        session=session,
         user_notes=request.notes,
     )
     return {"success": True, "data": log}
@@ -934,13 +852,11 @@ async def skip_decision(
 async def reject_decision(
     harness_id: str,
     request: DecisionRejectRequest,
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
     log = await decision_service.create_log(
         harness_id=harness_id,
         user_action="rejected",
-        session=session,
         user_notes=request.notes,
     )
     return {"success": True, "data": log}
@@ -949,10 +865,9 @@ async def reject_decision(
 @router.get("/decisions/{decision_id}/counterfactuals", summary="获取反事实数据")
 async def get_counterfactuals(
     decision_id: str,
-    session: AsyncSession = Depends(get_db_session),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
-    data = await decision_service.get_counterfactuals(decision_id, session)
+    data = await decision_service.get_counterfactuals(decision_id)
     return {"success": True, "data": data}
 
 
@@ -963,10 +878,9 @@ async def get_counterfactuals(
 @router.get("/leaderboard", summary="获取模型排行榜")
 async def get_leaderboard(
     prompt_version_id: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_db_session),
     score_service: ScoreService = Depends(get_score_service),
 ):
-    leaderboard = await score_service.get_leaderboard(session, prompt_version_id=prompt_version_id)
+    leaderboard = await score_service.get_leaderboard(prompt_version_id=prompt_version_id)
     return {"success": True, "data": leaderboard}
 
 
@@ -976,48 +890,43 @@ async def get_leaderboard(
 
 @router.get("/evaluation/overview", summary="Evaluation 概览 KPI")
 async def get_evaluation_overview(
-    session: AsyncSession = Depends(get_db_session),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_overview(session)
+    data = await eval_service.get_overview()
     return {"success": True, "data": data}
 
 
 @router.get("/evaluation/voting-matrix", summary="投票热力图矩阵")
 async def get_evaluation_voting_matrix(
     limit: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_voting_matrix(session, limit=limit)
+    data = await eval_service.get_voting_matrix(limit=limit)
     return {"success": True, "data": data}
 
 
 @router.get("/evaluation/performance-trend", summary="模型性能趋势")
 async def get_evaluation_performance_trend(
     days: int = Query(30, ge=1, le=365),
-    session: AsyncSession = Depends(get_db_session),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_performance_trend(session, days=days)
+    data = await eval_service.get_performance_trend(days=days)
     return {"success": True, "data": data}
 
 
 @router.get("/evaluation/cost-analysis", summary="模型成本分析")
 async def get_evaluation_cost_analysis(
-    session: AsyncSession = Depends(get_db_session),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_cost_analysis(session)
+    data = await eval_service.get_cost_analysis()
     return {"success": True, "data": data}
 
 
 @router.get("/evaluation/counterfactual-summary", summary="反事实对比概览")
 async def get_evaluation_counterfactual_summary(
-    session: AsyncSession = Depends(get_db_session),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_counterfactual_summary(session)
+    data = await eval_service.get_counterfactual_summary()
     return {"success": True, "data": data}
 
 
@@ -1027,22 +936,20 @@ async def get_evaluation_counterfactual_summary(
 
 @router.get("/schedules", summary="获取调度任务列表")
 async def get_schedules(
-    session: AsyncSession = Depends(get_db_session),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
-    tasks = await scheduler_service.list_tasks(session)
+    tasks = await scheduler_service.list_tasks()
     return {"success": True, "data": tasks}
 
 
 @router.post("/schedules", summary="创建调度任务")
 async def create_schedule(
     request: ScheduleCreateRequest,
-    session: AsyncSession = Depends(get_db_session),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
     task = await scheduler_service.create_task(
         request.name, request.cron_expression, request.task_type,
-        session, config=request.config
+        config=request.config,
     )
     return {"success": True, "data": task}
 
@@ -1051,11 +958,10 @@ async def create_schedule(
 async def update_schedule(
     task_id: str,
     request: ScheduleUpdateRequest,
-    session: AsyncSession = Depends(get_db_session),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
     task = await scheduler_service.update_task(
-        task_id, session,
+        task_id,
         cron_expression=request.cron_expression,
         is_enabled=request.is_enabled,
         config=request.config,
@@ -1068,10 +974,9 @@ async def update_schedule(
 @router.delete("/schedules/{task_id}", summary="删除调度任务")
 async def delete_schedule(
     task_id: str,
-    session: AsyncSession = Depends(get_db_session),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
-    deleted = await scheduler_service.delete_task(task_id, session)
+    deleted = await scheduler_service.delete_task(task_id)
     if not deleted:
         raise HTTPException(404, "Schedule task not found")
     return {"success": True, "message": "Schedule task deleted"}
@@ -1080,16 +985,15 @@ async def delete_schedule(
 @router.post("/schedules/{task_id}/trigger", summary="手动触发调度任务")
 async def trigger_schedule(
     task_id: str,
-    session: AsyncSession = Depends(get_db_session),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
     data_service: DataService = Depends(get_data_service),
     memory_service: MemoryService = Depends(get_memory_service),
     prompt_service: PromptService = Depends(get_prompt_service),
     arena_service: ArenaService = Depends(get_arena_service),
     score_service: ScoreService = Depends(get_score_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
-    task_data = await scheduler_service.get_task(task_id, session)
+    task_data = await scheduler_service.get_task(task_id)
     if not task_data:
         raise HTTPException(404, "Schedule task not found")
 
@@ -1100,13 +1004,12 @@ async def trigger_schedule(
         builder = HarnessBuilder(data_service, memory_service, prompt_service)
         harness = await builder.build(
             harness_type=config.get("harness_type", "monthly_dca"),
-            session=session,
             user_id=_get_user_id(user),
             budget=config.get("budget"),
         )
-        arena_result = await arena_service.run(harness["id"], session)
+        arena_result = await arena_service.run(harness["id"])
 
-        await scheduler_service.update_run_status(task_id, "pending_user_action", session)
+        await scheduler_service.update_run_status(task_id, "pending_user_action")
         return {
             "success": True,
             "data": {
@@ -1124,26 +1027,25 @@ async def trigger_schedule(
             get_decision_service(), get_memory_service()
         )
         result = await reflection_svc.generate_reflection(
-            _get_user_id(user), session,
+            _get_user_id(user),
             lookback_days=config.get("lookback_days", 30),
         )
         status = "success" if result.get("status") == "completed" else "skipped"
-        await scheduler_service.update_run_status(task_id, status, session)
+        await scheduler_service.update_run_status(task_id, status)
         return {"success": True, "data": result}
 
     elif task_data["task_type"] == "counterfactual":
         decision_svc = get_decision_service()
         results = {}
         for days in [7, 30, 90]:
-            r = await decision_svc.run_counterfactual_batch(session, tracking_days=days)
+            r = await decision_svc.run_counterfactual_batch(tracking_days=days)
             results[f"{days}d"] = r
-        await scheduler_service.update_run_status(task_id, "success", session)
+        await scheduler_service.update_run_status(task_id, "success")
         return {"success": True, "data": results}
 
     elif task_data["task_type"] == "price_update":
         # 使用健壮更新：带重试、智能回填、异常检测
         results = await data_service.robust_update_all(
-            session,
             validate=config.get("validate_after_update", True),
             backfill=config.get("enable_backfill", True),
         )
@@ -1161,7 +1063,7 @@ async def trigger_schedule(
         else:
             status = "success"
 
-        await scheduler_service.update_run_status(task_id, status, session)
+        await scheduler_service.update_run_status(task_id, status)
 
         return {
             "success": not has_failures,
@@ -1185,17 +1087,16 @@ async def trigger_schedule(
 @router.post("/agent/chat", summary="Agent 对话")
 async def agent_chat(
     request: AgentChatRequest,
-    session: AsyncSession = Depends(get_db_session),
     data_service: DataService = Depends(get_data_service),
     backtest_service: BacktestService = Depends(get_backtest_service),
     prompt_service: PromptService = Depends(get_prompt_service),
     memory_service: MemoryService = Depends(get_memory_service),
     decision_service: DecisionService = Depends(get_decision_service),
-    user: Optional[dict] = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     from uteki.domains.index.services.agent_service import AgentService
     agent = AgentService(prompt_service, memory_service, data_service, backtest_service, decision_service)
-    result = await agent.chat(_get_user_id(user), request.message, session)
+    result = await agent.chat(_get_user_id(user), request.message)
     return {"success": True, "data": result}
 
 
@@ -1203,107 +1104,32 @@ async def agent_chat(
 async def adopt_model(
     harness_id: str,
     request: DecisionAdoptRequest,
-    session: AsyncSession = Depends(get_db_session),
     arena_service: ArenaService = Depends(get_arena_service),
     score_service: ScoreService = Depends(get_score_service),
 ):
     from uteki.domains.index.services.agent_service import AgentService
-    from uteki.domains.index.models.decision_harness import DecisionHarness
-    from sqlalchemy import select
 
     # 获取模型 I/O 详情
-    mio = await arena_service.get_model_io_detail(request.model_io_id, session)
+    mio = arena_service.get_model_io_detail(request.model_io_id)
     if not mio:
         raise HTTPException(404, "Model I/O not found")
 
-    # 获取 Harness
-    harness_q = select(DecisionHarness).where(DecisionHarness.id == harness_id)
-    harness_r = await session.execute(harness_q)
-    harness = harness_r.scalar_one_or_none()
-    if not harness:
+    # 获取 Harness via SupabaseRepository
+    harness_repo = SupabaseRepository("decision_harness")
+    harness_row = harness_repo.select_one(eq={"id": harness_id})
+    if not harness_row:
         raise HTTPException(404, "Harness not found")
 
     # 生成决策卡片
     agent = AgentService(None, None, None, None, None)
-    card = agent.generate_decision_card(mio, harness.to_dict())
+    card = agent.generate_decision_card(mio, harness_row)
 
     # 更新评分
     await score_service.update_on_adoption(
         mio["model_provider"], mio["model_name"],
-        harness.prompt_version_id, session
+        harness_row.get("prompt_version_id"),
     )
 
     return {"success": True, "data": card}
 
 
-# ══════════════════════════════════════════
-# Debug
-# ══════════════════════════════════════════
-
-@router.post("/debug/create-tables", summary="创建 Index 域数据库表")
-async def create_index_tables():
-    """使用 SQLAlchemy metadata.create_all 创建所有 index 域表（兼容 SQLite 和 PostgreSQL）"""
-    from sqlalchemy import text
-    from uteki.common.base import Base
-    # 确保所有 index 模型已注册到 Base.metadata
-    from uteki.domains.index.models import (  # noqa: F401
-        Watchlist, IndexPrice, PromptVersion, AgentMemory,
-        DecisionHarness, ModelIO, DecisionLog, Counterfactual,
-        ModelScore, ScheduleTask,
-    )
-
-    try:
-        from uteki.common.config import settings as app_settings
-        migrations_applied = []
-        async with db_manager.postgres_engine.begin() as conn:
-            # PostgreSQL 需要先创建 schema
-            if app_settings.database_type != "sqlite":
-                await conn.execute(text("CREATE SCHEMA IF NOT EXISTS index"))
-
-            await conn.run_sync(Base.metadata.create_all)
-
-            # 增量迁移：为已存在的表添加新列
-            column_migrations = [
-                ("index", "watchlist", "notes", "TEXT"),
-                ("index", "model_io", "pipeline_steps", "JSONB"),
-                ("index", "prompt_version", "prompt_type", "VARCHAR(20) DEFAULT 'system'"),
-            ]
-            for schema, table, column, col_type in column_migrations:
-                try:
-                    if app_settings.database_type == "sqlite":
-                        await conn.execute(text(
-                            f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
-                        ))
-                    else:
-                        await conn.execute(text(
-                            f'ALTER TABLE "{schema}".{table} ADD COLUMN IF NOT EXISTS {column} {col_type}'
-                        ))
-                    migrations_applied.append(f"{schema}.{table}.{column}")
-                except Exception:
-                    pass  # Column already exists or other non-critical error
-
-        return {"status": "completed", "message": "Index tables created successfully", "migrations": migrations_applied}
-    except Exception as e:
-        logger.error(f"Failed to create index tables: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@router.post("/debug/seed", summary="预设默认数据（观察池 + 调度）")
-async def seed_defaults(
-    session: AsyncSession = Depends(get_db_session),
-    data_service: DataService = Depends(get_data_service),
-    scheduler_service: SchedulerService = Depends(get_scheduler_service),
-    prompt_service: PromptService = Depends(get_prompt_service),
-):
-    watchlist_count = await data_service.seed_default_watchlist(session)
-    schedule_count = await scheduler_service.seed_defaults(session)
-    prompt = await prompt_service.get_current(session)  # auto-creates v1.0
-
-    return {
-        "success": True,
-        "data": {
-            "watchlist_seeded": watchlist_count,
-            "schedules_seeded": schedule_count,
-            "prompt_version": prompt["version"] if prompt else None,
-        },
-    }

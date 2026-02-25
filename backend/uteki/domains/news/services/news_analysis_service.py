@@ -3,12 +3,9 @@
 import logging
 from typing import Optional, Dict, AsyncGenerator
 from datetime import datetime
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from uteki.domains.news.models import NewsArticle
 from uteki.domains.agent.llm_adapter import LLMAdapterFactory, LLMProvider
-from uteki.common.config import settings
+from uteki.domains.news.services.sync_service import get_news_repo, backup_to_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -116,15 +113,35 @@ class NewsAnalysisService:
         self._llm_adapter = None
 
     def _get_llm_adapter(self):
-        """获取 LLM adapter"""
+        """获取 LLM adapter（从 DB model_config 读取）"""
         if self._llm_adapter is None:
-            api_key = settings.anthropic_api_key
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not configured")
+            from uteki.domains.index.services.arena_service import load_models_from_db
+
+            provider_map = {
+                "anthropic": LLMProvider.ANTHROPIC,
+                "openai": LLMProvider.OPENAI,
+                "deepseek": LLMProvider.DEEPSEEK,
+                "google": LLMProvider.GOOGLE,
+                "qwen": LLMProvider.QWEN,
+                "minimax": LLMProvider.MINIMAX,
+            }
+
+            db_models = load_models_from_db()
+            if not db_models:
+                raise ValueError(
+                    "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
+                )
+
+            m = db_models[0]
+            provider = provider_map.get(m["provider"])
+            if not provider:
+                raise ValueError(f"不支持的 LLM provider: {m['provider']}")
+
             self._llm_adapter = LLMAdapterFactory.create_adapter(
-                provider=LLMProvider.ANTHROPIC,
-                api_key=api_key,
-                model="claude-sonnet-4-20250514",
+                provider=provider,
+                api_key=m["api_key"],
+                model=m["model"],
+                base_url=m.get("base_url"),
             )
         return self._llm_adapter
 
@@ -134,7 +151,6 @@ class NewsAnalysisService:
         content: str,
         source: Optional[str] = None,
         article_id: Optional[str] = None,
-        session: Optional[AsyncSession] = None
     ) -> AsyncGenerator[Dict, None]:
         """
         流式分析新闻内容
@@ -164,10 +180,8 @@ class NewsAnalysisService:
             impact, analysis = parse_llm_response(accumulated_content)
 
             # 保存分析结果到数据库
-            if article_id and session:
-                await self._save_analysis_result(
-                    session, article_id, impact, analysis
-                )
+            if article_id:
+                await self._save_analysis_result(article_id, impact, analysis)
 
             logger.info(f"新闻分析完成 - 影响: {impact}")
             yield {"content": "", "done": True, "impact": impact, "analysis": analysis}
@@ -223,29 +237,82 @@ class NewsAnalysisService:
             logger.error(f"经济事件分析失败: {e}", exc_info=True)
             yield {"error": str(e), "done": True}
 
+    async def analyze_article(
+        self,
+        article_id: str,
+    ) -> bool:
+        """
+        非流式分析文章（用于自动管线，翻译后自动调用）
+
+        Returns:
+            True if analysis succeeded, False otherwise
+        """
+        try:
+            repo = get_news_repo()
+            article = repo.select_one(eq={"id": article_id})
+
+            if not article:
+                logger.warning(f"[auto-analyze] 文章不存在: {article_id}")
+                return False
+
+            # 使用中文标题+内容（如有），否则用英文
+            title = article.get("title_zh") or article.get("title")
+            content = (
+                article.get("content_full_zh")
+                or article.get("content_zh")
+                or article.get("content_full")
+                or article.get("content")
+                or ""
+            )
+
+            if not content:
+                logger.warning(f"[auto-analyze] 文章无内容，跳过: {article_id}")
+                return False
+
+            prompt = build_news_analysis_prompt(title, content, article.get("source"))
+            adapter = self._get_llm_adapter()
+
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT_NEWS},
+                {"role": "user", "content": prompt}
+            ]
+
+            # 非流式：收集完整响应
+            accumulated = ""
+            async for chunk in adapter.chat_stream(messages):
+                if chunk:
+                    accumulated += chunk
+
+            impact, analysis = parse_llm_response(accumulated)
+
+            # 保存
+            await self._save_analysis_result(article_id, impact, analysis)
+            logger.info(f"[auto-analyze] 完成: {article_id} impact={impact}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"[auto-analyze] 失败（不阻断翻译流程）: {article_id} - {e}")
+            return False
+
     async def _save_analysis_result(
         self,
-        session: AsyncSession,
         article_id: str,
         impact: str,
         analysis: str
     ):
         """保存分析结果到数据库"""
         try:
-            stmt = select(NewsArticle).where(NewsArticle.id == article_id)
-            result = await session.execute(stmt)
-            article = result.scalar_one_or_none()
-
-            if article:
-                article.ai_analysis = analysis
-                article.ai_impact = impact
-                article.ai_analysis_status = 'completed'
-                article.ai_analyzed_at = datetime.now()
-                article.ai_analysis_model = 'claude-sonnet'
-                await session.commit()
-                logger.info(f"分析结果已保存: {article_id}")
-            else:
-                logger.warning(f"文章不存在: {article_id}")
+            repo = get_news_repo()
+            update_data = {
+                "ai_analysis": analysis,
+                "ai_impact": impact,
+                "ai_analysis_status": "completed",
+                "ai_analyzed_at": datetime.now().isoformat(),
+                "ai_analysis_model": "claude-sonnet",
+            }
+            repo.update(data=update_data, eq={"id": article_id})
+            await backup_to_sqlite([{**update_data, "id": article_id}])
+            logger.info(f"分析结果已保存: {article_id}")
 
         except Exception as e:
             logger.error(f"保存分析结果失败: {e}")

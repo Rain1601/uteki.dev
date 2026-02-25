@@ -4,8 +4,6 @@ import json
 import logging
 from typing import Optional, Dict, Any, List
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from uteki.common.config import settings
 from uteki.domains.agent.llm_adapter import (
     LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage
@@ -41,19 +39,18 @@ class AgentService:
         self,
         user_id: str,
         message: str,
-        session: AsyncSession,
     ) -> Dict[str, Any]:
         """处理用户消息，返回 LLM 回复"""
         # 获取 system prompt
-        prompt_data = await self.prompt_service.get_current(session)
+        prompt_data = await self.prompt_service.get_current()
         system_prompt = prompt_data["content"] if prompt_data else ""
 
         # 获取记忆上下文
-        memory_summary = await self.memory_service.get_summary(user_id, session)
+        memory_summary = await self.memory_service.get_summary(user_id)
         memory_context = self._format_memory_context(memory_summary)
 
         # 获取观察池数据作为额外上下文
-        watchlist = await self.data_service.get_watchlist(session)
+        watchlist = self.data_service.get_watchlist()
         watchlist_info = ", ".join(w["symbol"] for w in watchlist) if watchlist else "（空）"
 
         full_system = (
@@ -63,7 +60,7 @@ class AgentService:
         )
 
         # 尝试所有可用 LLM（按优先级 fallback）
-        adapters = await self._get_all_adapters(session)
+        adapters = await self._get_all_adapters()
         if not adapters:
             return {"response": "No LLM configured. Please set an API key.", "tool_calls": []}
 
@@ -116,10 +113,10 @@ class AgentService:
             "budget": harness_data.get("task", {}).get("budget"),
         }
 
-    async def _get_all_adapters(self, session: AsyncSession) -> List:
+    async def _get_all_adapters(self) -> List:
         """获取所有可用的 LLM adapter，返回 [(name, adapter), ...]
 
-        优先从 DB model_config 加载，为空时 fallback 到 env key 硬编码列表。
+        从 DB model_config 加载，未配置时抛出 ValueError。
         """
         from uteki.domains.index.services.arena_service import load_models_from_db
 
@@ -132,59 +129,39 @@ class AgentService:
             "minimax": LLMProvider.MINIMAX,
         }
 
-        # Try DB config first
-        db_models = await load_models_from_db(session)
-        if db_models:
-            adapters = []
-            for m in db_models:
-                provider = provider_map.get(m["provider"])
-                if not provider:
-                    continue
-                try:
-                    base_url = m.get("base_url") or (
-                        settings.google_api_base_url if m["provider"] == "google" else None
-                    )
-                    adapter = LLMAdapterFactory.create_adapter(
-                        provider=provider,
-                        api_key=m["api_key"],
-                        model=m["model"],
-                        config=LLMConfig(
-                            temperature=m.get("temperature", 0.3),
-                            max_tokens=m.get("max_tokens", 4096),
-                        ),
-                        base_url=base_url,
-                    )
-                    adapters.append((f"{m['provider']}/{m['model']}", adapter))
-                except Exception as e:
-                    logger.warning(f"Failed to create adapter for {m['provider']}/{m['model']}: {e}")
-            if adapters:
-                return adapters
+        db_models = load_models_from_db()
+        if not db_models:
+            raise ValueError(
+                "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
+            )
 
-        # Fallback to env key hardcoded list
-        providers = [
-            (settings.anthropic_api_key, LLMProvider.ANTHROPIC, settings.llm_model or "claude-sonnet-4-20250514"),
-            (settings.openai_api_key, LLMProvider.OPENAI, "gpt-4o"),
-            (settings.deepseek_api_key, LLMProvider.DEEPSEEK, "deepseek-chat"),
-            (settings.google_api_key, LLMProvider.GOOGLE, "gemini-2.5-pro-thinking"),
-            (settings.dashscope_api_key, LLMProvider.QWEN, "qwen-plus"),
-            (settings.minimax_api_key, LLMProvider.MINIMAX, "MiniMax-Text-01"),
-        ]
         adapters = []
-        for api_key, provider, model in providers:
-            if not api_key:
+        for m in db_models:
+            provider = provider_map.get(m["provider"])
+            if not provider:
                 continue
             try:
-                base_url = settings.google_api_base_url if provider == LLMProvider.GOOGLE else None
+                base_url = m.get("base_url") or (
+                    settings.google_api_base_url if m["provider"] == "google" else None
+                )
                 adapter = LLMAdapterFactory.create_adapter(
                     provider=provider,
-                    api_key=api_key,
-                    model=model,
-                    config=LLMConfig(temperature=0.3, max_tokens=4096),
+                    api_key=m["api_key"],
+                    model=m["model"],
+                    config=LLMConfig(
+                        temperature=m.get("temperature", 0.3),
+                        max_tokens=m.get("max_tokens", 4096),
+                    ),
                     base_url=base_url,
                 )
-                adapters.append((provider.value, adapter))
+                adapters.append((f"{m['provider']}/{m['model']}", adapter))
             except Exception as e:
-                logger.warning(f"Failed to create {provider.value} adapter: {e}")
+                logger.warning(f"Failed to create adapter for {m['provider']}/{m['model']}: {e}")
+
+        if not adapters:
+            raise ValueError(
+                "所有已配置的模型均创建失败，请检查「Settings → Model Config」中的 API Key 是否正确。"
+            )
         return adapters
 
     @staticmethod

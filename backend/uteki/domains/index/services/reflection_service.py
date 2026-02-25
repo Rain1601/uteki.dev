@@ -1,11 +1,9 @@
-"""反思生成服务 — 月度回顾与经验提取"""
+"""反思生成服务 — 月度回顾与经验提取 — Supabase REST API 版"""
 
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from uteki.common.config import settings
 from uteki.domains.index.services.decision_service import DecisionService
@@ -28,7 +26,6 @@ class ReflectionService:
     async def generate_reflection(
         self,
         user_id: str,
-        session: AsyncSession,
         lookback_days: int = 30,
     ) -> Dict[str, Any]:
         """生成月度反思
@@ -40,7 +37,7 @@ class ReflectionService:
         # 获取近期决策
         start_date = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
         decisions = await self.decision_service.get_timeline(
-            session, limit=50, start_date=start_date
+            limit=50, start_date=start_date
         )
 
         if not decisions:
@@ -49,7 +46,7 @@ class ReflectionService:
         # 获取每个决策的反事实分类
         decision_summaries = []
         for d in decisions:
-            cfs = await self.decision_service.classify_counterfactuals(d["id"], session)
+            cfs = await self.decision_service.classify_counterfactuals(d["id"])
             decision_summaries.append({
                 "date": d.get("created_at"),
                 "action": d.get("user_action"),
@@ -62,11 +59,11 @@ class ReflectionService:
         reflection_prompt = self._build_reflection_prompt(decision_summaries)
 
         # 调用 LLM 生成反思
-        adapter = await self._get_adapter(session)
+        adapter = await self._get_adapter()
         if not adapter:
             # 无 LLM 可用，生成统计摘要
             return await self._generate_statistical_reflection(
-                user_id, decision_summaries, session
+                user_id, decision_summaries
             )
 
         from uteki.domains.agent.llm_adapter import LLMMessage
@@ -85,19 +82,19 @@ class ReflectionService:
         except Exception as e:
             logger.error(f"Reflection LLM error: {e}")
             return await self._generate_statistical_reflection(
-                user_id, decision_summaries, session
+                user_id, decision_summaries
             )
 
         # 保存反思到记忆
         await self.memory_service.write(
-            user_id, "reflection", content, session
+            user_id, "reflection", content
         )
 
         # 提取经验教训
         experiences = self._extract_experiences(content)
         for exp in experiences:
             await self.memory_service.write(
-                user_id, "experience", exp, session
+                user_id, "experience", exp
             )
 
         return {
@@ -111,7 +108,6 @@ class ReflectionService:
         self,
         user_id: str,
         summaries: List[Dict],
-        session: AsyncSession,
     ) -> Dict[str, Any]:
         """无 LLM 时生成统计反思"""
         total = len(summaries)
@@ -143,7 +139,7 @@ class ReflectionService:
         )
 
         await self.memory_service.write(
-            user_id, "reflection", content, session
+            user_id, "reflection", content
         )
 
         return {
@@ -194,7 +190,7 @@ class ReflectionService:
                     break
         return experiences[:5]  # 最多 5 条
 
-    async def _get_adapter(self, session: AsyncSession):
+    async def _get_adapter(self):
         from uteki.domains.agent.llm_adapter import (
             LLMAdapterFactory, LLMProvider, LLMConfig
         )
@@ -210,7 +206,7 @@ class ReflectionService:
         }
 
         # Try DB config first
-        db_models = await load_models_from_db(session)
+        db_models = load_models_from_db()
         if db_models:
             m = db_models[0]
             provider = provider_map.get(m["provider"])
@@ -229,21 +225,7 @@ class ReflectionService:
                 except Exception as e:
                     logger.warning(f"Failed to create adapter from DB config: {e}")
 
-        # Fallback to env keys
-        if settings.anthropic_api_key:
-            return LLMAdapterFactory.create_adapter(
-                provider=LLMProvider.ANTHROPIC,
-                api_key=settings.anthropic_api_key,
-                model=settings.llm_model or "claude-sonnet-4-20250514",
-                config=LLMConfig(temperature=0.5, max_tokens=2048),
-            )
-        if settings.openai_api_key:
-            return LLMAdapterFactory.create_adapter(
-                provider=LLMProvider.OPENAI,
-                api_key=settings.openai_api_key,
-                model="gpt-4o",
-                config=LLMConfig(temperature=0.5, max_tokens=2048),
-            )
+        logger.warning("No LLM model configured in DB for reflection service")
         return None
 
 

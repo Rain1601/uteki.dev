@@ -2,14 +2,12 @@
 Agent domain API routes - FastAPI路由
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import json
 import logging
 
-from uteki.common.database import db_manager
 from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
 from uteki.domains.agent.research import ResearchRequest, DeepResearchOrchestrator
@@ -20,21 +18,14 @@ from uteki.domains.agent.llm_adapter import (
     LLMConfig,
 )
 from uteki.common.config import settings
-from uteki.domains.auth.deps import get_current_user_optional
+from uteki.domains.auth.deps import get_current_user
+from fastapi import Depends
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-# ============================================================================
-# Dependency: 获取数据库会话
-# ============================================================================
-
-
-async def get_db_session():
-    """获取数据库会话依赖"""
-    async with db_manager.get_postgres_session() as session:
-        yield session
+# Module-level service instance (no DB session needed)
+chat_svc = get_chat_service()
 
 
 # ============================================================================
@@ -50,9 +41,7 @@ async def get_db_session():
 )
 async def create_conversation(
     data: schemas.ChatConversationCreate,
-    session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-    current_user: dict = Depends(get_current_user_optional),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     创建新的聊天会话
@@ -60,20 +49,17 @@ async def create_conversation(
     - **title**: 会话标题
     - **mode**: 会话模式 (chat, analysis, trading)
     """
-    # 使用当前登录用户ID，未登录则使用 default
-    user_id = current_user.get("user_id") if current_user else "default"
-    # 覆盖 data 中的 user_id
-    data.user_id = user_id
-    conversation = await chat_svc.create_conversation(session, data)
+    data.user_id = current_user["user_id"]
+    conversation = await chat_svc.create_conversation(data)
 
     return schemas.ChatConversationResponse(
-        id=conversation.id,
-        title=conversation.title,
-        mode=conversation.mode,
-        user_id=conversation.user_id,
-        is_archived=conversation.is_archived,
-        created_at=conversation.created_at,
-        updated_at=conversation.updated_at,
+        id=conversation["id"],
+        title=conversation["title"],
+        mode=conversation["mode"],
+        user_id=conversation.get("user_id"),
+        is_archived=conversation.get("is_archived", False),
+        created_at=conversation["created_at"],
+        updated_at=conversation["updated_at"],
     )
 
 
@@ -86,27 +72,24 @@ async def list_conversations(
     include_archived: bool = Query(False, description="是否包含归档会话"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-    current_user: dict = Depends(get_current_user_optional),
+    current_user: dict = Depends(get_current_user),
 ):
     """列出当前用户的聊天会话"""
-    # 使用当前登录用户ID，未登录则使用 default
-    user_id = current_user.get("user_id") if current_user else "default"
+    user_id = current_user["user_id"]
     items, total = await chat_svc.list_conversations(
-        session, user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
+        user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
     )
 
     # 转换为响应schema
     response_items = [
         schemas.ChatConversationResponse(
-            id=item.id,
-            title=item.title,
-            mode=item.mode,
-            user_id=item.user_id,
-            is_archived=item.is_archived,
-            created_at=item.created_at,
-            updated_at=item.updated_at,
+            id=item["id"],
+            title=item["title"],
+            mode=item["mode"],
+            user_id=item.get("user_id"),
+            is_archived=item.get("is_archived", False),
+            created_at=item["created_at"],
+            updated_at=item["updated_at"],
         )
         for item in items
     ]
@@ -125,37 +108,34 @@ async def list_conversations(
     response_model=schemas.ChatConversationDetailResponse,
     summary="获取聊天会话详情",
 )
-async def get_conversation(
-    conversation_id: str, session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-):
+async def get_conversation(conversation_id: str):
     """获取指定聊天会话的详细信息（包含消息历史）"""
-    conversation = await chat_svc.get_conversation(session, conversation_id)
+    conversation = await chat_svc.get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # 获取消息历史
-    messages = await chat_svc.get_conversation_messages(session, conversation_id)
+    messages = await chat_svc.get_conversation_messages(conversation_id)
 
     return schemas.ChatConversationDetailResponse(
-        id=conversation.id,
-        title=conversation.title,
-        mode=conversation.mode,
-        user_id=conversation.user_id,
-        is_archived=conversation.is_archived,
-        created_at=conversation.created_at,
-        updated_at=conversation.updated_at,
+        id=conversation["id"],
+        title=conversation["title"],
+        mode=conversation["mode"],
+        user_id=conversation.get("user_id"),
+        is_archived=conversation.get("is_archived", False),
+        created_at=conversation["created_at"],
+        updated_at=conversation["updated_at"],
         messages=[
             schemas.ChatMessageResponse(
-                id=msg.id,
-                conversation_id=msg.conversation_id,
-                role=msg.role,
-                content=msg.content,
-                llm_provider=msg.llm_provider,
-                llm_model=msg.llm_model,
-                token_usage=msg.token_usage,
-                created_at=msg.created_at,
-                updated_at=msg.updated_at,
+                id=msg["id"],
+                conversation_id=msg["conversation_id"],
+                role=msg["role"],
+                content=msg["content"],
+                llm_provider=msg.get("llm_provider"),
+                llm_model=msg.get("llm_model"),
+                token_usage=msg.get("token_usage"),
+                created_at=msg["created_at"],
+                updated_at=msg["updated_at"],
             )
             for msg in messages
         ],
@@ -170,22 +150,20 @@ async def get_conversation(
 async def update_conversation(
     conversation_id: str,
     data: schemas.ChatConversationUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
 ):
     """更新聊天会话（标题、归档状态等）"""
-    conversation = await chat_svc.update_conversation(session, conversation_id, data)
+    conversation = await chat_svc.update_conversation(conversation_id, data)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     return schemas.ChatConversationResponse(
-        id=conversation.id,
-        title=conversation.title,
-        mode=conversation.mode,
-        user_id=conversation.user_id,
-        is_archived=conversation.is_archived,
-        created_at=conversation.created_at,
-        updated_at=conversation.updated_at,
+        id=conversation["id"],
+        title=conversation["title"],
+        mode=conversation["mode"],
+        user_id=conversation.get("user_id"),
+        is_archived=conversation.get("is_archived", False),
+        created_at=conversation["created_at"],
+        updated_at=conversation["updated_at"],
     )
 
 
@@ -194,12 +172,9 @@ async def update_conversation(
     response_model=schemas.MessageResponse,
     summary="删除聊天会话",
 )
-async def delete_conversation(
-    conversation_id: str, session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-):
+async def delete_conversation(conversation_id: str):
     """删除聊天会话（会级联删除所有消息）"""
-    success = await chat_svc.delete_conversation(session, conversation_id)
+    success = await chat_svc.delete_conversation(conversation_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -215,11 +190,7 @@ async def delete_conversation(
     "/chat",
     summary="聊天接口（流式返回）",
 )
-async def chat(
-    data: schemas.ChatRequest,
-    session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-):
+async def chat(data: schemas.ChatRequest):
     """
     与Agent进行聊天（支持流式返回）
 
@@ -239,7 +210,7 @@ async def chat(
     async def event_generator():
         """SSE事件生成器"""
         try:
-            async for chunk in chat_svc.chat(session, data):
+            async for chunk in chat_svc.chat(data):
                 # 转换为JSON并发送
                 yield f"data: {chunk.model_dump_json()}\n\n"
         except Exception as e:
@@ -267,11 +238,7 @@ async def chat(
     response_model=schemas.ChatResponse,
     summary="聊天接口（非流式）",
 )
-async def chat_sync(
-    data: schemas.ChatRequest,
-    session: AsyncSession = Depends(get_db_session),
-    chat_svc: ChatService = Depends(get_chat_service),
-):
+async def chat_sync(data: schemas.ChatRequest):
     """
     与Agent进行聊天（非流式返回，等待完整响应）
 
@@ -284,7 +251,7 @@ async def chat_sync(
     conversation_id = None
     full_content = ""
 
-    async for chunk in chat_svc.chat(session, data):
+    async for chunk in chat_svc.chat(data):
         conversation_id = chunk.conversation_id
         if not chunk.done:
             full_content += chunk.chunk
@@ -314,69 +281,44 @@ async def chat_sync(
 )
 async def get_available_models():
     """
-    返回所有支持的模型列表，标记哪些已配置可用
-
-    根据 .env 配置检查哪些模型的 API key 已配置
+    返回所有支持的模型列表（从 DB model_config 读取）
     """
-    from uteki.common.config import settings
+    from uteki.domains.index.services.arena_service import load_models_from_db
 
-    # 定义所有支持的模型（参考uchu_trade配置）
-    all_models = [
-        {
-            "id": "claude-sonnet-4-20250514",
-            "name": "Claude 4.5 Sonnet",
-            "provider": "Claude",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
-            "available": bool(settings.anthropic_api_key),
-        },
-        {
-            "id": "deepseek-chat",
-            "name": "DeepSeek V3.2",
-            "provider": "DeepSeek",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
-            "available": bool(settings.deepseek_api_key),
-        },
-        {
-            "id": "gemini-2.0-flash-exp",
-            "name": "Gemini 2.0 Flash",
-            "provider": "Google",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
-            "available": bool(settings.google_api_key),
-        },
-        {
-            "id": "gpt-4o-mini",
-            "name": "GPT-4o Mini",
-            "provider": "OpenAI",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
-            "available": bool(settings.openai_api_key),
-        },
-        {
-            "id": "qwen-plus",
-            "name": "Qwen Plus",
-            "provider": "Qwen",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
-            "available": bool(settings.dashscope_api_key),
-        },
-        {
-            "id": "abab6.5s-chat",
-            "name": "MiniMax abab6.5s",
-            "provider": "MiniMax",
-            "icon": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
-            "available": bool(settings.minimax_api_key),
-        },
-    ]
+    PROVIDER_ICONS = {
+        "anthropic": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
+        "openai": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
+        "deepseek": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
+        "google": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
+        "qwen": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
+        "minimax": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
+    }
+    PROVIDER_DISPLAY = {
+        "anthropic": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",
+        "google": "Google", "qwen": "Qwen", "minimax": "MiniMax",
+    }
 
-    # 检查是否有至少一个可用的模型
-    available_count = sum(1 for m in all_models if m["available"])
-    if available_count == 0:
-        raise HTTPException(
-            status_code=500,
-            detail="No LLM API keys configured. Please configure at least one LLM provider in .env"
-        )
+    db_models = load_models_from_db()
+    if not db_models:
+        return {
+            "models": [],
+            "default_model": None,
+            "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。",
+        }
+
+    all_models = []
+    for m in db_models:
+        all_models.append({
+            "id": m["model"],
+            "name": m["model"],
+            "provider": PROVIDER_DISPLAY.get(m["provider"], m["provider"]),
+            "icon": PROVIDER_ICONS.get(m["provider"], ""),
+            "available": True,
+        })
 
     return {
         "models": all_models,
-        "default_model": settings.llm_model,
+        "default_model": db_models[0]["model"] if db_models else None,
     }
 
 
@@ -411,6 +353,8 @@ async def research_stream(request: ResearchRequest):
     - research_complete: 研究完成
     - error: 错误信息
     """
+    from uteki.domains.index.services.arena_service import load_models_from_db
+
     search_engine = SearchEngine(
         google_api_key=settings.google_search_api_key,
         google_engine_id=settings.google_search_engine_id,
@@ -420,41 +364,33 @@ async def research_stream(request: ResearchRequest):
     async def event_generator():
         """SSE事件生成器"""
         try:
-            # Create LLM adapter for research - use default model from settings
-            llm_adapter = None
+            # Create LLM adapter from DB config
+            provider_map = {
+                "anthropic": LLMProvider.ANTHROPIC,
+                "openai": LLMProvider.OPENAI,
+                "deepseek": LLMProvider.DEEPSEEK,
+                "google": LLMProvider.GOOGLE,
+                "qwen": LLMProvider.QWEN,
+                "minimax": LLMProvider.MINIMAX,
+            }
 
-            # Determine provider from model name
-            if "claude" in settings.llm_model.lower():
-                if settings.anthropic_api_key:
+            db_models = load_models_from_db()
+            llm_adapter = None
+            for m in db_models:
+                provider = provider_map.get(m["provider"])
+                if provider:
                     llm_adapter = LLMAdapterFactory.create_adapter(
-                        provider=LLMProvider.ANTHROPIC,
-                        api_key=settings.anthropic_api_key,
-                        model=settings.llm_model,
+                        provider=provider,
+                        api_key=m["api_key"],
+                        model=m["model"],
+                        base_url=m.get("base_url"),
                     )
-            elif "gpt" in settings.llm_model.lower():
-                if settings.openai_api_key:
-                    llm_adapter = LLMAdapterFactory.create_adapter(
-                        provider=LLMProvider.OPENAI,
-                        api_key=settings.openai_api_key,
-                        model=settings.llm_model,
-                    )
-            elif "deepseek" in settings.llm_model.lower():
-                if settings.deepseek_api_key:
-                    llm_adapter = LLMAdapterFactory.create_adapter(
-                        provider=LLMProvider.DEEPSEEK,
-                        api_key=settings.deepseek_api_key,
-                        model=settings.llm_model,
-                    )
-            elif "qwen" in settings.llm_model.lower():
-                if settings.dashscope_api_key:
-                    llm_adapter = LLMAdapterFactory.create_adapter(
-                        provider=LLMProvider.QWEN,
-                        api_key=settings.dashscope_api_key,
-                        model=settings.llm_model,
-                    )
+                    break
 
             if not llm_adapter:
-                raise ValueError("No LLM adapter configured")
+                raise ValueError(
+                    "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
+                )
 
             async for event in orchestrator.research_stream(
                 query=request.query,
@@ -479,136 +415,6 @@ async def research_stream(request: ResearchRequest):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.post(
-    "/debug/create-tables",
-    summary="手动创建数据库表",
-)
-async def debug_create_tables(session: AsyncSession = Depends(get_db_session)):
-    """手动创建所有必需的数据库表"""
-    try:
-        from sqlalchemy import text
-
-        sqls = [
-            # Chat Conversations
-            """
-            CREATE TABLE IF NOT EXISTS agent.chat_conversations (
-                id VARCHAR(36) PRIMARY KEY,
-                user_id VARCHAR(36) NOT NULL DEFAULT 'default',
-                title VARCHAR(500) NOT NULL DEFAULT '新对话',
-                mode VARCHAR(50) NOT NULL DEFAULT 'chat',
-                is_archived BOOLEAN NOT NULL DEFAULT FALSE,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_chat_conversations_user ON agent.chat_conversations(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_chat_conversations_created ON agent.chat_conversations(created_at)",
-
-            # Chat Messages
-            """
-            CREATE TABLE IF NOT EXISTS agent.chat_messages (
-                id VARCHAR(36) PRIMARY KEY,
-                conversation_id VARCHAR(36) NOT NULL REFERENCES agent.chat_conversations(id) ON DELETE CASCADE,
-                role VARCHAR(20) NOT NULL,
-                content TEXT NOT NULL,
-                llm_provider VARCHAR(50),
-                llm_model VARCHAR(100),
-                token_usage JSONB,
-                research_data JSONB,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON agent.chat_messages(conversation_id)",
-            "CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON agent.chat_messages(created_at)",
-        ]
-
-        async with session.begin():
-            for sql in sqls:
-                await session.execute(text(sql))
-
-        # 验证
-        result = await session.execute(
-            text("SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('agent', 'admin') ORDER BY table_schema, table_name")
-        )
-        tables = [f"{row[0]}.{row[1]}" for row in result.fetchall()]
-
-        return {
-            "status": "success",
-            "message": "Tables created successfully",
-            "tables": tables
-        }
-    except Exception as e:
-        import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
-
-
-@router.get(
-    "/debug/config",
-    summary="配置信息检查",
-)
-async def debug_config():
-    """检查环境配置"""
-    from uteki.common.config import settings
-    import os
-    return {
-        "database_type": settings.database_type,
-        "database_url": settings.database_url[:50] + "..." if len(settings.database_url) > 50 else settings.database_url,
-        "env_database_type": os.getenv("DATABASE_TYPE"),
-        "environment": settings.environment,
-        "debug": settings.debug,
-    }
-
-
-@router.get(
-    "/debug/db-test",
-    summary="数据库连接测试",
-)
-async def debug_db_test(session: AsyncSession = Depends(get_db_session)):
-    """测试数据库基本操作"""
-    try:
-        from sqlalchemy import text
-
-        # 测试 1: 简单查询
-        result = await session.execute(text("SELECT 1 as test"))
-        test_val = result.scalar()
-
-        # 测试 2: 检查 schemas
-        schema_result = await session.execute(
-            text("SELECT schema_name FROM information_schema.schemata WHERE schema_name IN ('admin', 'agent', 'auth')")
-        )
-        schemas = [row[0] for row in schema_result.fetchall()]
-
-        # 测试 3: 检查表
-        table_result = await session.execute(
-            text("SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('admin', 'agent', 'auth')")
-        )
-        tables = [f"{row[0]}.{row[1]}" for row in table_result.fetchall()]
-
-        # 测试 4: 检查 Base.metadata 中注册的表
-        from uteki.common.base import Base
-        registered_tables = list(Base.metadata.tables.keys())
-
-        return {
-            "status": "ok",
-            "test_query": test_val,
-            "schemas": schemas,
-            "tables": tables,
-            "registered_tables": registered_tables,
-        }
-    except Exception as e:
-        import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
 
 
 @router.get(

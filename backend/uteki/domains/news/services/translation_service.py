@@ -5,12 +5,9 @@ import logging
 import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from uteki.common.config import settings
-from uteki.domains.news.models import NewsArticle
 from uteki.domains.agent.llm_adapter import LLMAdapterFactory, LLMProvider, LLMConfig
+from uteki.domains.news.services.sync_service import get_news_repo, backup_to_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -61,36 +58,57 @@ TRANSLATION_ONLY_SYSTEM_PROMPT = """你是一个专业的英文到中文翻译�
 class TranslationService:
     """新闻翻译与自动标签服务"""
 
+    _PROVIDER_MAP = {
+        "deepseek": LLMProvider.DEEPSEEK,
+        "qwen": LLMProvider.QWEN,
+        "anthropic": LLMProvider.ANTHROPIC,
+        "openai": LLMProvider.OPENAI,
+        "google": LLMProvider.GOOGLE,
+        "minimax": LLMProvider.MINIMAX,
+    }
+
     def __init__(self, provider: str = "deepseek"):
         self.provider = provider.lower()
         self._llm_adapter = None
+        self._db_model = None
 
-        # 根据 provider 选择默认模型
-        if self.provider == "deepseek":
-            self.model = "deepseek-chat"
-            self.llm_provider = LLMProvider.DEEPSEEK
-            self.api_key = settings.deepseek_api_key
-        elif self.provider == "qwen":
-            self.model = "qwen-plus"
-            self.llm_provider = LLMProvider.QWEN
-            self.api_key = settings.qwen_api_key
+        # 从 DB model_config 读取配置
+        from uteki.domains.index.services.arena_service import load_models_from_db
+        db_models = load_models_from_db()
+
+        # 优先匹配指定 provider
+        self._db_model = next((m for m in db_models if m["provider"] == self.provider), None)
+        # 未匹配到则用第一个可用模型
+        if not self._db_model and db_models:
+            self._db_model = db_models[0]
+            self.provider = self._db_model["provider"]
+
+        if self._db_model:
+            self.model = self._db_model["model"]
+            self.llm_provider = self._PROVIDER_MAP.get(self.provider)
+            logger.info(f"翻译服务初始化: provider={self.provider}, model={self.model}")
         else:
-            raise ValueError(f"不支持的 provider: {provider}")
-
-        logger.info(f"翻译服务初始化: provider={self.provider}, model={self.model}")
+            self.model = None
+            self.llm_provider = None
+            logger.warning("翻译服务初始化: 未找到任何 LLM 配置")
 
     def _get_llm_adapter(self):
-        """获取 LLM adapter"""
+        """获取 LLM adapter（从 DB model_config 读取）"""
         if self._llm_adapter is None:
-            if not self.api_key:
-                raise ValueError(f"{self.provider.upper()}_API_KEY not configured")
+            if not self._db_model:
+                raise ValueError(
+                    "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
+                )
+            if not self.llm_provider:
+                raise ValueError(f"不支持的 LLM provider: {self.provider}")
 
             config = LLMConfig(temperature=0.3, max_tokens=4096)
             self._llm_adapter = LLMAdapterFactory.create_adapter(
                 provider=self.llm_provider,
-                api_key=self.api_key,
+                api_key=self._db_model["api_key"],
                 model=self.model,
                 config=config,
+                base_url=self._db_model.get("base_url"),
             )
         return self._llm_adapter
 
@@ -155,19 +173,18 @@ class TranslationService:
             raise
 
     async def translate_and_label_article(
-        self, article_id: str, session: AsyncSession
+        self, article_id: str
     ) -> Dict[str, Any]:
         """翻译文章并生成标签（合并为一次 LLM 调用）"""
         try:
-            stmt = select(NewsArticle).where(NewsArticle.id == article_id)
-            result = await session.execute(stmt)
-            article = result.scalar_one_or_none()
+            repo = get_news_repo()
+            article = repo.select_one(eq={"id": article_id})
 
             if not article:
                 raise ValueError(f"文章不存在: {article_id}")
 
             # 检查是否已翻译
-            if article.translation_status == 'completed':
+            if article.get("translation_status") == 'completed':
                 logger.info(f"文章已翻译: {article_id}")
                 return {
                     "status": "already_translated",
@@ -177,9 +194,9 @@ class TranslationService:
             logger.info(f"开始翻译并标签文章: {article_id}")
 
             # 构建要翻译的内容
-            title = article.title or ""
-            keypoints = article.summary_keypoints or ""
-            content = (article.content_full or "")[:5000]  # 限制长度
+            title = article.get("title") or ""
+            keypoints = article.get("summary_keypoints") or ""
+            content = (article.get("content_full") or "")[:5000]  # 限制长度
 
             # 构建 JSON 请求
             user_prompt = f"""请分析并翻译以下新闻：
@@ -212,17 +229,20 @@ class TranslationService:
             parsed = self._extract_json_from_response(response)
             results = {"translated": False, "labeled": False}
 
+            # 准备更新数据
+            update_data = {}
+
             if parsed:
                 # 提取翻译
-                if parsed.get("title_zh") and not article.title_zh:
-                    article.title_zh = parsed["title_zh"]
+                if parsed.get("title_zh") and not article.get("title_zh"):
+                    update_data["title_zh"] = parsed["title_zh"]
                     results["translated"] = True
 
-                if parsed.get("keypoints_zh") and not article.summary_keypoints_zh:
-                    article.summary_keypoints_zh = parsed["keypoints_zh"]
+                if parsed.get("keypoints_zh") and not article.get("summary_keypoints_zh"):
+                    update_data["summary_keypoints_zh"] = parsed["keypoints_zh"]
 
-                if parsed.get("content_zh") and not article.content_full_zh:
-                    article.content_full_zh = parsed["content_zh"]
+                if parsed.get("content_zh") and not article.get("content_full_zh"):
+                    update_data["content_full_zh"] = parsed["content_zh"]
 
                 # 提取并验证标签
                 importance = self._validate_label(
@@ -236,32 +256,46 @@ class TranslationService:
                 )
 
                 if importance:
-                    article.importance_level = importance
+                    update_data["importance_level"] = importance
                     results["labeled"] = True
                 if impact:
-                    article.ai_impact = impact
+                    update_data["ai_impact"] = impact
                 if confidence:
-                    article.impact_confidence = confidence
+                    update_data["impact_confidence"] = confidence
 
                 logger.info(f"标签结果: importance={importance}, impact={impact}, confidence={confidence}")
 
             else:
                 # JSON 解析失败，回退到纯翻译模式
                 logger.warning(f"JSON 解析失败，回退到纯翻译模式: {article_id}")
-                if title and not article.title_zh:
-                    article.title_zh = await self.translate_text(title, "标题")
+                if title and not article.get("title_zh"):
+                    update_data["title_zh"] = await self.translate_text(title, "标题")
                     results["translated"] = True
-                if keypoints and not article.summary_keypoints_zh:
-                    article.summary_keypoints_zh = await self.translate_text(keypoints, "关键要点")
-                if content and not article.content_full_zh:
-                    article.content_full_zh = await self.translate_text(content, "正文")
+                if keypoints and not article.get("summary_keypoints_zh"):
+                    update_data["summary_keypoints_zh"] = await self.translate_text(keypoints, "关键要点")
+                if content and not article.get("content_full_zh"):
+                    update_data["content_full_zh"] = await self.translate_text(content, "正文")
 
             # 更新状态
-            article.translation_status = 'completed'
-            article.translated_at = datetime.utcnow()
-            article.translation_model = f"{self.provider}:{self.model}"
+            update_data["translation_status"] = "completed"
+            update_data["translated_at"] = datetime.utcnow().isoformat()
+            update_data["translation_model"] = f"{self.provider}:{self.model}"
 
-            await session.commit()
+            repo.update(data=update_data, eq={"id": article_id})
+
+            # 备份到 SQLite
+            updated_article = repo.select_one(eq={"id": article_id})
+            if updated_article:
+                await backup_to_sqlite([updated_article])
+
+            # 自动 AI 分析（翻译后自动触发，失败不阻断）
+            try:
+                from uteki.domains.news.services.news_analysis_service import get_news_analysis_service
+                analysis_service = get_news_analysis_service()
+                await analysis_service.analyze_article(article_id)
+            except Exception as analysis_err:
+                logger.warning(f"自动 AI 分析跳过: {article_id} - {analysis_err}")
+
             logger.info(f"文章翻译标签完成: {article_id}")
 
             return {
@@ -269,9 +303,9 @@ class TranslationService:
                 "article_id": article_id,
                 "translated": results["translated"],
                 "labeled": results["labeled"],
-                "importance_level": article.importance_level,
-                "ai_impact": article.ai_impact,
-                "impact_confidence": article.impact_confidence,
+                "importance_level": update_data.get("importance_level"),
+                "ai_impact": update_data.get("ai_impact"),
+                "impact_confidence": update_data.get("impact_confidence"),
             }
 
         except Exception as e:
@@ -279,25 +313,24 @@ class TranslationService:
             raise
 
     async def translate_article(
-        self, article_id: str, session: AsyncSession
+        self, article_id: str
     ) -> Dict[str, Any]:
         """翻译文章（向后兼容，调用 translate_and_label_article）"""
-        return await self.translate_and_label_article(article_id, session)
+        return await self.translate_and_label_article(article_id)
 
     async def label_article(
-        self, article_id: str, session: AsyncSession
+        self, article_id: str
     ) -> Dict[str, Any]:
         """仅对文章生成标签（不翻译）"""
         try:
-            stmt = select(NewsArticle).where(NewsArticle.id == article_id)
-            result = await session.execute(stmt)
-            article = result.scalar_one_or_none()
+            repo = get_news_repo()
+            article = repo.select_one(eq={"id": article_id})
 
             if not article:
                 raise ValueError(f"文章不存在: {article_id}")
 
             # 已有标签则跳过
-            if article.importance_level and article.impact_confidence:
+            if article.get("importance_level") and article.get("impact_confidence"):
                 return {
                     "status": "already_labeled",
                     "article_id": article_id,
@@ -306,8 +339,8 @@ class TranslationService:
             logger.info(f"开始标签文章: {article_id}")
 
             # 使用中文内容（如有）或英文内容
-            title = article.title_zh or article.title or ""
-            content = (article.content_full_zh or article.content_full or "")[:3000]
+            title = article.get("title_zh") or article.get("title") or ""
+            content = (article.get("content_full_zh") or article.get("content_full") or "")[:3000]
 
             user_prompt = f"""请分析以下新闻的重要性和市场影响：
 
@@ -344,14 +377,21 @@ class TranslationService:
                     parsed.get("impact_confidence"), VALID_CONFIDENCE_LEVELS
                 )
 
+                update_data = {}
                 if importance:
-                    article.importance_level = importance
+                    update_data["importance_level"] = importance
                 if impact:
-                    article.ai_impact = impact
+                    update_data["ai_impact"] = impact
                 if confidence:
-                    article.impact_confidence = confidence
+                    update_data["impact_confidence"] = confidence
 
-                await session.commit()
+                if update_data:
+                    repo.update(data=update_data, eq={"id": article_id})
+
+                    # 备份到 SQLite
+                    updated_article = repo.select_one(eq={"id": article_id})
+                    if updated_article:
+                        await backup_to_sqlite([updated_article])
 
                 return {
                     "status": "success",
@@ -373,60 +413,55 @@ class TranslationService:
             raise
 
     async def translate_pending_articles(
-        self, session: AsyncSession, limit: int = 10,
+        self, limit: int = 10,
         source_filter: Optional[str] = None,
     ) -> Dict[str, Any]:
         """翻译并标签所有待处理的文章"""
         source = source_filter or 'cnbc_jeff_cox'
-        stmt = (
-            select(NewsArticle)
-            .where(NewsArticle.source == source)
-            .where(NewsArticle.translation_status != 'completed')
-            .order_by(NewsArticle.published_at.desc())
-            .limit(limit)
+        repo = get_news_repo()
+        articles = repo.select_data(
+            eq={"source": source},
+            neq={"translation_status": "completed"},
+            order="published_at.desc",
+            limit=limit,
         )
-        result = await session.execute(stmt)
-        articles = result.scalars().all()
 
         stats = {"total": len(articles), "success": 0, "failed": 0}
 
         for article in articles:
             try:
-                await self.translate_and_label_article(article.id, session)
+                await self.translate_and_label_article(article["id"])
                 stats["success"] += 1
             except Exception as e:
-                logger.error(f"翻译失败 {article.id}: {e}")
+                logger.error(f"翻译失败 {article['id']}: {e}")
                 stats["failed"] += 1
 
         logger.info(f"批量翻译标签完成: {stats}")
         return stats
 
     async def label_unlabeled_articles(
-        self, session: AsyncSession, limit: int = 10
+        self, limit: int = 10
     ) -> Dict[str, Any]:
         """为已翻译但未标签的文章生成标签"""
-        stmt = (
-            select(NewsArticle)
-            .where(NewsArticle.source == 'cnbc_jeff_cox')
-            .where(NewsArticle.translation_status == 'completed')
-            .where(NewsArticle.importance_level == None)
-            .order_by(NewsArticle.published_at.desc())
-            .limit(limit)
+        repo = get_news_repo()
+        articles = repo.select_data(
+            eq={"source": "cnbc_jeff_cox", "translation_status": "completed"},
+            is_={"importance_level": "null"},
+            order="published_at.desc",
+            limit=limit,
         )
-        result = await session.execute(stmt)
-        articles = result.scalars().all()
 
         stats = {"total": len(articles), "success": 0, "failed": 0}
 
         for article in articles:
             try:
-                result = await self.label_article(article.id, session)
+                result = await self.label_article(article["id"])
                 if result.get("status") == "success":
                     stats["success"] += 1
                 else:
                     stats["failed"] += 1
             except Exception as e:
-                logger.error(f"标签失败 {article.id}: {e}")
+                logger.error(f"标签失败 {article['id']}: {e}")
                 stats["failed"] += 1
 
         logger.info(f"批量标签完成: {stats}")

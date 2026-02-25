@@ -2,11 +2,9 @@
 Agent domain service - 业务逻辑层
 """
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Tuple, AsyncGenerator
 import json
 
-from uteki.domains.agent.models import ChatConversation, ChatMessage
 from uteki.domains.agent.repository import ChatConversationRepository, ChatMessageRepository
 from uteki.domains.agent import schemas
 from uteki.domains.agent.llm_adapter import (
@@ -16,7 +14,6 @@ from uteki.domains.agent.llm_adapter import (
     LLMConfig,
     BaseLLMAdapter
 )
-from uteki.common.config import settings
 
 
 def parse_model_info(model_id: str) -> Tuple[str, str]:
@@ -74,8 +71,8 @@ def parse_model_info(model_id: str) -> Tuple[str, str]:
     elif "gemini" in model_id:
         return ("google", model_id)
 
-    # 默认使用配置的 provider
-    return (settings.llm_provider, model_id)
+    # 默认：让 SimpleLLMService 从 DB 自动选择
+    return ("", model_id)
 
 
 class SimpleLLMService:
@@ -84,67 +81,72 @@ class SimpleLLMService:
 
     设计理念：
     - 使用统一的 LLM Adapter 架构
-    - LLM API keys 由平台管理，用户无需配置
-    - 从 settings (.env) 读取配置
-    - 支持 OpenAI, Anthropic, DeepSeek, DashScope
+    - LLM API keys 从数据库 model_config 读取
+    - 支持 OpenAI, Anthropic, DeepSeek, DashScope, Google, MiniMax
     - 支持 tool/function calling
     - 用户可以选择使用哪个模型
     """
+
+    # provider 别名统一映射
+    _PROVIDER_ALIASES = {
+        "dashscope": "qwen",
+    }
 
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
         """
         初始化 LLM 服务
 
         Args:
-            provider: LLM 提供商（openai, anthropic, deepseek, dashscope）
-                     如果为 None，使用 settings 默认值
-            model: 模型名称，如果为 None，使用对应 provider 的默认模型
+            provider: LLM 提供商（openai, anthropic, deepseek, qwen, google, minimax）
+                     如果为 None，使用 DB 中第一个可用模型
+            model: 模型名称，如果为 None，使用对应 provider 的 DB 配置模型
         """
-        # 使用传入的 provider，否则使用配置的默认值
-        self.provider = (provider or settings.llm_provider).lower()
+        from uteki.domains.index.services.arena_service import load_models_from_db
+        self._db_models = load_models_from_db()
 
-        # 根据 provider 确定模型
-        if model:
+        requested_provider = (provider or "").lower()
+        requested_provider = self._PROVIDER_ALIASES.get(requested_provider, requested_provider)
+
+        if requested_provider and model:
+            # 指定了 provider + model
+            self.provider = requested_provider
             self.model = model
-        else:
-            # 使用默认模型
-            if self.provider == "openai":
-                self.model = settings.openai_model
-            elif self.provider == "anthropic":
-                self.model = settings.anthropic_model
-            elif self.provider in ["deepseek", "dashscope", "qwen"]:
-                self.model = model or settings.llm_model
+        elif requested_provider:
+            # 指定了 provider，从 DB 找对应模型
+            match = next((m for m in self._db_models if m["provider"] == requested_provider), None)
+            if match:
+                self.provider = requested_provider
+                self.model = model or match["model"]
             else:
-                self.model = settings.llm_model
+                self.provider = requested_provider
+                self.model = model or requested_provider
+        elif self._db_models:
+            # 未指定，使用 DB 第一个模型
+            first = self._db_models[0]
+            self.provider = first["provider"]
+            self.model = model or first["model"]
+        else:
+            raise ValueError(
+                "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
+            )
 
     def _get_api_key(self) -> str:
-        """获取对应 provider 的 API key"""
-        if self.provider == "openai":
-            if not settings.openai_api_key:
-                raise ValueError("OPENAI_API_KEY not configured in .env")
-            return settings.openai_api_key
-        elif self.provider == "anthropic":
-            if not settings.anthropic_api_key:
-                raise ValueError("ANTHROPIC_API_KEY not configured in .env")
-            return settings.anthropic_api_key
-        elif self.provider in ["dashscope", "qwen"]:
-            if not settings.dashscope_api_key:
-                raise ValueError("DASHSCOPE_API_KEY not configured in .env")
-            return settings.dashscope_api_key
-        elif self.provider == "deepseek":
-            if not settings.deepseek_api_key:
-                raise ValueError("DEEPSEEK_API_KEY not configured in .env")
-            return settings.deepseek_api_key
-        elif self.provider == "minimax":
-            if not settings.minimax_api_key:
-                raise ValueError("MINIMAX_API_KEY not configured in .env")
-            return settings.minimax_api_key
-        elif self.provider == "google":
-            if not settings.google_api_key:
-                raise ValueError("GOOGLE_API_KEY not configured in .env")
-            return settings.google_api_key
-        else:
-            raise ValueError(f"Unsupported LLM provider: {self.provider}")
+        """从 DB model_config 获取对应 provider 的 API key"""
+        provider = self._PROVIDER_ALIASES.get(self.provider, self.provider)
+
+        # 精确匹配 provider + model
+        for m in self._db_models:
+            if m["provider"] == provider and m["model"] == self.model:
+                return m["api_key"]
+
+        # 仅匹配 provider
+        for m in self._db_models:
+            if m["provider"] == provider:
+                return m["api_key"]
+
+        raise ValueError(
+            f"未找到 {self.provider} 的 API Key 配置。请前往「Settings → Model Config」页面配置。"
+        )
 
     def _get_adapter(self, config: Optional[LLMConfig] = None) -> BaseLLMAdapter:
         """创建对应的 LLM Adapter"""
@@ -221,80 +223,69 @@ class ChatService:
         # LLM service 在需要时创建，支持动态选择模型
         pass
 
-    async def create_conversation(
-        self, session: AsyncSession, data: schemas.ChatConversationCreate
-    ) -> ChatConversation:
+    async def create_conversation(self, data: schemas.ChatConversationCreate) -> dict:
         """创建会话"""
-        conversation = ChatConversation(
-            user_id=data.user_id,
-            title=data.title,
-            mode=data.mode,
-        )
-        return await ChatConversationRepository.create(session, conversation)
+        conv_data = {
+            "user_id": data.user_id,
+            "title": data.title,
+            "mode": data.mode,
+        }
+        return await ChatConversationRepository.create(conv_data)
 
-    async def get_conversation(
-        self, session: AsyncSession, conversation_id: str
-    ) -> Optional[ChatConversation]:
+    async def get_conversation(self, conversation_id: str) -> Optional[dict]:
         """获取会话"""
-        return await ChatConversationRepository.get_by_id(session, conversation_id)
+        return await ChatConversationRepository.get_by_id(conversation_id)
 
     async def list_conversations(
         self,
-        session: AsyncSession,
         user_id: Optional[str] = None,
         skip: int = 0,
         limit: int = 100,
-        include_archived: bool = False
-    ) -> Tuple[List[ChatConversation], int]:
+        include_archived: bool = False,
+    ) -> Tuple[List[dict], int]:
         """列出会话"""
         return await ChatConversationRepository.list_by_user(
-            session, user_id, skip, limit, include_archived
+            user_id, skip, limit, include_archived
         )
 
     async def update_conversation(
-        self, session: AsyncSession, conversation_id: str, data: schemas.ChatConversationUpdate
-    ) -> Optional[ChatConversation]:
+        self, conversation_id: str, data: schemas.ChatConversationUpdate
+    ) -> Optional[dict]:
         """更新会话"""
         update_data = data.dict(exclude_unset=True)
-        return await ChatConversationRepository.update(session, conversation_id, **update_data)
+        return await ChatConversationRepository.update(conversation_id, **update_data)
 
-    async def delete_conversation(
-        self, session: AsyncSession, conversation_id: str
-    ) -> bool:
+    async def delete_conversation(self, conversation_id: str) -> bool:
         """删除会话"""
-        return await ChatConversationRepository.delete(session, conversation_id)
+        return await ChatConversationRepository.delete(conversation_id)
 
-    async def get_conversation_messages(
-        self, session: AsyncSession, conversation_id: str
-    ) -> List[ChatMessage]:
+    async def get_conversation_messages(self, conversation_id: str) -> List[dict]:
         """获取会话的所有消息"""
-        return await ChatMessageRepository.get_conversation_messages(session, conversation_id)
+        return await ChatMessageRepository.get_conversation_messages(conversation_id)
 
     async def create_message(
         self,
-        session: AsyncSession,
         conversation_id: str,
         role: str,
         content: str,
         llm_provider: Optional[str] = None,
         llm_model: Optional[str] = None,
-        token_usage: Optional[dict] = None
-    ) -> ChatMessage:
+        token_usage: Optional[dict] = None,
+    ) -> dict:
         """创建消息"""
-        message = ChatMessage(
-            conversation_id=conversation_id,
-            role=role,
-            content=content,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-            token_usage=token_usage
-        )
-        return await ChatMessageRepository.create(session, message)
+        msg_data = {
+            "conversation_id": conversation_id,
+            "role": role,
+            "content": content,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "token_usage": token_usage,
+        }
+        return await ChatMessageRepository.create(msg_data)
 
     async def chat(
         self,
-        session: AsyncSession,
-        data: schemas.ChatRequest
+        data: schemas.ChatRequest,
     ) -> AsyncGenerator[schemas.StreamChunk, None]:
         """
         执行聊天（流式返回）
@@ -305,22 +296,21 @@ class ChatService:
         if data.model_id:
             provider, model = parse_model_info(data.model_id)
         else:
-            # 使用默认配置
-            provider = settings.llm_provider
-            model = settings.llm_model
+            # 使用 DB 中第一个可用模型（SimpleLLMService 自动选择）
+            provider = None
+            model = None
 
         # 2. 创建 LLM 服务实例
         llm_service = SimpleLLMService(provider=provider, model=model)
 
         # 3. 获取或创建会话
         if data.conversation_id:
-            conversation = await self.get_conversation(session, data.conversation_id)
+            conversation = await self.get_conversation(data.conversation_id)
             if not conversation:
                 raise ValueError(f"Conversation {data.conversation_id} not found")
         else:
             # 创建新会话
             conversation = await self.create_conversation(
-                session,
                 schemas.ChatConversationCreate(
                     title=data.message[:50] if len(data.message) > 50 else data.message,
                     mode=data.mode
@@ -329,16 +319,15 @@ class ChatService:
 
         # 4. 保存用户消息
         await self.create_message(
-            session,
-            conversation_id=conversation.id,
+            conversation_id=conversation["id"],
             role="user",
             content=data.message
         )
 
         # 5. 构建消息历史
-        history_messages = await self.get_conversation_messages(session, conversation.id)
+        history_messages = await self.get_conversation_messages(conversation["id"])
         messages = [
-            {"role": msg.role, "content": msg.content}
+            {"role": msg["role"], "content": msg["content"]}
             for msg in history_messages
         ]
 
@@ -351,7 +340,7 @@ class ChatService:
             ):
                 assistant_response += chunk
                 yield schemas.StreamChunk(
-                    conversation_id=conversation.id,
+                    conversation_id=conversation["id"],
                     chunk=chunk,
                     done=False
                 )
@@ -359,14 +348,13 @@ class ChatService:
             # 返回错误信息
             error_msg = f"调用 {provider} 模型失败: {str(e)}"
             yield schemas.StreamChunk(
-                conversation_id=conversation.id,
+                conversation_id=conversation["id"],
                 chunk="",
                 done=True
             )
             # 保存错误消息
             await self.create_message(
-                session,
-                conversation_id=conversation.id,
+                conversation_id=conversation["id"],
                 role="assistant",
                 content=error_msg,
                 llm_provider=provider,
@@ -376,8 +364,7 @@ class ChatService:
 
         # 7. 保存助手回复
         await self.create_message(
-            session,
-            conversation_id=conversation.id,
+            conversation_id=conversation["id"],
             role="assistant",
             content=assistant_response,
             llm_provider=provider,
@@ -386,7 +373,7 @@ class ChatService:
 
         # 8. 发送完成信号
         yield schemas.StreamChunk(
-            conversation_id=conversation.id,
+            conversation_id=conversation["id"],
             chunk="",
             done=True
         )
