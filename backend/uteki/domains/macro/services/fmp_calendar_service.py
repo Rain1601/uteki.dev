@@ -260,18 +260,19 @@ class FMPCalendarService:
         repo = _get_events_repo()
 
         try:
+            eq_filters: Dict[str, Any] = {"source": "fmp"}
+            if event_type and event_type != "all" and "," not in event_type:
+                eq_filters["event_type"] = event_type
+
             rows = repo.select_data(
-                eq={"source": "fmp"},
+                eq=eq_filters,
                 gte={"start_date": start_date},
                 lt={"start_date": end_date},
             )
 
-            if event_type and event_type != "all":
-                if "," in event_type:
-                    types = event_type.split(",")
-                    rows = [r for r in rows if r.get("event_type") in types]
-                else:
-                    rows = [r for r in rows if r.get("event_type") == event_type]
+            if event_type and event_type != "all" and "," in event_type:
+                types = event_type.split(",")
+                rows = [r for r in rows if r.get("event_type") in types]
 
             if not rows:
                 return [], None

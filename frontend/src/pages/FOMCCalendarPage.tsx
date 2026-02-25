@@ -50,15 +50,16 @@ export default function FOMCCalendarPage() {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const response = await getMonthlyEventsEnriched(year, month, selectedFilter);
+        const [response, statsResponse] = await Promise.all([
+          getMonthlyEventsEnriched(year, month, selectedFilter),
+          getEventStatistics(),
+        ]);
         if (response.success) {
           setEvents(response.data);
           if (response.fmp_status === 'success') {
             console.log(`FMP data synced: ${response.enriched_count} events`);
           }
         }
-
-        const statsResponse = await getEventStatistics();
         if (statsResponse.success) {
           setStats(statsResponse.data);
         }
