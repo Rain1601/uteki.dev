@@ -23,9 +23,7 @@ user_service = UserService()
 
 def get_frontend_url() -> str:
     """获取前端URL，用于登录后重定向"""
-    if settings.environment == "production":
-        return "https://uteki-frontend-ob52o276la-uc.a.run.app"
-    return "http://localhost:5173"
+    return os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
 # =============================================================================

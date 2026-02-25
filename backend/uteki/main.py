@@ -97,14 +97,6 @@ cors_origins = os.getenv(
     "http://localhost:5173,http://localhost:5174"
 ).split(",")
 
-# 生产环境自动添加 Cloud Run 前端域名
-if settings.environment == "production":
-    # 添加固定的 Cloud Run 前端 URL
-    cloud_run_frontend = "https://uteki-frontend-ob52o276la-uc.a.run.app"
-    if cloud_run_frontend not in cors_origins:
-        cors_origins.append(cloud_run_frontend)
-    logger.info(f"Production mode: Added {cloud_run_frontend} to CORS origins")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,  # 从环境变量读取，默认Vite端口 + 生产环境前端
