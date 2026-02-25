@@ -1,45 +1,76 @@
-"""Agent 记忆服务"""
+"""Agent 记忆服务 — Supabase REST API 版"""
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
-from sqlalchemy import select, func, or_
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.models.agent_memory import AgentMemory
 
 logger = logging.getLogger(__name__)
 
+TABLE = "agent_memory"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_rows(rows: list):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(AgentMemory, k)}
+                await session.merge(AgentMemory(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {TABLE}: {e}")
+
 
 class MemoryService:
     """Agent 记忆读写 — 支持 per-agent 私有记忆 + 共享记忆"""
+
+    def __init__(self):
+        self.repo = SupabaseRepository(TABLE)
 
     async def write(
         self,
         user_id: str,
         category: str,
         content: str,
-        session: AsyncSession,
         metadata: Optional[Dict[str, Any]] = None,
         agent_key: str = "shared",
     ) -> Dict[str, Any]:
         """写入一条记忆"""
-        memory = AgentMemory(
-            user_id=user_id,
-            category=category,
-            content=content,
-            extra_metadata=metadata,
-            agent_key=agent_key,
-        )
-        session.add(memory)
-        await session.commit()
-        await session.refresh(memory)
-        return memory.to_dict()
+        data = {
+            "user_id": user_id,
+            "category": category,
+            "content": content,
+            "metadata": metadata,
+            "agent_key": agent_key,
+        }
+        _ensure_id(data)
+        result = self.repo.insert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows([row])
+        return row
 
     async def read(
         self,
         user_id: str,
-        session: AsyncSession,
         category: Optional[str] = None,
         limit: int = 20,
         agent_key: Optional[str] = None,
@@ -49,20 +80,17 @@ class MemoryService:
         Args:
             agent_key: None=不过滤, "shared"=仅共享, 具体key=仅该agent
         """
-        query = select(AgentMemory).where(AgentMemory.user_id == user_id)
+        filters: Dict[str, Any] = {"user_id": user_id}
         if category:
-            query = query.where(AgentMemory.category == category)
+            filters["category"] = category
         if agent_key is not None:
-            query = query.where(AgentMemory.agent_key == agent_key)
-        query = query.order_by(AgentMemory.created_at.desc()).limit(limit)
+            filters["agent_key"] = agent_key
 
-        result = await session.execute(query)
-        return [m.to_dict() for m in result.scalars().all()]
+        return self.repo.select_data(eq=filters, order="created_at.desc", limit=limit)
 
     async def get_summary(
         self,
         user_id: str,
-        session: AsyncSession,
         agent_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """获取 Harness 构建所需的记忆摘要
@@ -79,18 +107,18 @@ class MemoryService:
         """
         # 共享记忆（所有 agent 共用）
         decisions = await self.read(
-            user_id, session, category="decision", limit=3, agent_key="shared"
+            user_id, category="decision", limit=3, agent_key="shared"
         )
         reflections = await self.read(
-            user_id, session, category="reflection", limit=1, agent_key="shared"
+            user_id, category="reflection", limit=1, agent_key="shared"
         )
         experiences = await self.read(
-            user_id, session, category="experience", limit=50, agent_key="shared"
+            user_id, category="experience", limit=50, agent_key="shared"
         )
 
         # 投票获胜方案（共享记忆中的 arena_learning 类别）
         voting_winners = await self.read(
-            user_id, session, category="arena_learning", limit=3, agent_key="shared"
+            user_id, category="arena_learning", limit=3, agent_key="shared"
         )
         recent_voting_winners = [w.get("content", "")[:200] for w in voting_winners]
 
@@ -104,7 +132,7 @@ class MemoryService:
         # Per-agent 私有记忆
         if agent_key and agent_key != "shared":
             private_memories = await self.read(
-                user_id, session, limit=10, agent_key=agent_key
+                user_id, limit=10, agent_key=agent_key
             )
             summary["agent_private_memories"] = private_memories
 
@@ -114,25 +142,14 @@ class MemoryService:
         self,
         memory_id: str,
         user_id: str,
-        session: AsyncSession,
     ) -> bool:
         """删除一条记忆"""
-        query = select(AgentMemory).where(
-            AgentMemory.id == memory_id,
-            AgentMemory.user_id == user_id,
-        )
-        result = await session.execute(query)
-        memory = result.scalar_one_or_none()
-        if not memory:
-            return False
-        await session.delete(memory)
-        await session.commit()
-        return True
+        result = self.repo.delete(eq={"id": memory_id, "user_id": user_id})
+        return bool(result.data)
 
     async def write_arena_learning(
         self,
         user_id: str,
-        session: AsyncSession,
         winner_summary: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -141,7 +158,6 @@ class MemoryService:
             user_id=user_id,
             category="arena_learning",
             content=winner_summary,
-            session=session,
             metadata=metadata,
             agent_key="shared",
         )
@@ -150,7 +166,6 @@ class MemoryService:
         self,
         user_id: str,
         agent_key: str,
-        session: AsyncSession,
         reasoning: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -159,7 +174,6 @@ class MemoryService:
             user_id=user_id,
             category="arena_vote_reasoning",
             content=reasoning,
-            session=session,
             metadata=metadata,
             agent_key=agent_key,
         )

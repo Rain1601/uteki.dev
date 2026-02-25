@@ -15,8 +15,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 logger = logging.getLogger(__name__)
 
 TOOL_TIMEOUT = 5  # seconds per tool execution
@@ -276,12 +274,10 @@ class ToolExecutor:
 
     def __init__(
         self,
-        session: AsyncSession,
         harness_data: Dict[str, Any],
         agent_key: str = "shared",
         user_id: str = "default",
     ):
-        self.session = session
         self.harness_data = harness_data
         self.agent_key = agent_key
         self.user_id = user_id
@@ -315,8 +311,8 @@ class ToolExecutor:
 
         symbol = args.get("symbol", "")
         ds = get_data_service()
-        quote = await ds.get_quote(symbol, self.session)
-        indicators = await ds.get_indicators(symbol, self.session)
+        quote = await ds.get_quote(symbol)
+        indicators = ds.get_indicators(symbol)
         return {"symbol": symbol, "quote": quote, "indicators": indicators}
 
     async def _get_recent_news(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -339,14 +335,12 @@ class ToolExecutor:
         # Fetch shared + agent-private memories
         shared = await ms.read(
             user_id=self.user_id,
-            session=self.session,
             category=category,
             limit=5,
             agent_key="shared",
         )
         private = await ms.read(
             user_id=self.user_id,
-            session=self.session,
             category=category,
             limit=5,
             agent_key=self.agent_key,
@@ -410,16 +404,13 @@ class AgentSkillRunner:
         model_config: Dict[str, Any],
         harness_data: Dict[str, Any],
         agent_key: str,
-        session: AsyncSession,
         user_id: str = "default",
     ):
         self.model_config = model_config
         self.harness_data = harness_data
         self.agent_key = agent_key
-        self.session = session
         self.user_id = user_id
         self.tool_executor = ToolExecutor(
-            session=session,
             harness_data=harness_data,
             agent_key=agent_key,
             user_id=user_id,

@@ -1,16 +1,47 @@
-"""Decision Harness 构建器"""
+"""Decision Harness 构建器 — Supabase REST API 版"""
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from uteki.domains.index.models.decision_harness import DecisionHarness
+from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.services.data_service import DataService
 from uteki.domains.index.services.memory_service import MemoryService
 from uteki.domains.index.services.prompt_service import PromptService
 
 logger = logging.getLogger(__name__)
+
+HARNESS_TABLE = "decision_harness"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_harness(rows: list):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        from uteki.domains.index.models.decision_harness import DecisionHarness
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(DecisionHarness, k)}
+                await session.merge(DecisionHarness(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {HARNESS_TABLE}: {e}")
 
 
 class HarnessBuilder:
@@ -29,7 +60,6 @@ class HarnessBuilder:
     async def build(
         self,
         harness_type: str,
-        session: AsyncSession,
         user_id: str = "default",
         budget: Optional[float] = None,
         constraints: Optional[Dict[str, Any]] = None,
@@ -45,14 +75,14 @@ class HarnessBuilder:
         5. 组装并写入 DB
         """
         # 1. 市场数据快照（行情 + 技术指标 + 估值 + 宏观 + 情绪）
-        watchlist = await self.data_service.get_watchlist(session)
+        watchlist = self.data_service.get_watchlist()
         watchlist_symbols = [item["symbol"] for item in watchlist]
 
         quotes = {}
         for item in watchlist:
             symbol = item["symbol"]
-            quote = await self.data_service.get_quote(symbol, session)
-            indicators = await self.data_service.get_indicators(symbol, session)
+            quote = await self.data_service.get_quote(symbol)
+            indicators = self.data_service.get_indicators(symbol)
             quotes[symbol] = {
                 **quote,
                 "ma50": indicators.get("ma50"),
@@ -110,10 +140,10 @@ class HarnessBuilder:
         account_state = await self._get_account_state()
 
         # 3. 记忆摘要
-        memory_summary = await self.memory_service.get_summary(user_id, session)
+        memory_summary = await self.memory_service.get_summary(user_id)
 
         # 4. 当前 prompt 版本
-        prompt_version = await self.prompt_service.get_current(session)
+        prompt_version = await self.prompt_service.get_current()
         prompt_version_id = prompt_version["id"] if prompt_version else None
 
         if not prompt_version_id:
@@ -135,25 +165,25 @@ class HarnessBuilder:
         }
 
         # 6. 持久化
-        harness = DecisionHarness(
-            harness_type=harness_type,
-            prompt_version_id=prompt_version_id,
-            market_snapshot=market_snapshot,
-            account_state=account_state,
-            memory_summary=memory_summary,
-            task=task,
-            tool_definitions=tool_definitions,
-        )
-        session.add(harness)
-        await session.commit()
-        await session.refresh(harness)
+        harness_data = _ensure_id({
+            "harness_type": harness_type,
+            "prompt_version_id": prompt_version_id,
+            "market_snapshot": market_snapshot,
+            "account_state": account_state,
+            "memory_summary": memory_summary,
+            "task": task,
+            "tool_definitions": tool_definitions,
+        })
+        repo = SupabaseRepository(HARNESS_TABLE)
+        result = repo.upsert(harness_data)
+        row = result.data[0] if result.data else harness_data
+        await _backup_harness([row])
 
-        logger.info(f"Harness built: {harness.id} type={harness_type}")
-        return harness.to_dict()
+        logger.info(f"Harness built: {row.get('id')} type={harness_type}")
+        return row
 
     async def build_preview_data(
         self,
-        session: AsyncSession,
         user_id: str = "default",
         budget: Optional[float] = None,
         constraints: Optional[Dict[str, Any]] = None,
@@ -162,14 +192,14 @@ class HarnessBuilder:
         import json
         from datetime import datetime
 
-        watchlist = await self.data_service.get_watchlist(session)
+        watchlist = self.data_service.get_watchlist()
         watchlist_symbols = [item["symbol"] for item in watchlist]
 
         quotes = {}
         for item in watchlist:
             symbol = item["symbol"]
-            quote = await self.data_service.get_quote(symbol, session)
-            indicators = await self.data_service.get_indicators(symbol, session)
+            quote = await self.data_service.get_quote(symbol)
+            indicators = self.data_service.get_indicators(symbol)
             quotes[symbol] = {
                 **quote,
                 "ma50": indicators.get("ma50"),
@@ -204,7 +234,7 @@ class HarnessBuilder:
         }
 
         account_state = await self._get_account_state()
-        memory_summary = await self.memory_service.get_summary(user_id, session)
+        memory_summary = await self.memory_service.get_summary(user_id)
 
         default_constraints = {
             "max_holdings": 3,

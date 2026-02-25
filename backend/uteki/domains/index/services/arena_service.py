@@ -1,4 +1,7 @@
-"""多模型 Arena 调度服务 — 3 阶段 Pipeline (决策 → 投票 → 计分)"""
+"""多模型 Arena 调度服务 — 3 阶段 Pipeline (决策 → 投票 → 计分)
+
+Supabase REST API 版
+"""
 
 import asyncio
 import json
@@ -6,17 +9,15 @@ import logging
 import re
 import string
 import time
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Callable
-
-from sqlalchemy import select, func, desc, asc, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import uuid4
 
 from uteki.common.config import settings
-from uteki.common.database import db_manager
+from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.models.model_io import ModelIO
 from uteki.domains.index.models.decision_harness import DecisionHarness
 from uteki.domains.index.models.decision_log import DecisionLog
-from uteki.domains.index.models.prompt_version import PromptVersion
 from uteki.domains.index.models.arena_vote import ArenaVote
 from uteki.domains.index.models.model_score import ModelScore
 
@@ -35,35 +36,53 @@ ARENA_MODELS = [
     {"provider": "minimax", "model": "MiniMax-Text-01", "api_key_attr": "minimax_api_key"},
 ]
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-async def load_models_from_db(session: AsyncSession) -> List[Dict[str, Any]]:
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_rows(table: str, rows: list, model_class=None):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                if model_class:
+                    safe = {k: v for k, v in row.items() if hasattr(model_class, k)}
+                    await session.merge(model_class(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {table}: {e}")
+
+
+def load_models_from_db() -> List[Dict[str, Any]]:
     """从 DB 加载 model_config，返回 enabled 的模型列表。
 
     Returns empty list if no config found or no enabled models.
     Shared by Arena, Agent Chat, Reflection, Backtest services.
     """
-    from uteki.domains.index.models.agent_memory import AgentMemory
-
-    query = select(AgentMemory).where(
-        AgentMemory.category == "model_config",
-        AgentMemory.agent_key == "system",
-    ).limit(1)
-    result = await session.execute(query)
-    record = result.scalar_one_or_none()
-    if not record:
+    repo = SupabaseRepository("agent_memory")
+    row = repo.select_one(eq={"category": "model_config", "agent_key": "system"})
+    if not row:
         return []
 
     try:
-        models = json.loads(record.content or "[]")
+        models = json.loads(row.get("content") or "[]")
     except (json.JSONDecodeError, TypeError):
         return []
 
     # Filter enabled models with valid api_key
-    enabled = [
-        m for m in models
-        if m.get("enabled", True) and m.get("api_key")
-    ]
-    return enabled
+    return [m for m in models if m.get("enabled", True) and m.get("api_key")]
 
 
 class ArenaService:
@@ -77,7 +96,6 @@ class ArenaService:
     async def run(
         self,
         harness_id: str,
-        session: AsyncSession,
         tool_definitions: Optional[List[Dict]] = None,
         on_progress: Optional[Callable] = None,
         model_filter: Optional[List[Dict[str, str]]] = None,
@@ -91,7 +109,7 @@ class ArenaService:
         phase_timings: Dict[str, int] = {}
 
         # Load models: DB config preferred, fallback to hardcoded ARENA_MODELS
-        db_models = await load_models_from_db(session)
+        db_models = load_models_from_db()
         if db_models:
             # DB models already have api_key directly
             base_models = db_models
@@ -111,29 +129,27 @@ class ArenaService:
             active_models = base_models
 
         # 获取 Harness
-        harness_q = select(DecisionHarness).where(DecisionHarness.id == harness_id)
-        harness_r = await session.execute(harness_q)
-        harness = harness_r.scalar_one_or_none()
+        harness_repo = SupabaseRepository("decision_harness")
+        harness = harness_repo.select_one(eq={"id": harness_id})
         if not harness:
             raise ValueError(f"Harness not found: {harness_id}")
 
         # 获取 prompt 版本
-        prompt_q = select(PromptVersion).where(PromptVersion.id == harness.prompt_version_id)
-        prompt_r = await session.execute(prompt_q)
-        prompt_version = prompt_r.scalar_one_or_none()
-        system_prompt = prompt_version.content if prompt_version else ""
+        prompt_repo = SupabaseRepository("prompt_version")
+        prompt_version = prompt_repo.select_one(eq={"id": harness.get("prompt_version_id")})
+        system_prompt = prompt_version.get("content", "") if prompt_version else ""
 
         # 构建用户 prompt（从 DB 读取 user prompt 模板渲染，fallback 到硬编码）
         try:
             from uteki.domains.index.services.prompt_service import get_prompt_service
             prompt_service = get_prompt_service()
-            user_prompt = await prompt_service.render_user_prompt(session, harness.to_dict())
+            user_prompt = await prompt_service.render_user_prompt(harness)
         except Exception as e:
             logger.warning(f"Failed to render user prompt from template, falling back: {e}")
             user_prompt = self._serialize_harness(harness)
 
         # 检查 pipeline_state 实现中断恢复
-        pipeline_state = harness.pipeline_state or {}
+        pipeline_state = harness.get("pipeline_state") or {}
 
         # ── Phase 1: 决策 ──
         if not pipeline_state.get("phase1_done"):
@@ -144,17 +160,16 @@ class ArenaService:
                 harness_id=harness_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                harness_data=harness.to_dict(),
-                session=session,
+                harness_data=harness,
                 tool_definitions=tool_definitions,
                 on_progress=on_progress,
                 model_list=active_models,
             )
             phase_timings["phase1_ms"] = int((time.time() - phase1_start) * 1000)
-            await self._update_pipeline_state(harness_id, session, "phase1_done", True)
+            self._update_pipeline_state(harness_id, "phase1_done", True)
         else:
             # Phase 1 已完成，从 DB 读取 model_ios
-            model_ios = await self.get_arena_results(harness_id, session)
+            model_ios = self.get_arena_results(harness_id)
             logger.info(f"Phase 1 already done for {harness_id}, loaded {len(model_ios)} results")
 
         # 筛选成功的 model_io
@@ -170,15 +185,14 @@ class ArenaService:
                 votes = await self._run_phase2_voting(
                     harness_id=harness_id,
                     successful_ios=successful_ios,
-                    session=session,
                 )
             else:
                 logger.info(f"Skipping voting: only {len(successful_ios)} successful models")
             phase_timings["phase2_ms"] = int((time.time() - phase2_start) * 1000)
-            await self._update_pipeline_state(harness_id, session, "phase2_done", True)
+            self._update_pipeline_state(harness_id, "phase2_done", True)
         else:
             # Load existing votes
-            votes = await self._get_votes_for_harness(harness_id, session)
+            votes = self._get_votes_for_harness(harness_id)
             logger.info(f"Phase 2 already done for {harness_id}, loaded {len(votes)} votes")
 
         # ── Phase 3: 计分 + 采纳 ──
@@ -192,10 +206,9 @@ class ArenaService:
                 harness=harness,
                 votes=votes,
                 successful_ios=successful_ios,
-                session=session,
             )
             phase_timings["phase3_ms"] = int((time.time() - phase3_start) * 1000)
-            await self._update_pipeline_state(harness_id, session, "phase3_done", True)
+            self._update_pipeline_state(harness_id, "phase3_done", True)
 
         phase_timings["total_ms"] = int((time.time() - pipeline_start) * 1000)
 
@@ -217,7 +230,6 @@ class ArenaService:
         system_prompt: str,
         user_prompt: str,
         harness_data: Dict[str, Any],
-        session: AsyncSession,
         tool_definitions: Optional[List[Dict]] = None,
         on_progress: Optional[Callable] = None,
         model_list: Optional[List[Dict]] = None,
@@ -282,68 +294,64 @@ class ArenaService:
 
         model_start = time.time()
 
-        async with db_manager.get_postgres_session() as model_session:
-            # 尝试 Skill Pipeline
-            try:
-                from uteki.domains.index.services.agent_skills import AgentSkillRunner
+        # 尝试 Skill Pipeline
+        try:
+            from uteki.domains.index.services.agent_skills import AgentSkillRunner
 
-                runner = AgentSkillRunner(
-                    model_config=model_config,
-                    harness_data=harness_data,
-                    agent_key=agent_key,
-                    session=model_session,
-                )
-
-                pipeline_result = await runner.run_pipeline(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    on_progress=on_progress,
-                )
-
-                if pipeline_result["status"] == "pipeline_success":
-                    result = await self._save_pipeline_result(
-                        harness_id=harness_id,
-                        model_config=model_config,
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        pipeline_result=pipeline_result,
-                        session=model_session,
-                    )
-                    if on_progress:
-                        on_progress({
-                            "type": "model_complete",
-                            "model": agent_key,
-                            "status": "success",
-                            "parse_status": result.get("parse_status", "unknown"),
-                            "latency_ms": int((time.time() - model_start) * 1000),
-                        })
-                    return result
-                else:
-                    logger.warning(
-                        f"Pipeline partial for {agent_key}, falling back to single-shot"
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"Pipeline failed for {agent_key}: {e}, falling back to single-shot"
-                )
-
-            # Single-shot fallback
-            result = await self._call_model_single_shot(
+            runner = AgentSkillRunner(
                 model_config=model_config,
+                harness_data=harness_data,
+                agent_key=agent_key,
+            )
+
+            pipeline_result = await runner.run_pipeline(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                harness_id=harness_id,
-                session=model_session,
+                on_progress=on_progress,
             )
-            if on_progress and result:
-                on_progress({
-                    "type": "model_complete",
-                    "model": agent_key,
-                    "status": result.get("status", "unknown"),
-                    "parse_status": result.get("parse_status", "unknown"),
-                    "latency_ms": int((time.time() - model_start) * 1000),
-                })
-            return result
+
+            if pipeline_result["status"] == "pipeline_success":
+                result = await self._save_pipeline_result(
+                    harness_id=harness_id,
+                    model_config=model_config,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    pipeline_result=pipeline_result,
+                )
+                if on_progress:
+                    on_progress({
+                        "type": "model_complete",
+                        "model": agent_key,
+                        "status": "success",
+                        "parse_status": result.get("parse_status", "unknown"),
+                        "latency_ms": int((time.time() - model_start) * 1000),
+                    })
+                return result
+            else:
+                logger.warning(
+                    f"Pipeline partial for {agent_key}, falling back to single-shot"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Pipeline failed for {agent_key}: {e}, falling back to single-shot"
+            )
+
+        # Single-shot fallback
+        result = await self._call_model_single_shot(
+            model_config=model_config,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            harness_id=harness_id,
+        )
+        if on_progress and result:
+            on_progress({
+                "type": "model_complete",
+                "model": agent_key,
+                "status": result.get("status", "unknown"),
+                "parse_status": result.get("parse_status", "unknown"),
+                "latency_ms": int((time.time() - model_start) * 1000),
+            })
+        return result
 
     async def _save_pipeline_result(
         self,
@@ -352,7 +360,6 @@ class ArenaService:
         system_prompt: str,
         user_prompt: str,
         pipeline_result: Dict[str, Any],
-        session: AsyncSession,
     ) -> Dict[str, Any]:
         """将 pipeline 结果保存为 ModelIO"""
         provider_name = model_config["provider"]
@@ -385,28 +392,29 @@ class ArenaService:
         # Pipeline has ~4 skill calls, rough cost multiplier
         cost *= 4
 
-        model_io = ModelIO(
-            harness_id=harness_id,
-            model_provider=provider_name,
-            model_name=model_name,
-            input_prompt=full_input,
-            input_token_count=input_tokens,
-            output_raw=output_raw,
-            output_structured=output_structured if parse_status != "raw_only" else None,
-            tool_calls=pipeline_result.get("tool_calls"),
-            output_token_count=output_tokens,
-            latency_ms=latency_ms,
-            cost_usd=cost,
-            parse_status=parse_status,
-            status="success",
-            pipeline_steps=stored_steps if stored_steps else None,
-        )
-        session.add(model_io)
-        await session.commit()
-        await session.refresh(model_io)
+        repo = SupabaseRepository("model_io")
+        data = _ensure_id({
+            "harness_id": harness_id,
+            "model_provider": provider_name,
+            "model_name": model_name,
+            "input_prompt": full_input,
+            "input_token_count": input_tokens,
+            "output_raw": output_raw,
+            "output_structured": output_structured if parse_status != "raw_only" else None,
+            "tool_calls": pipeline_result.get("tool_calls"),
+            "output_token_count": output_tokens,
+            "latency_ms": latency_ms,
+            "cost_usd": cost,
+            "parse_status": parse_status,
+            "status": "success",
+            "pipeline_steps": stored_steps if stored_steps else None,
+        })
+        result = repo.insert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows("model_io", [row], ModelIO)
 
         logger.info(f"Pipeline result saved: {provider_name}/{model_name} {latency_ms}ms")
-        return model_io.to_dict()
+        return row
 
     async def _call_model_single_shot(
         self,
@@ -414,7 +422,6 @@ class ArenaService:
         system_prompt: str,
         user_prompt: str,
         harness_id: str,
-        session: AsyncSession,
     ) -> Optional[Dict[str, Any]]:
         """Single-shot fallback (original _call_model logic)"""
         from uteki.domains.agent.llm_adapter import (
@@ -426,6 +433,7 @@ class ArenaService:
         api_key = model_config["api_key"]
         full_input = f"[System Prompt]\n{system_prompt}\n\n[Decision Harness]\n{user_prompt}"
 
+        repo = SupabaseRepository("model_io")
         start_time = time.time()
         try:
             provider_map = {
@@ -479,61 +487,61 @@ class ArenaService:
             output_tokens = len(output_raw) // 4
             cost = self._estimate_cost(provider_name, model_name, input_tokens, output_tokens)
 
-            model_io = ModelIO(
-                harness_id=harness_id,
-                model_provider=provider_name,
-                model_name=model_name,
-                input_prompt=full_input,
-                input_token_count=input_tokens,
-                output_raw=output_raw,
-                output_structured=output_structured if parse_status != "raw_only" else None,
-                tool_calls=None,
-                output_token_count=output_tokens,
-                latency_ms=latency_ms,
-                cost_usd=cost,
-                parse_status=parse_status,
-                status="success",
-            )
-            session.add(model_io)
-            await session.commit()
-            await session.refresh(model_io)
+            data = _ensure_id({
+                "harness_id": harness_id,
+                "model_provider": provider_name,
+                "model_name": model_name,
+                "input_prompt": full_input,
+                "input_token_count": input_tokens,
+                "output_raw": output_raw,
+                "output_structured": output_structured if parse_status != "raw_only" else None,
+                "tool_calls": None,
+                "output_token_count": output_tokens,
+                "latency_ms": latency_ms,
+                "cost_usd": cost,
+                "parse_status": parse_status,
+                "status": "success",
+            })
+            result = repo.insert(data)
+            row = result.data[0] if result.data else data
+            await _backup_rows("model_io", [row], ModelIO)
 
             logger.info(f"Single-shot {provider_name}/{model_name}: {latency_ms}ms, parse={parse_status}")
-            return model_io.to_dict()
+            return row
 
         except asyncio.TimeoutError:
             latency_ms = int((time.time() - start_time) * 1000)
-            model_io = ModelIO(
-                harness_id=harness_id,
-                model_provider=provider_name,
-                model_name=model_name,
-                input_prompt=full_input,
-                status="timeout",
-                latency_ms=latency_ms,
-                error_message=f"Timeout after {MODEL_TIMEOUT}s",
-            )
-            session.add(model_io)
-            await session.commit()
-            await session.refresh(model_io)
+            data = _ensure_id({
+                "harness_id": harness_id,
+                "model_provider": provider_name,
+                "model_name": model_name,
+                "input_prompt": full_input,
+                "status": "timeout",
+                "latency_ms": latency_ms,
+                "error_message": f"Timeout after {MODEL_TIMEOUT}s",
+            })
+            result = repo.insert(data)
+            row = result.data[0] if result.data else data
+            await _backup_rows("model_io", [row], ModelIO)
             logger.warning(f"Single-shot {provider_name}/{model_name}: timeout {latency_ms}ms")
-            return model_io.to_dict()
+            return row
 
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
-            model_io = ModelIO(
-                harness_id=harness_id,
-                model_provider=provider_name,
-                model_name=model_name,
-                input_prompt=full_input,
-                status="error",
-                latency_ms=latency_ms,
-                error_message=str(e),
-            )
-            session.add(model_io)
-            await session.commit()
-            await session.refresh(model_io)
+            data = _ensure_id({
+                "harness_id": harness_id,
+                "model_provider": provider_name,
+                "model_name": model_name,
+                "input_prompt": full_input,
+                "status": "error",
+                "latency_ms": latency_ms,
+                "error_message": str(e),
+            })
+            result = repo.insert(data)
+            row = result.data[0] if result.data else data
+            await _backup_rows("model_io", [row], ModelIO)
             logger.error(f"Single-shot {provider_name}/{model_name}: error {e}")
-            return model_io.to_dict()
+            return row
 
     # ================================================================
     # Phase 2: Cross-Agent Voting
@@ -543,10 +551,9 @@ class ArenaService:
         self,
         harness_id: str,
         successful_ios: List[Dict[str, Any]],
-        session: AsyncSession,
     ) -> List[Dict[str, Any]]:
         """Phase 2: 每个成功的 Agent 对其他 Agent 的方案投票"""
-        # 并行投票 — 每个 voter 使用独立 session
+        # 并行投票
         vote_tasks = [
             self._vote_for_model(
                 harness_id=harness_id,
@@ -566,17 +573,20 @@ class ArenaService:
                 all_votes.extend(result)
 
         # 批量写入 votes
-        async with db_manager.get_postgres_session() as vote_session:
-            for v in all_votes:
-                vote = ArenaVote(
-                    harness_id=v["harness_id"],
-                    voter_model_io_id=v["voter_model_io_id"],
-                    target_model_io_id=v["target_model_io_id"],
-                    vote_type=v["vote_type"],
-                    reasoning=v.get("reasoning"),
-                )
-                vote_session.add(vote)
-            await vote_session.commit()
+        vote_repo = SupabaseRepository("arena_vote")
+        vote_records = []
+        for v in all_votes:
+            vote_data = _ensure_id({
+                "harness_id": v["harness_id"],
+                "voter_model_io_id": v["voter_model_io_id"],
+                "target_model_io_id": v["target_model_io_id"],
+                "vote_type": v["vote_type"],
+                "reasoning": v.get("reasoning"),
+            })
+            vote_records.append(vote_data)
+        if vote_records:
+            result = vote_repo.insert(vote_records)
+            await _backup_rows("arena_vote", result.data or vote_records, ArenaVote)
 
         logger.info(f"Phase 2 voting complete: {len(all_votes)} votes recorded")
         return all_votes
@@ -600,10 +610,7 @@ class ArenaService:
         # 使用同一模型进行投票 — 先查 DB 配置的 active_models，再 fallback 到 ARENA_MODELS
         api_key = None
         model_base_url = None
-        # Try to find the model in the active run's model list (stored on instance is not available here)
-        # So we load from DB first, then fall back to ARENA_MODELS
-        async with db_manager.get_postgres_session() as cfg_session:
-            db_models = await load_models_from_db(cfg_session)
+        db_models = load_models_from_db()
         for m in db_models:
             if m["provider"] == voter_provider and m["model"] == voter_model:
                 api_key = m.get("api_key")
@@ -856,10 +863,9 @@ class ArenaService:
     async def _run_phase3_tally(
         self,
         harness_id: str,
-        harness: DecisionHarness,
+        harness: Dict[str, Any],
         votes: List[Dict[str, Any]],
         successful_ios: List[Dict[str, Any]],
-        session: AsyncSession,
     ) -> Optional[Dict[str, Any]]:
         """Phase 3: 计算每个方案的 net_score，确定 winner，自动采纳"""
         if not successful_ios:
@@ -869,7 +875,7 @@ class ArenaService:
         # 0 or 1 model: 直接采纳（无需投票）
         if len(successful_ios) == 1:
             winner = successful_ios[0]
-            await self._adopt_winner(harness_id, harness, winner, 0, 0, 0, session)
+            await self._adopt_winner(harness_id, harness, winner, 0, 0, 0)
             return self._format_final_decision(winner, 0, 0, 0, {})
 
         # 计算每个候选的 net_score
@@ -886,8 +892,7 @@ class ArenaService:
                     score_map[target_id]["reject"] += 1
 
         # 4-layer tiebreak: net_score → historical model_score → confidence → created_at
-        async with db_manager.get_postgres_session() as score_session:
-            historical_scores = await self._get_historical_scores(score_session)
+        historical_scores = self._get_historical_scores()
 
         def sort_key(io: Dict[str, Any]):
             io_id = io["id"]
@@ -912,7 +917,7 @@ class ArenaService:
         risk_guard = get_risk_guard()
         risk_result = await risk_guard.check(
             decision=winner.get("output_structured") or {},
-            portfolio_state=harness.account_state or {},
+            portfolio_state=harness.get("account_state") or {},
         )
         if risk_result.status == "blocked":
             logger.warning(f"Risk guard blocked winner: {risk_result.reasons}")
@@ -925,20 +930,19 @@ class ArenaService:
         await self._adopt_winner(
             harness_id, harness, winner,
             net_score, winner_scores["approve"], winner_scores["reject"],
-            session,
         )
 
         # Record benchmark DCA
-        await self._record_benchmark_dca(harness_id, harness, session)
+        await self._record_benchmark_dca(harness_id, harness)
 
         # Update model scores
         await self._update_model_scores(
-            harness, successful_ios, score_map, winner, session
+            harness, successful_ios, score_map, winner
         )
 
         # Write memories (shared + per-agent)
         await self._write_post_vote_memories(
-            harness_id, votes, successful_ios, winner, score_map, session
+            harness_id, votes, successful_ios, winner, score_map
         )
 
         return self._format_final_decision(
@@ -949,39 +953,37 @@ class ArenaService:
     async def _adopt_winner(
         self,
         harness_id: str,
-        harness: DecisionHarness,
+        harness: Dict[str, Any],
         winner: Dict[str, Any],
         net_score: int,
         approve_count: int,
         reject_count: int,
-        session: AsyncSession,
     ):
         """自动创建 DecisionLog 采纳 winner"""
         structured = winner.get("output_structured") or {}
-        async with db_manager.get_postgres_session() as log_session:
-            decision_log = DecisionLog(
-                harness_id=harness_id,
-                adopted_model_io_id=winner["id"],
-                user_action="auto_voted",
-                original_allocations=structured.get("allocations"),
-                user_notes=json.dumps({
-                    "net_score": net_score,
-                    "approve": approve_count,
-                    "reject": reject_count,
-                    "winner_model": f"{winner.get('model_provider')}/{winner.get('model_name')}",
-                }, ensure_ascii=False),
-            )
-            log_session.add(decision_log)
-            await log_session.commit()
+        log_repo = SupabaseRepository("decision_log")
+        data = _ensure_id({
+            "harness_id": harness_id,
+            "adopted_model_io_id": winner["id"],
+            "user_action": "auto_voted",
+            "original_allocations": structured.get("allocations"),
+            "user_notes": json.dumps({
+                "net_score": net_score,
+                "approve": approve_count,
+                "reject": reject_count,
+                "winner_model": f"{winner.get('model_provider')}/{winner.get('model_name')}",
+            }, ensure_ascii=False),
+        })
+        result = log_repo.insert(data)
+        await _backup_rows("decision_log", result.data or [data], DecisionLog)
 
     async def _record_benchmark_dca(
         self,
         harness_id: str,
-        harness: DecisionHarness,
-        session: AsyncSession,
+        harness: Dict[str, Any],
     ):
         """记录 benchmark DCA 对照"""
-        task = harness.task or {}
+        task = harness.get("task") or {}
         budget = task.get("budget", 0)
         watchlist = task.get("watchlist", [])
 
@@ -994,66 +996,64 @@ class ArenaService:
             for s in watchlist
         ]
 
-        async with db_manager.get_postgres_session() as log_session:
-            benchmark_log = DecisionLog(
-                harness_id=harness_id,
-                adopted_model_io_id=None,
-                user_action="benchmark_dca",
-                original_allocations=dca_allocations,
-                user_notes="Pure DCA benchmark: equal allocation to all watchlist ETFs",
-            )
-            log_session.add(benchmark_log)
-            await log_session.commit()
+        log_repo = SupabaseRepository("decision_log")
+        data = _ensure_id({
+            "harness_id": harness_id,
+            "adopted_model_io_id": None,
+            "user_action": "benchmark_dca",
+            "original_allocations": dca_allocations,
+            "user_notes": "Pure DCA benchmark: equal allocation to all watchlist ETFs",
+        })
+        result = log_repo.insert(data)
+        await _backup_rows("decision_log", result.data or [data], DecisionLog)
 
     async def _update_model_scores(
         self,
-        harness: DecisionHarness,
+        harness: Dict[str, Any],
         successful_ios: List[Dict[str, Any]],
         score_map: Dict[str, Dict[str, int]],
         winner: Dict[str, Any],
-        session: AsyncSession,
     ):
         """投票后更新 ModelScore"""
-        async with db_manager.get_postgres_session() as score_session:
-            for io in successful_ios:
-                provider = io["model_provider"]
-                model = io["model_name"]
-                scores = score_map.get(io["id"], {"approve": 0, "reject": 0})
-                is_winner = io["id"] == winner["id"]
+        score_repo = SupabaseRepository("model_score")
+        for io in successful_ios:
+            provider = io["model_provider"]
+            model = io["model_name"]
+            scores = score_map.get(io["id"], {"approve": 0, "reject": 0})
+            is_winner = io["id"] == winner["id"]
 
-                # 查找或创建 ModelScore
-                q = select(ModelScore).where(
-                    ModelScore.model_provider == provider,
-                    ModelScore.model_name == model,
-                    ModelScore.prompt_version_id == harness.prompt_version_id,
-                )
-                result = await score_session.execute(q)
-                ms = result.scalar_one_or_none()
+            existing = score_repo.select_one(eq={
+                "model_provider": provider,
+                "model_name": model,
+                "prompt_version_id": harness.get("prompt_version_id"),
+            })
 
-                if not ms:
-                    ms = ModelScore(
-                        model_provider=provider,
-                        model_name=model,
-                        prompt_version_id=harness.prompt_version_id,
-                        adoption_count=0,
-                        rejection_count=0,
-                        approve_vote_count=0,
-                        total_decisions=0,
-                        win_count=0,
-                        loss_count=0,
-                        counterfactual_win_count=0,
-                        counterfactual_total=0,
-                        avg_return_pct=0.0,
-                    )
-                    score_session.add(ms)
-
-                ms.total_decisions = (ms.total_decisions or 0) + 1
+            if existing:
+                update_data = {
+                    "total_decisions": (existing.get("total_decisions") or 0) + 1,
+                    "approve_vote_count": (existing.get("approve_vote_count") or 0) + scores["approve"],
+                    "rejection_count": (existing.get("rejection_count") or 0) + scores["reject"],
+                    "updated_at": _now_iso(),
+                }
                 if is_winner:
-                    ms.adoption_count = (ms.adoption_count or 0) + 1
-                ms.approve_vote_count = (ms.approve_vote_count or 0) + scores["approve"]
-                ms.rejection_count = (ms.rejection_count or 0) + scores["reject"]
-
-            await score_session.commit()
+                    update_data["adoption_count"] = (existing.get("adoption_count") or 0) + 1
+                score_repo.update(update_data, eq={"id": existing["id"]})
+            else:
+                new_score = _ensure_id({
+                    "model_provider": provider,
+                    "model_name": model,
+                    "prompt_version_id": harness.get("prompt_version_id"),
+                    "adoption_count": 1 if is_winner else 0,
+                    "rejection_count": 0,
+                    "approve_vote_count": scores["approve"],
+                    "total_decisions": 1,
+                    "win_count": 0,
+                    "loss_count": 0,
+                    "counterfactual_win_count": 0,
+                    "counterfactual_total": 0,
+                    "avg_return_pct": 0.0,
+                })
+                score_repo.insert(new_score)
 
     async def _write_post_vote_memories(
         self,
@@ -1062,7 +1062,6 @@ class ArenaService:
         successful_ios: List[Dict[str, Any]],
         winner: Dict[str, Any],
         score_map: Dict[str, Dict[str, int]],
-        session: AsyncSession,
     ):
         """投票结束后写入共享记忆 + per-agent 私有记忆"""
         from uteki.domains.index.services.memory_service import get_memory_service
@@ -1072,9 +1071,9 @@ class ArenaService:
         winner_scores = score_map.get(winner["id"], {"approve": 0, "reject": 0})
 
         # 共享记忆: 投票获胜方案
-        import datetime
+        import datetime as dt_module
         winner_summary = json.dumps({
-            "date": datetime.datetime.now().isoformat()[:10],
+            "date": dt_module.datetime.now().isoformat()[:10],
             "winner_model": f"{winner.get('model_provider')}/{winner.get('model_name')}",
             "action": winner_structured.get("action"),
             "allocations": winner_structured.get("allocations"),
@@ -1082,13 +1081,11 @@ class ArenaService:
             "net_score": winner_scores["approve"] - winner_scores["reject"],
         }, ensure_ascii=False)
 
-        async with db_manager.get_postgres_session() as mem_session:
-            await ms.write_arena_learning(
-                user_id="default",
-                session=mem_session,
-                winner_summary=winner_summary,
-                metadata={"harness_id": harness_id},
-            )
+        await ms.write_arena_learning(
+            user_id="default",
+            winner_summary=winner_summary,
+            metadata={"harness_id": harness_id},
+        )
 
         # Per-agent 私有记忆: 每个 agent 的投票理由
         io_id_map = {io["id"]: io for io in successful_ios}
@@ -1113,26 +1110,22 @@ class ArenaService:
                     f"{v['vote_type']} → {target_label}: {(v.get('reasoning') or '')[:100]}"
                 )
 
-            async with db_manager.get_postgres_session() as mem_session:
-                await ms.write_vote_reasoning(
-                    user_id="default",
-                    agent_key=agent_key,
-                    session=mem_session,
-                    reasoning="\n".join(reasoning_parts),
-                    metadata={"harness_id": harness_id},
-                )
+            await ms.write_vote_reasoning(
+                user_id="default",
+                agent_key=agent_key,
+                reasoning="\n".join(reasoning_parts),
+                metadata={"harness_id": harness_id},
+            )
 
-    async def _get_historical_scores(
-        self, session: AsyncSession
-    ) -> Dict[str, int]:
+    def _get_historical_scores(self) -> Dict[str, int]:
         """获取各模型的历史 model_score (adoption - rejection)"""
-        q = select(ModelScore)
-        result = await session.execute(q)
+        score_repo = SupabaseRepository("model_score")
+        rows = score_repo.select_data()
         scores = {}
-        for ms in result.scalars().all():
-            key = f"{ms.model_provider}:{ms.model_name}"
+        for row in rows:
+            key = f"{row['model_provider']}:{row['model_name']}"
             current = scores.get(key, 0)
-            scores[key] = current + (ms.adoption_count - ms.rejection_count)
+            scores[key] = current + ((row.get("adoption_count") or 0) - (row.get("rejection_count") or 0))
         return scores
 
     @staticmethod
@@ -1168,28 +1161,19 @@ class ArenaService:
     # ================================================================
 
     @staticmethod
-    async def _update_pipeline_state(
-        harness_id: str, session: AsyncSession, key: str, value: Any
-    ):
+    def _update_pipeline_state(harness_id: str, key: str, value: Any):
         """更新 pipeline_state 中的某个 phase 标记"""
-        async with db_manager.get_postgres_session() as ps_session:
-            q = select(DecisionHarness).where(DecisionHarness.id == harness_id)
-            result = await ps_session.execute(q)
-            harness = result.scalar_one_or_none()
-            if harness:
-                state = harness.pipeline_state or {}
-                state[key] = value
-                harness.pipeline_state = state
-                await ps_session.commit()
+        harness_repo = SupabaseRepository("decision_harness")
+        harness = harness_repo.select_one(eq={"id": harness_id})
+        if harness:
+            state = harness.get("pipeline_state") or {}
+            state[key] = value
+            harness_repo.update({"pipeline_state": state, "updated_at": _now_iso()}, eq={"id": harness_id})
 
-    async def _get_votes_for_harness(
-        self, harness_id: str, session: AsyncSession
-    ) -> List[Dict[str, Any]]:
+    def _get_votes_for_harness(self, harness_id: str) -> List[Dict[str, Any]]:
         """从 DB 加载已有投票记录"""
-        async with db_manager.get_postgres_session() as vote_session:
-            q = select(ArenaVote).where(ArenaVote.harness_id == harness_id)
-            result = await vote_session.execute(q)
-            return [v.to_dict() for v in result.scalars().all()]
+        vote_repo = SupabaseRepository("arena_vote")
+        return vote_repo.select_data(eq={"harness_id": harness_id})
 
     # ================================================================
     # Helpers (unchanged from original)
@@ -1394,9 +1378,9 @@ class ArenaService:
         return f"{prefix}{value}{suffix}"
 
     @classmethod
-    def _serialize_harness(cls, harness: DecisionHarness) -> str:
+    def _serialize_harness(cls, harness: Dict[str, Any]) -> str:
         """序列化 Harness 为 prompt 文本"""
-        snapshot = harness.market_snapshot or {}
+        snapshot = harness.get("market_snapshot") or {}
 
         quotes = snapshot.get("quotes", snapshot if "quotes" not in snapshot else {})
         valuations = snapshot.get("valuations", {})
@@ -1404,8 +1388,8 @@ class ArenaService:
         sentiment = snapshot.get("sentiment", {})
 
         lines = [
-            f"日期: {harness.created_at.isoformat() if harness.created_at else 'unknown'}",
-            f"决策类型: {harness.harness_type}",
+            f"日期: {harness.get('created_at', 'unknown')}",
+            f"决策类型: {harness.get('harness_type')}",
             "",
             "=== 市场行情 ===",
         ]
@@ -1456,7 +1440,7 @@ class ArenaService:
 
         lines.append("")
         lines.append("=== 账户状态 ===")
-        account = harness.account_state or {}
+        account = harness.get("account_state") or {}
         lines.append(f"现金: ${account.get('cash', 0)}")
         lines.append(f"总资产: ${account.get('total', 0)}")
         for pos in account.get("positions", []):
@@ -1464,7 +1448,7 @@ class ArenaService:
 
         lines.append("")
         lines.append("=== 记忆摘要 ===")
-        memory = harness.memory_summary or {}
+        memory = harness.get("memory_summary") or {}
         for d in memory.get("recent_decisions", []):
             lines.append(f"近期决策: {d.get('content', '')[:100]}")
         if memory.get("recent_reflection"):
@@ -1476,7 +1460,7 @@ class ArenaService:
 
         lines.append("")
         lines.append("=== 任务 ===")
-        task = harness.task or {}
+        task = harness.get("task") or {}
         lines.append(f"类型: {task.get('type', 'unknown')}")
         if task.get("budget"):
             lines.append(f"预算: ${task['budget']}")
@@ -1509,166 +1493,170 @@ class ArenaService:
     # Query Methods
     # ================================================================
 
-    async def get_arena_timeline(
-        self, session: AsyncSession, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    def get_arena_results(self, harness_id: str) -> List[Dict[str, Any]]:
+        """获取某次 Arena 的所有模型结果"""
+        io_repo = SupabaseRepository("model_io")
+        return io_repo.select_data(eq={"harness_id": harness_id})
+
+    def get_model_io_detail(self, model_io_id: str) -> Optional[Dict[str, Any]]:
+        """获取单个模型的完整 I/O"""
+        io_repo = SupabaseRepository("model_io")
+        return io_repo.select_one(eq={"id": model_io_id})
+
+    def get_votes_for_harness(self, harness_id: str) -> List[Dict[str, Any]]:
+        """获取某次 Arena 的投票详情（公开 API）"""
+        return self._get_votes_for_harness(harness_id)
+
+    async def get_arena_timeline(self, limit: int = 50) -> List[Dict[str, Any]]:
         """获取 Arena 时间线图表数据（按时间正序）"""
-        model_count_subq = (
-            select(
-                ModelIO.harness_id,
-                func.count(ModelIO.id).label("model_count"),
-            )
-            .group_by(ModelIO.harness_id)
-            .subquery()
+        harness_repo = SupabaseRepository("decision_harness")
+        io_repo = SupabaseRepository("model_io")
+        log_repo = SupabaseRepository("decision_log")
+        prompt_repo = SupabaseRepository("prompt_version")
+
+        # Get harnesses ordered by created_at
+        harnesses = harness_repo.select_data(order="created_at.asc", limit=limit * 2)
+        if not harnesses:
+            return []
+
+        harness_ids = [h["id"] for h in harnesses]
+
+        # Get model_io counts per harness
+        all_ios = io_repo.select_data(in_={"harness_id": harness_ids}, columns="id,harness_id")
+        io_counts = {}
+        for io in all_ios:
+            hid = io["harness_id"]
+            io_counts[hid] = io_counts.get(hid, 0) + 1
+
+        # Get adopted decisions
+        logs = log_repo.select_data(
+            in_={"harness_id": harness_ids},
+            neq={"adopted_model_io_id": None},
         )
+        adopted_io_ids = [l["adopted_model_io_id"] for l in logs if l.get("adopted_model_io_id")]
+        adopted_ios = {}
+        if adopted_io_ids:
+            adopted_rows = io_repo.select_data(in_={"id": adopted_io_ids}, columns="id,output_structured")
+            adopted_ios = {r["id"]: r.get("output_structured") for r in adopted_rows}
+        log_map = {}
+        for l in logs:
+            if l.get("adopted_model_io_id"):
+                log_map[l["harness_id"]] = l["adopted_model_io_id"]
 
-        adopted_subq = (
-            select(
-                DecisionLog.harness_id,
-                ModelIO.output_structured.label("adopted_structured"),
-            )
-            .join(ModelIO, DecisionLog.adopted_model_io_id == ModelIO.id)
-            .where(DecisionLog.adopted_model_io_id.is_not(None))
-            .subquery()
-        )
+        # Get prompt versions
+        prompt_ids = list(set(h.get("prompt_version_id") for h in harnesses if h.get("prompt_version_id")))
+        prompt_map = {}
+        if prompt_ids:
+            prompts = prompt_repo.select_data(in_={"id": prompt_ids}, columns="id,version")
+            prompt_map = {p["id"]: p.get("version") for p in prompts}
 
-        query = (
-            select(
-                DecisionHarness.id,
-                DecisionHarness.harness_type,
-                DecisionHarness.created_at,
-                DecisionHarness.account_state,
-                DecisionHarness.task,
-                model_count_subq.c.model_count,
-                PromptVersion.version.label("prompt_version"),
-                adopted_subq.c.adopted_structured,
-            )
-            .outerjoin(model_count_subq, DecisionHarness.id == model_count_subq.c.harness_id)
-            .outerjoin(PromptVersion, DecisionHarness.prompt_version_id == PromptVersion.id)
-            .outerjoin(adopted_subq, DecisionHarness.id == adopted_subq.c.harness_id)
-            .where(model_count_subq.c.model_count > 0)
-            .order_by(asc(DecisionHarness.created_at))
-            .limit(limit)
-        )
-
-        result = await session.execute(query)
-        rows = result.all()
-
+        # Assemble timeline -- filter to harnesses with model_io
         timeline = []
-        for row in rows:
-            account = row.account_state or {}
-            account_total = account.get("total")
+        for h in harnesses:
+            hid = h["id"]
+            model_count = io_counts.get(hid, 0)
+            if model_count == 0:
+                continue
 
+            account = h.get("account_state") or {}
+            adopted_io_id = log_map.get(hid)
+            adopted_structured = adopted_ios.get(adopted_io_id) if adopted_io_id else None
             action = None
-            if row.adopted_structured and isinstance(row.adopted_structured, dict):
-                action = row.adopted_structured.get("action")
+            if adopted_structured and isinstance(adopted_structured, dict):
+                action = adopted_structured.get("action")
 
             timeline.append({
-                "harness_id": row.id,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "account_total": account_total,
+                "harness_id": hid,
+                "created_at": h.get("created_at"),
+                "account_total": account.get("total"),
                 "action": action,
-                "harness_type": row.harness_type,
-                "model_count": row.model_count or 0,
-                "prompt_version": row.prompt_version,
-                "budget": (row.task or {}).get("budget"),
+                "harness_type": h.get("harness_type"),
+                "model_count": model_count,
+                "prompt_version": prompt_map.get(h.get("prompt_version_id")),
+                "budget": (h.get("task") or {}).get("budget"),
             })
+
+            if len(timeline) >= limit:
+                break
 
         return timeline
 
-    async def get_arena_history(
-        self, session: AsyncSession, limit: int = 20, offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    async def get_arena_history(self, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         """获取 Arena 运行历史列表"""
-        model_count_subq = (
-            select(
-                ModelIO.harness_id,
-                func.count(ModelIO.id).label("model_count"),
-            )
-            .group_by(ModelIO.harness_id)
-            .subquery()
+        harness_repo = SupabaseRepository("decision_harness")
+        io_repo = SupabaseRepository("model_io")
+        log_repo = SupabaseRepository("decision_log")
+        prompt_repo = SupabaseRepository("prompt_version")
+
+        # Fetch more harnesses than needed since we filter by model_count > 0
+        harnesses = harness_repo.select_data(order="created_at.desc", limit=(limit + offset) * 2)
+        if not harnesses:
+            return []
+
+        harness_ids = [h["id"] for h in harnesses]
+
+        # Model counts
+        all_ios = io_repo.select_data(in_={"harness_id": harness_ids}, columns="id,harness_id")
+        io_counts = {}
+        for io in all_ios:
+            hid = io["harness_id"]
+            io_counts[hid] = io_counts.get(hid, 0) + 1
+
+        # Get auto_voted winners
+        auto_logs = log_repo.select_data(
+            in_={"harness_id": harness_ids},
+            eq={"user_action": "auto_voted"},
         )
-
-        # 获取投票 winner 信息
-        winner_subq = (
-            select(
-                DecisionLog.harness_id,
-                ModelIO.model_provider.label("vote_winner_provider"),
-                ModelIO.model_name.label("vote_winner_model_name"),
-                ModelIO.output_structured.label("vote_winner_structured"),
+        winner_io_ids = [l["adopted_model_io_id"] for l in auto_logs if l.get("adopted_model_io_id")]
+        winner_ios = {}
+        if winner_io_ids:
+            rows = io_repo.select_data(
+                in_={"id": winner_io_ids},
+                columns="id,model_provider,model_name,output_structured"
             )
-            .join(ModelIO, DecisionLog.adopted_model_io_id == ModelIO.id)
-            .where(DecisionLog.user_action == "auto_voted")
-            .subquery()
-        )
+            winner_ios = {r["id"]: r for r in rows}
+        auto_log_map = {}
+        for l in auto_logs:
+            if l.get("adopted_model_io_id"):
+                auto_log_map[l["harness_id"]] = l["adopted_model_io_id"]
 
-        query = (
-            select(
-                DecisionHarness.id,
-                DecisionHarness.harness_type,
-                DecisionHarness.created_at,
-                DecisionHarness.task,
-                model_count_subq.c.model_count,
-                PromptVersion.version.label("prompt_version"),
-                winner_subq.c.vote_winner_provider,
-                winner_subq.c.vote_winner_model_name,
-                winner_subq.c.vote_winner_structured,
-            )
-            .outerjoin(model_count_subq, DecisionHarness.id == model_count_subq.c.harness_id)
-            .outerjoin(PromptVersion, DecisionHarness.prompt_version_id == PromptVersion.id)
-            .outerjoin(winner_subq, DecisionHarness.id == winner_subq.c.harness_id)
-            .where(model_count_subq.c.model_count > 0)
-            .order_by(desc(DecisionHarness.created_at))
-            .limit(limit)
-            .offset(offset)
-        )
+        # Prompt versions
+        prompt_ids = list(set(h.get("prompt_version_id") for h in harnesses if h.get("prompt_version_id")))
+        prompt_map = {}
+        if prompt_ids:
+            prompts = prompt_repo.select_data(in_={"id": prompt_ids}, columns="id,version")
+            prompt_map = {p["id"]: p.get("version") for p in prompts}
 
-        result = await session.execute(query)
-        rows = result.all()
+        # Filter and paginate
+        filtered = [h for h in harnesses if io_counts.get(h["id"], 0) > 0]
+        paged = filtered[offset:offset + limit]
 
-        return [
-            {
-                "harness_id": row.id,
-                "harness_type": row.harness_type,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "budget": (row.task or {}).get("budget"),
-                "model_count": row.model_count or 0,
-                "prompt_version": row.prompt_version,
+        result = []
+        for h in paged:
+            hid = h["id"]
+            winner_io_id = auto_log_map.get(hid)
+            winner = winner_ios.get(winner_io_id, {}) if winner_io_id else {}
+
+            winner_structured = winner.get("output_structured")
+            result.append({
+                "harness_id": hid,
+                "harness_type": h.get("harness_type"),
+                "created_at": h.get("created_at"),
+                "budget": (h.get("task") or {}).get("budget"),
+                "model_count": io_counts.get(hid, 0),
+                "prompt_version": prompt_map.get(h.get("prompt_version_id")),
                 "vote_winner_model": (
-                    f"{row.vote_winner_provider}/{row.vote_winner_model_name}"
-                    if row.vote_winner_provider else None
+                    f"{winner.get('model_provider')}/{winner.get('model_name')}"
+                    if winner.get("model_provider") else None
                 ),
                 "vote_winner_action": (
-                    row.vote_winner_structured.get("action")
-                    if row.vote_winner_structured and isinstance(row.vote_winner_structured, dict)
+                    winner_structured.get("action")
+                    if winner_structured and isinstance(winner_structured, dict)
                     else None
                 ),
-            }
-            for row in rows
-        ]
+            })
 
-    async def get_arena_results(
-        self, harness_id: str, session: AsyncSession
-    ) -> List[Dict[str, Any]]:
-        """获取某次 Arena 的所有模型结果"""
-        query = select(ModelIO).where(ModelIO.harness_id == harness_id)
-        result = await session.execute(query)
-        return [m.to_dict() for m in result.scalars().all()]
-
-    async def get_model_io_detail(
-        self, model_io_id: str, session: AsyncSession
-    ) -> Optional[Dict[str, Any]]:
-        """获取单个模型的完整 I/O"""
-        query = select(ModelIO).where(ModelIO.id == model_io_id)
-        result = await session.execute(query)
-        mio = result.scalar_one_or_none()
-        return mio.to_full_dict() if mio else None
-
-    async def get_votes_for_harness(
-        self, harness_id: str, session: AsyncSession
-    ) -> List[Dict[str, Any]]:
-        """获取某次 Arena 的投票详情（公开 API）"""
-        return await self._get_votes_for_harness(harness_id, session)
+        return result
 
 
 # Voting system prompt

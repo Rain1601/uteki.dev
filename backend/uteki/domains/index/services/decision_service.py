@@ -1,12 +1,11 @@
-"""决策日志与反事实追踪服务"""
+"""决策日志与反事实追踪服务 — Supabase REST API 版"""
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
-from sqlalchemy import select, func, and_
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.models.decision_log import DecisionLog
 from uteki.domains.index.models.decision_harness import DecisionHarness
 from uteki.domains.index.models.model_io import ModelIO
@@ -14,6 +13,39 @@ from uteki.domains.index.models.counterfactual import Counterfactual
 from uteki.domains.index.models.index_price import IndexPrice
 
 logger = logging.getLogger(__name__)
+
+LOG_TABLE = "decision_log"
+HARNESS_TABLE = "decision_harness"
+MODEL_IO_TABLE = "model_io"
+CF_TABLE = "counterfactual"
+PRICE_TABLE = "index_prices"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_rows(table: str, model_class, rows: list):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(model_class, k)}
+                await session.merge(model_class(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {table}: {e}")
 
 
 class DecisionService:
@@ -23,7 +55,6 @@ class DecisionService:
         self,
         harness_id: str,
         user_action: str,
-        session: AsyncSession,
         adopted_model_io_id: Optional[str] = None,
         original_allocations: Optional[list] = None,
         executed_allocations: Optional[list] = None,
@@ -31,24 +62,27 @@ class DecisionService:
         user_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """创建不可变的决策日志记录"""
-        log = DecisionLog(
-            harness_id=harness_id,
-            adopted_model_io_id=adopted_model_io_id,
-            user_action=user_action,
-            original_allocations=original_allocations,
-            executed_allocations=executed_allocations,
-            execution_results=execution_results,
-            user_notes=user_notes,
-        )
-        session.add(log)
-        await session.commit()
-        await session.refresh(log)
-        logger.info(f"Decision log created: {log.id} action={user_action}")
-        return log.to_dict()
+        data = {
+            "harness_id": harness_id,
+            "adopted_model_io_id": adopted_model_io_id,
+            "user_action": user_action,
+            "original_allocations": original_allocations,
+            "executed_allocations": executed_allocations,
+            "execution_results": execution_results,
+            "user_notes": user_notes,
+        }
+        _ensure_id(data)
+
+        repo = SupabaseRepository(LOG_TABLE)
+        result = repo.upsert(data)
+        row = result.data[0] if result.data else data
+
+        await _backup_rows(LOG_TABLE, DecisionLog, [row])
+        logger.info(f"Decision log created: {row.get('id')} action={user_action}")
+        return row
 
     async def get_timeline(
         self,
-        session: AsyncSession,
         limit: int = 50,
         offset: int = 0,
         user_action: Optional[str] = None,
@@ -57,77 +91,103 @@ class DecisionService:
         end_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """获取决策时间线（逆时间序）"""
-        query = (
-            select(DecisionLog, DecisionHarness)
-            .join(DecisionHarness, DecisionLog.harness_id == DecisionHarness.id)
+        # 1. Fetch decision logs with filters
+        eq_filters: Dict[str, Any] = {}
+        if user_action:
+            eq_filters["user_action"] = user_action
+
+        gte_filters: Optional[Dict[str, Any]] = None
+        if start_date:
+            gte_filters = {"created_at": start_date}
+
+        lte_filters: Optional[Dict[str, Any]] = None
+        if end_date:
+            lte_filters = {"created_at": end_date}
+
+        log_repo = SupabaseRepository(LOG_TABLE)
+        logs = log_repo.select_data(
+            eq=eq_filters or None,
+            gte=gte_filters,
+            lte=lte_filters,
+            order="created_at.desc",
+            limit=limit,
+            offset=offset,
         )
 
-        if user_action:
-            query = query.where(DecisionLog.user_action == user_action)
+        if not logs:
+            return []
+
+        # 2. Batch-fetch harness data
+        harness_ids = list({log["harness_id"] for log in logs if log.get("harness_id")})
+        harness_repo = SupabaseRepository(HARNESS_TABLE)
+        harnesses_list = harness_repo.select_data(in_={"id": harness_ids}) if harness_ids else []
+        harness_map = {h["id"]: h for h in harnesses_list}
+
+        # 3. Filter by harness_type if specified (post-filter since it's on a different table)
         if harness_type:
-            query = query.where(DecisionHarness.harness_type == harness_type)
-        if start_date:
-            query = query.where(DecisionLog.created_at >= start_date)
-        if end_date:
-            query = query.where(DecisionLog.created_at <= end_date)
+            valid_harness_ids = {
+                hid for hid, h in harness_map.items()
+                if h.get("harness_type") == harness_type
+            }
+            logs = [log for log in logs if log.get("harness_id") in valid_harness_ids]
 
-        query = query.order_by(DecisionLog.created_at.desc()).offset(offset).limit(limit)
-        result = await session.execute(query)
-        rows = result.all()
-
+        # 4. Build timeline
         timeline = []
-        for log, harness in rows:
-            # 获取该 harness 的模型数量
-            model_count_q = select(func.count()).select_from(ModelIO).where(ModelIO.harness_id == harness.id)
-            model_count_r = await session.execute(model_count_q)
-            model_count = model_count_r.scalar_one()
+        model_io_repo = SupabaseRepository(MODEL_IO_TABLE)
 
-            # 获取采纳的模型信息
+        for log in logs:
+            hid = log.get("harness_id")
+            harness = harness_map.get(hid, {})
+
+            # Model count for this harness
+            count_result = model_io_repo.select("*", count="exact", eq={"harness_id": hid}, limit=0)
+            model_count = count_result.count if count_result.count is not None else 0
+
+            # Adopted model info
             adopted_model = None
-            if log.adopted_model_io_id:
-                model_q = select(ModelIO).where(ModelIO.id == log.adopted_model_io_id)
-                model_r = await session.execute(model_q)
-                adopted = model_r.scalar_one_or_none()
-                if adopted:
-                    adopted_model = {"provider": adopted.model_provider, "name": adopted.model_name}
+            if log.get("adopted_model_io_id"):
+                adopted_row = model_io_repo.select_one(eq={"id": log["adopted_model_io_id"]})
+                if adopted_row:
+                    adopted_model = {
+                        "provider": adopted_row.get("model_provider"),
+                        "name": adopted_row.get("model_name"),
+                    }
 
             timeline.append({
-                **log.to_dict(),
-                "harness_type": harness.harness_type,
-                "prompt_version_id": harness.prompt_version_id,
+                **log,
+                "harness_type": harness.get("harness_type"),
+                "prompt_version_id": harness.get("prompt_version_id"),
                 "model_count": model_count,
                 "adopted_model": adopted_model,
             })
 
         return timeline
 
-    async def get_by_id(self, decision_id: str, session: AsyncSession) -> Optional[Dict[str, Any]]:
+    async def get_by_id(self, decision_id: str) -> Optional[Dict[str, Any]]:
         """获取决策详情，含 Harness 和所有模型 I/O"""
-        query = (
-            select(DecisionLog, DecisionHarness)
-            .join(DecisionHarness, DecisionLog.harness_id == DecisionHarness.id)
-            .where(DecisionLog.id == decision_id)
-        )
-        result = await session.execute(query)
-        row = result.one_or_none()
-        if not row:
+        # 1. Get log
+        log_repo = SupabaseRepository(LOG_TABLE)
+        log = log_repo.select_one(eq={"id": decision_id})
+        if not log:
             return None
 
-        log, harness = row
+        # 2. Get harness
+        harness_repo = SupabaseRepository(HARNESS_TABLE)
+        harness = harness_repo.select_one(eq={"id": log["harness_id"]})
+        if not harness:
+            return None
 
-        # 获取所有模型 I/O
-        io_query = select(ModelIO).where(ModelIO.harness_id == harness.id)
-        io_result = await session.execute(io_query)
-        model_ios = [m.to_dict() for m in io_result.scalars().all()]
+        # 3. Get model I/Os
+        model_io_repo = SupabaseRepository(MODEL_IO_TABLE)
+        model_ios = model_io_repo.select_data(eq={"harness_id": log["harness_id"]})
 
-        # 获取反事实数据
-        cf_query = select(Counterfactual).where(Counterfactual.decision_log_id == decision_id)
-        cf_result = await session.execute(cf_query)
-        counterfactuals = [c.to_dict() for c in cf_result.scalars().all()]
+        # 4. Get counterfactuals
+        cf_repo = SupabaseRepository(CF_TABLE)
+        counterfactuals = cf_repo.select_data(eq={"decision_log_id": decision_id})
 
         return {
-            **log.to_dict(),
-            "harness": harness.to_dict(),
+            **log,
+            "harness": harness,
             "model_ios": model_ios,
             "counterfactuals": counterfactuals,
         }
@@ -148,42 +208,48 @@ class DecisionService:
         self,
         decision_log_id: str,
         tracking_days: int,
-        session: AsyncSession,
     ) -> List[Dict[str, Any]]:
         """计算一个决策的所有模型的反事实收益"""
-        # 获取决策和 Harness
-        log_query = select(DecisionLog).where(DecisionLog.id == decision_log_id)
-        log_result = await session.execute(log_query)
-        log = log_result.scalar_one_or_none()
+        # 1. Get decision log
+        log_repo = SupabaseRepository(LOG_TABLE)
+        log = log_repo.select_one(eq={"id": decision_log_id})
         if not log:
             return []
 
-        harness_query = select(DecisionHarness).where(DecisionHarness.id == log.harness_id)
-        harness_result = await session.execute(harness_query)
-        harness = harness_result.scalar_one_or_none()
+        # 2. Get harness
+        harness_repo = SupabaseRepository(HARNESS_TABLE)
+        harness = harness_repo.select_one(eq={"id": log["harness_id"]})
         if not harness:
             return []
 
-        # 计算目标日期
-        decision_date = log.created_at.date() if hasattr(log.created_at, 'date') else log.created_at
+        # 3. Calculate target date
+        created_at = log.get("created_at", "")
+        if isinstance(created_at, str):
+            # Parse ISO datetime string to get date
+            decision_date = datetime.fromisoformat(created_at.replace("Z", "+00:00")).date()
+        else:
+            decision_date = created_at.date() if hasattr(created_at, "date") else created_at
         target_date = decision_date + timedelta(days=tracking_days)
+        target_date_str = target_date.isoformat()
 
-        # 获取所有模型 I/O
-        io_query = select(ModelIO).where(
-            ModelIO.harness_id == log.harness_id,
-            ModelIO.status == "success",
+        # 4. Get all successful model I/Os
+        model_io_repo = SupabaseRepository(MODEL_IO_TABLE)
+        model_ios = model_io_repo.select_data(
+            eq={"harness_id": log["harness_id"], "status": "success"}
         )
-        io_result = await session.execute(io_query)
-        model_ios = io_result.scalars().all()
 
+        price_repo = SupabaseRepository(PRICE_TABLE)
         results = []
+        cf_rows = []
+
         for mio in model_ios:
-            allocations = (mio.output_structured or {}).get("allocations", [])
+            output_structured = mio.get("output_structured") or {}
+            allocations = output_structured.get("allocations", [])
             if not allocations:
                 continue
 
-            # 从 Harness 获取入场价格
-            market_snapshot = harness.market_snapshot or {}
+            # Entry prices from harness market_snapshot
+            market_snapshot = harness.get("market_snapshot") or {}
             actual_prices = {}
             total_return = 0.0
             total_weight = 0.0
@@ -194,24 +260,18 @@ class DecisionService:
                 if not etf or pct <= 0:
                     continue
 
-                # 入场价格
-                entry_price = market_snapshot.get(etf, {}).get("price")
+                entry_price = (market_snapshot.get(etf) or {}).get("price")
                 if not entry_price:
                     continue
 
-                # N 天后价格
-                future_query = (
-                    select(IndexPrice)
-                    .where(
-                        IndexPrice.symbol == etf,
-                        IndexPrice.date <= target_date,
-                    )
-                    .order_by(IndexPrice.date.desc())
-                    .limit(1)
+                # N-day future price
+                future_rows = price_repo.select_data(
+                    eq={"symbol": etf},
+                    lte={"date": target_date_str},
+                    order="date.desc",
+                    limit=1,
                 )
-                future_result = await session.execute(future_query)
-                future_price_row = future_result.scalar_one_or_none()
-                future_price = future_price_row.close if future_price_row else entry_price
+                future_price = future_rows[0]["close"] if future_rows else entry_price
 
                 ret = (future_price - entry_price) / entry_price * 100
                 actual_prices[etf] = {
@@ -223,56 +283,61 @@ class DecisionService:
                 total_weight += pct / 100
 
             hypothetical_return = total_return / total_weight if total_weight > 0 else 0.0
-            was_adopted = log.adopted_model_io_id == mio.id
+            was_adopted = log.get("adopted_model_io_id") == mio.get("id")
 
-            cf = Counterfactual(
-                decision_log_id=decision_log_id,
-                model_io_id=mio.id,
-                was_adopted=was_adopted,
-                tracking_days=tracking_days,
-                hypothetical_return_pct=round(hypothetical_return, 2),
-                actual_prices=actual_prices,
-                calculated_at=datetime.now(timezone.utc),
-            )
-            session.add(cf)
-            results.append(cf.to_dict())
+            cf_data = {
+                "decision_log_id": decision_log_id,
+                "model_io_id": mio.get("id"),
+                "was_adopted": was_adopted,
+                "tracking_days": tracking_days,
+                "hypothetical_return_pct": round(hypothetical_return, 2),
+                "actual_prices": actual_prices,
+                "calculated_at": _now_iso(),
+            }
+            _ensure_id(cf_data)
+            cf_rows.append(cf_data)
+            results.append(cf_data)
 
-        await session.commit()
+        # Batch upsert counterfactuals
+        if cf_rows:
+            cf_repo = SupabaseRepository(CF_TABLE)
+            cf_repo.upsert(cf_rows)
+            await _backup_rows(CF_TABLE, Counterfactual, cf_rows)
+
         return results
 
     async def run_counterfactual_batch(
         self,
-        session: AsyncSession,
         tracking_days: int = 7,
     ) -> Dict[str, Any]:
         """批量计算反事实 — 找出所有 tracking_days 天前的决策，计算尚未存在的反事实"""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=tracking_days)
-        # 找出已到期的决策
-        log_query = (
-            select(DecisionLog)
-            .where(DecisionLog.created_at <= cutoff)
-            .order_by(DecisionLog.created_at.desc())
-            .limit(100)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=tracking_days)).isoformat()
+
+        # Get logs older than cutoff
+        log_repo = SupabaseRepository(LOG_TABLE)
+        logs = log_repo.select_data(
+            lte={"created_at": cutoff},
+            order="created_at.desc",
+            limit=100,
         )
-        log_result = await session.execute(log_query)
-        logs = log_result.scalars().all()
 
         processed = 0
         skipped = 0
+        cf_repo = SupabaseRepository(CF_TABLE)
+
         for log in logs:
-            # 检查是否已有该 tracking_days 的反事实
-            existing_q = select(func.count()).select_from(Counterfactual).where(
-                and_(
-                    Counterfactual.decision_log_id == log.id,
-                    Counterfactual.tracking_days == tracking_days,
-                )
+            log_id = log.get("id")
+            # Check if counterfactual already exists for this tracking_days
+            existing = cf_repo.select(
+                "*", count="exact",
+                eq={"decision_log_id": log_id, "tracking_days": tracking_days},
+                limit=0,
             )
-            existing_r = await session.execute(existing_q)
-            if existing_r.scalar_one() > 0:
+            if existing.count and existing.count > 0:
                 skipped += 1
                 continue
 
-            await self.calculate_counterfactual(log.id, tracking_days, session)
+            await self.calculate_counterfactual(log_id, tracking_days)
             processed += 1
 
         return {
@@ -282,35 +347,32 @@ class DecisionService:
             "skipped": skipped,
         }
 
+    async def get_counterfactuals(
+        self, decision_log_id: str
+    ) -> List[Dict[str, Any]]:
+        """获取某决策的所有反事实数据"""
+        cf_repo = SupabaseRepository(CF_TABLE)
+        return cf_repo.select_data(
+            eq={"decision_log_id": decision_log_id},
+            order="tracking_days.asc",
+        )
+
     async def classify_counterfactuals(
         self,
         decision_log_id: str,
-        session: AsyncSession,
     ) -> List[Dict[str, Any]]:
         """对反事实进行分类: missed_opportunity / dodged_bullet / correct_call / wrong_call"""
-        cfs = await self.get_counterfactuals(decision_log_id, session)
+        cfs = await self.get_counterfactuals(decision_log_id)
 
         classified = []
         for cf in cfs:
-            label = None
-            if cf["was_adopted"]:
-                label = "correct_call" if cf["hypothetical_return_pct"] >= 0 else "wrong_call"
+            if cf.get("was_adopted"):
+                label = "correct_call" if cf.get("hypothetical_return_pct", 0) >= 0 else "wrong_call"
             else:
-                label = "missed_opportunity" if cf["hypothetical_return_pct"] > 0 else "dodged_bullet"
+                label = "missed_opportunity" if cf.get("hypothetical_return_pct", 0) > 0 else "dodged_bullet"
             classified.append({**cf, "classification": label})
 
         return classified
-
-    async def get_counterfactuals(
-        self, decision_log_id: str, session: AsyncSession
-    ) -> List[Dict[str, Any]]:
-        query = (
-            select(Counterfactual)
-            .where(Counterfactual.decision_log_id == decision_log_id)
-            .order_by(Counterfactual.tracking_days.asc())
-        )
-        result = await session.execute(query)
-        return [c.to_dict() for c in result.scalars().all()]
 
 
 _decision_service: Optional[DecisionService] = None

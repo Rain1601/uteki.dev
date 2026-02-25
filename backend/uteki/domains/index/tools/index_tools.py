@@ -164,8 +164,7 @@ def get_index_tool_definitions() -> List[LLMTool]:
 class ToolExecutor:
     """工具执行调度器 — 将工具调用映射到 service 方法"""
 
-    def __init__(self, session, data_service, backtest_service, memory_service, decision_service, user_id="default"):
-        self.session = session
+    def __init__(self, data_service, backtest_service, memory_service, decision_service, user_id="default"):
         self.data_service = data_service
         self.backtest_service = backtest_service
         self.memory_service = memory_service
@@ -200,7 +199,7 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _get_index_quote(self, args: Dict) -> Any:
-        return await self.data_service.get_quote(args["symbol"], self.session)
+        return await self.data_service.get_quote(args["symbol"])
 
     async def _get_index_history(self, args: Dict) -> Any:
         from datetime import date, timedelta
@@ -209,7 +208,7 @@ class ToolExecutor:
         days = period_map.get(period, 30)
         end = date.today().isoformat()
         start = (date.today() - timedelta(days=days)).isoformat()
-        data = await self.data_service.get_history(args["symbol"], self.session, start=start, end=end)
+        data = self.data_service.get_history(args["symbol"], start=start, end=end)
         return {"symbol": args["symbol"], "period": period, "count": len(data), "prices": data[-20:]}  # 限制返回量
 
     async def _run_backtest(self, args: Dict) -> Any:
@@ -217,7 +216,6 @@ class ToolExecutor:
             args["symbol"], args["start"], args["end"],
             args.get("initial_capital", 10000),
             args.get("monthly_dca", 0),
-            self.session
         )
 
     async def _get_portfolio(self, args: Dict) -> Any:
@@ -265,7 +263,7 @@ class ToolExecutor:
 
     async def _read_memory(self, args: Dict) -> Any:
         return await self.memory_service.read(
-            self.user_id, self.session,
+            self.user_id,
             category=args.get("category"),
             limit=args.get("limit", 10),
         )
@@ -275,14 +273,14 @@ class ToolExecutor:
         if category not in ("experience", "observation"):
             return {"error": "Agent can only write experience or observation memories"}
         return await self.memory_service.write(
-            self.user_id, category, args["content"], self.session
+            self.user_id, category, args["content"]
         )
 
     async def _get_decision_log(self, args: Dict) -> Any:
         if args.get("decision_id"):
-            return await self.decision_service.get_by_id(args["decision_id"], self.session)
+            return await self.decision_service.get_by_id(args["decision_id"])
         return await self.decision_service.get_timeline(
-            self.session, limit=args.get("limit", 5)
+            limit=args.get("limit", 5)
         )
 
     async def _propose_watchlist_symbol(self, args: Dict) -> Any:

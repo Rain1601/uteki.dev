@@ -1,15 +1,16 @@
-"""Prompt 版本管理服务（system / user prompt）"""
+"""Prompt 版本管理服务（system / user prompt）— Supabase REST API 版"""
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from uteki.domains.index.models.prompt_version import PromptVersion
+from uteki.common.database import SupabaseRepository, db_manager
 
 logger = logging.getLogger(__name__)
+
+TABLE = "prompt_version"
 
 DEFAULT_SYSTEM_PROMPT = """你是一个专业的指数 ETF 投资顾问。
 
@@ -70,112 +71,136 @@ DEFAULT_USER_PROMPT_TEMPLATE = """日期: {{date}}
 """
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_rows(rows: list):
+    """Best-effort SQLite backup (failure only warns)."""
+    try:
+        from uteki.domains.index.models.prompt_version import PromptVersion
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(PromptVersion, k)}
+                await session.merge(PromptVersion(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for {TABLE}: {e}")
+
+
 class PromptService:
     """Prompt 版本管理 — 支持 system / user 两种类型"""
 
+    def __init__(self):
+        self.repo = SupabaseRepository(TABLE)
+
     async def get_current(
-        self, session: AsyncSession, prompt_type: str = "system"
+        self, prompt_type: str = "system"
     ) -> Optional[Dict[str, Any]]:
         """获取当前激活的 prompt 版本"""
-        query = select(PromptVersion).where(
-            PromptVersion.prompt_type == prompt_type,
-            PromptVersion.is_current == True,
+        row = self.repo.select_one(
+            eq={"prompt_type": prompt_type, "is_current": True}
         )
-        result = await session.execute(query)
-        version = result.scalar_one_or_none()
-        if version:
-            return version.to_dict()
+        if row:
+            return row
 
-        return await self._create_default(session, prompt_type)
+        return await self._create_default(prompt_type)
 
     async def update_prompt(
-        self, content: str, description: str, session: AsyncSession,
+        self, content: str, description: str,
         prompt_type: str = "system",
     ) -> Dict[str, Any]:
         """更新 prompt — 创建新版本"""
-        query = select(PromptVersion).where(
-            PromptVersion.prompt_type == prompt_type,
-            PromptVersion.is_current == True,
+        current = self.repo.select_one(
+            eq={"prompt_type": prompt_type, "is_current": True}
         )
-        result = await session.execute(query)
-        current = result.scalar_one_or_none()
 
         if current:
-            new_version = self._increment_version(current.version)
-            current.is_current = False
+            new_version = self._increment_version(current["version"])
+            self.repo.update(
+                data={"is_current": False, "updated_at": _now_iso()},
+                eq={"id": current["id"]},
+            )
         else:
             new_version = "v1.0"
 
-        version = PromptVersion(
-            prompt_type=prompt_type,
-            version=new_version,
-            content=content,
-            description=description,
-            is_current=True,
-        )
-        session.add(version)
-        await session.commit()
-        await session.refresh(version)
+        data = {
+            "prompt_type": prompt_type,
+            "version": new_version,
+            "content": content,
+            "description": description,
+            "is_current": True,
+        }
+        _ensure_id(data)
+        result = self.repo.upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows([row])
         logger.info(f"Created {prompt_type} prompt version {new_version}: {description}")
-        return version.to_dict()
+        return row
 
-    async def activate_version(self, version_id: str, session: AsyncSession) -> Dict[str, Any]:
+    async def activate_version(self, version_id: str) -> Dict[str, Any]:
         """将指定版本设为当前版本"""
-        query = select(PromptVersion).where(PromptVersion.id == version_id)
-        result = await session.execute(query)
-        target = result.scalar_one_or_none()
+        target = self.repo.select_one(eq={"id": version_id})
         if not target:
             raise ValueError("Prompt version not found")
 
-        # 将同类型所有版本标记为非当前
-        await session.execute(
-            update(PromptVersion).where(
-                PromptVersion.prompt_type == target.prompt_type,
-                PromptVersion.is_current == True,
-            ).values(is_current=False)
+        # 将同类型所有当前版本标记为非当前
+        current_rows = self.repo.select_data(
+            eq={"prompt_type": target["prompt_type"], "is_current": True}
         )
-        target.is_current = True
-        await session.commit()
-        await session.refresh(target)
-        logger.info(f"Activated prompt version {target.version} ({version_id})")
-        return target.to_dict()
+        for row in current_rows:
+            self.repo.update(
+                data={"is_current": False, "updated_at": _now_iso()},
+                eq={"id": row["id"]},
+            )
 
-    async def delete_version(self, version_id: str, session: AsyncSession) -> None:
+        # 激活目标版本
+        result = self.repo.update(
+            data={"is_current": True, "updated_at": _now_iso()},
+            eq={"id": version_id},
+        )
+        row = result.data[0] if result.data else target
+        logger.info(f"Activated prompt version {target['version']} ({version_id})")
+        return row
+
+    async def delete_version(self, version_id: str) -> None:
         """删除指定版本（当前版本禁止删除）"""
-        query = select(PromptVersion).where(PromptVersion.id == version_id)
-        result = await session.execute(query)
-        target = result.scalar_one_or_none()
+        target = self.repo.select_one(eq={"id": version_id})
         if not target:
             raise ValueError("Prompt version not found")
-        if target.is_current:
+        if target.get("is_current"):
             raise ValueError("Cannot delete the current active version")
-        await session.delete(target)
-        await session.commit()
-        logger.info(f"Deleted prompt version {target.version} ({version_id})")
+        self.repo.delete(eq={"id": version_id})
+        logger.info(f"Deleted prompt version {target['version']} ({version_id})")
 
     async def get_history(
-        self, session: AsyncSession, prompt_type: str = "system"
+        self, prompt_type: str = "system"
     ) -> List[Dict[str, Any]]:
         """获取所有版本历史"""
-        query = (
-            select(PromptVersion)
-            .where(PromptVersion.prompt_type == prompt_type)
-            .order_by(PromptVersion.created_at.desc())
+        return self.repo.select_data(
+            eq={"prompt_type": prompt_type}, order="created_at.desc"
         )
-        result = await session.execute(query)
-        return [v.to_dict() for v in result.scalars().all()]
 
-    async def get_by_id(self, version_id: str, session: AsyncSession) -> Optional[Dict[str, Any]]:
-        query = select(PromptVersion).where(PromptVersion.id == version_id)
-        result = await session.execute(query)
-        version = result.scalar_one_or_none()
-        return version.to_dict() if version else None
+    async def get_by_id(self, version_id: str) -> Optional[Dict[str, Any]]:
+        return self.repo.select_one(eq={"id": version_id})
 
     async def render_user_prompt(
-        self, session: AsyncSession, harness_data: dict
+        self, harness_data: dict
     ) -> str:
         """渲染 user prompt 模板，用 harness_data 填充变量"""
-        current = await self.get_current(session, prompt_type="user")
+        current = await self.get_current(prompt_type="user")
         template = current["content"] if current else DEFAULT_USER_PROMPT_TEMPLATE
 
         variables = self._build_template_variables(harness_data)
@@ -322,7 +347,7 @@ class PromptService:
         }
 
     async def _create_default(
-        self, session: AsyncSession, prompt_type: str = "system"
+        self, prompt_type: str = "system"
     ) -> Dict[str, Any]:
         default_content = (
             DEFAULT_SYSTEM_PROMPT if prompt_type == "system"
@@ -332,18 +357,19 @@ class PromptService:
             "Initial default system prompt" if prompt_type == "system"
             else "Initial default user prompt template"
         )
-        version = PromptVersion(
-            prompt_type=prompt_type,
-            version="v1.0",
-            content=default_content,
-            description=default_desc,
-            is_current=True,
-        )
-        session.add(version)
-        await session.commit()
-        await session.refresh(version)
+        data = {
+            "prompt_type": prompt_type,
+            "version": "v1.0",
+            "content": default_content,
+            "description": default_desc,
+            "is_current": True,
+        }
+        _ensure_id(data)
+        result = self.repo.upsert(data)
+        row = result.data[0] if result.data else data
+        await _backup_rows([row])
         logger.info(f"Created default {prompt_type} prompt version v1.0")
-        return version.to_dict()
+        return row
 
     @staticmethod
     def _increment_version(version: str) -> str:

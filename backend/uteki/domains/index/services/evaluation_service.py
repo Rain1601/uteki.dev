@@ -1,18 +1,11 @@
-"""Evaluation 聚合分析服务 — 模型质量深度洞察"""
+"""Evaluation 聚合分析服务 — Supabase REST API + Python aggregation 版"""
 
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any
 
-from sqlalchemy import select, func, and_, case, cast, Float, Date
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from uteki.domains.index.models.decision_harness import DecisionHarness
-from uteki.domains.index.models.model_io import ModelIO
-from uteki.domains.index.models.arena_vote import ArenaVote
-from uteki.domains.index.models.decision_log import DecisionLog
-from uteki.domains.index.models.counterfactual import Counterfactual
-from uteki.domains.index.models.model_score import ModelScore
+from uteki.common.database import SupabaseRepository
 
 logger = logging.getLogger(__name__)
 
@@ -20,255 +13,260 @@ logger = logging.getLogger(__name__)
 class EvaluationService:
     """聚合查询 — Overview / Voting / Trend / Cost / Counterfactual"""
 
-    async def get_overview(self, session: AsyncSession) -> Dict[str, Any]:
+    async def get_overview(self) -> Dict[str, Any]:
         """聚合 KPI：总运行次数、决策分布、最佳模型、平均胜率"""
-        # Harness 统计
-        harness_q = select(
-            func.count(DecisionHarness.id).label("total"),
-            DecisionHarness.harness_type,
-        ).group_by(DecisionHarness.harness_type)
-        harness_res = await session.execute(harness_q)
-        harness_rows = harness_res.all()
-        total_arena_runs = sum(r.total for r in harness_rows)
-        harness_breakdown = {r.harness_type: r.total for r in harness_rows}
+        since_iso = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
 
-        # Decision 统计
-        decision_q = select(
-            func.count(DecisionLog.id).label("total"),
-            DecisionLog.user_action,
-        ).group_by(DecisionLog.user_action)
-        decision_res = await session.execute(decision_q)
-        decision_rows = decision_res.all()
-        total_decisions = sum(r.total for r in decision_rows)
-        decision_breakdown = {r.user_action: r.total for r in decision_rows}
+        harness_repo = SupabaseRepository("decision_harness")
+        log_repo = SupabaseRepository("decision_log")
+        io_repo = SupabaseRepository("model_io")
+        score_repo = SupabaseRepository("model_score")
 
-        # Best model & avg win rate from ModelScore
+        harness_rows = harness_repo.select_data(gte={"created_at": since_iso})
+        log_rows = log_repo.select_data(gte={"created_at": since_iso})
+        io_rows = io_repo.select_data(gte={"created_at": since_iso})
+        score_rows = score_repo.select_data()
+
+        # Harness breakdown by type
+        harness_breakdown = defaultdict(int)
+        for h in harness_rows:
+            ht = h.get("harness_type", "unknown")
+            harness_breakdown[ht] += 1
+
+        # Decision breakdown by user_action
+        decision_breakdown = defaultdict(int)
+        for d in log_rows:
+            ua = d.get("user_action", "unknown")
+            decision_breakdown[ua] += 1
+
+        # IO stats
+        latencies = [r["latency_ms"] for r in io_rows if r.get("latency_ms") is not None]
+        costs = [r["cost_usd"] for r in io_rows if r.get("cost_usd") is not None]
+        avg_latency = round(sum(latencies) / len(latencies)) if latencies else 0
+        avg_cost = round(sum(costs) / len(costs), 4) if costs else 0
+        total_cost = round(sum(costs), 2) if costs else 0
+
+        # Best model + avg win rate from scores
         best_model = None
-        avg_win_rate = 0.0
-        score_q = select(ModelScore)
-        score_res = await session.execute(score_q)
-        scores = score_res.scalars().all()
-        if scores:
-            best = max(scores, key=lambda s: (s.approve_vote_count - s.rejection_count))
-            best_model = f"{best.model_provider}:{best.model_name}"
-            win_rates = []
-            for s in scores:
-                total = s.win_count + s.loss_count
-                win_rates.append(s.win_count / total * 100 if total > 0 else 0)
-            avg_win_rate = round(sum(win_rates) / len(win_rates), 1) if win_rates else 0
+        best_score = float("-inf")
+        win_rates = []
+        for s in score_rows:
+            approve = s.get("approve_vote_count", 0) or 0
+            reject = s.get("rejection_count", 0) or 0
+            net = approve - reject
+            if net > best_score:
+                best_score = net
+                best_model = f"{s.get('model_provider')}:{s.get('model_name')}"
 
-        # ModelIO 延迟 & 成本
-        io_q = select(
-            func.avg(ModelIO.latency_ms).label("avg_latency"),
-            func.avg(ModelIO.cost_usd).label("avg_cost"),
-            func.sum(ModelIO.cost_usd).label("total_cost"),
-        )
-        io_res = await session.execute(io_q)
-        io_row = io_res.one()
+            w = s.get("win_count", 0) or 0
+            l = s.get("loss_count", 0) or 0
+            if (w + l) > 0:
+                win_rates.append(w / (w + l) * 100)
+            else:
+                win_rates.append(0)
+
+        avg_win_rate = round(sum(win_rates) / len(win_rates), 1) if win_rates else 0
 
         return {
-            "total_arena_runs": total_arena_runs,
-            "harness_breakdown": harness_breakdown,
-            "total_decisions": total_decisions,
-            "decision_breakdown": decision_breakdown,
+            "total_arena_runs": len(harness_rows),
+            "harness_breakdown": dict(harness_breakdown),
+            "total_decisions": len(log_rows),
+            "decision_breakdown": dict(decision_breakdown),
             "best_model": best_model,
             "avg_win_rate": avg_win_rate,
-            "avg_latency_ms": round(io_row.avg_latency or 0, 0),
-            "avg_cost_usd": round(io_row.avg_cost or 0, 4),
-            "total_cost_usd": round(io_row.total_cost or 0, 2),
+            "avg_latency_ms": avg_latency,
+            "avg_cost_usd": avg_cost,
+            "total_cost_usd": total_cost,
         }
 
-    async def get_voting_matrix(
-        self, session: AsyncSession, limit: int = 20,
-    ) -> Dict[str, Any]:
-        """投票热力图：最近 N 次 arena 的 voter→target approve/reject 矩阵"""
-        # 最近 N 个 harness
-        recent_q = (
-            select(DecisionHarness.id)
-            .order_by(DecisionHarness.created_at.desc())
-            .limit(limit)
-        )
-        recent_res = await session.execute(recent_q)
-        harness_ids = [r[0] for r in recent_res.all()]
-        if not harness_ids:
+    async def get_voting_matrix(self, limit: int = 20) -> Dict[str, Any]:
+        """投票热力图：最近 N 次 arena 的 voter->target approve/reject 矩阵"""
+        harness_repo = SupabaseRepository("decision_harness")
+        vote_repo = SupabaseRepository("arena_vote")
+        io_repo = SupabaseRepository("model_io")
+
+        # Get recent harness IDs
+        recent = harness_repo.select_data(order="created_at.desc", limit=limit)
+        if not recent:
+            return {"models": [], "matrix": []}
+        harness_ids = [h["id"] for h in recent]
+
+        # Get all votes for these harnesses
+        votes = vote_repo.select_data(in_={"harness_id": harness_ids})
+        if not votes:
             return {"models": [], "matrix": []}
 
-        voter_io = select(ModelIO).subquery("voter_io")
-        target_io = select(ModelIO).subquery("target_io")
+        # Collect all model_io IDs needed
+        io_ids = set()
+        for v in votes:
+            io_ids.add(v["voter_model_io_id"])
+            io_ids.add(v["target_model_io_id"])
 
-        q = (
-            select(
-                voter_io.c.model_provider.label("voter_provider"),
-                voter_io.c.model_name.label("voter_name"),
-                target_io.c.model_provider.label("target_provider"),
-                target_io.c.model_name.label("target_name"),
-                ArenaVote.vote_type,
-                func.count().label("cnt"),
-            )
-            .join(voter_io, ArenaVote.voter_model_io_id == voter_io.c.id)
-            .join(target_io, ArenaVote.target_model_io_id == target_io.c.id)
-            .where(ArenaVote.harness_id.in_(harness_ids))
-            .group_by(
-                voter_io.c.model_provider,
-                voter_io.c.model_name,
-                target_io.c.model_provider,
-                target_io.c.model_name,
-                ArenaVote.vote_type,
-            )
-        )
-        res = await session.execute(q)
-        rows = res.all()
+        # Fetch model_io rows in batch
+        io_rows = io_repo.select_data(in_={"id": list(io_ids)})
+        io_map = {r["id"]: f"{r['model_provider']}:{r['model_name']}" for r in io_rows}
 
-        models_set: set = set()
-        raw: Dict = {}
-        for r in rows:
-            voter = f"{r.voter_provider}:{r.voter_name}"
-            target = f"{r.target_provider}:{r.target_name}"
-            models_set.add(voter)
-            models_set.add(target)
-            key = (voter, target)
-            if key not in raw:
-                raw[key] = {"voter": voter, "target": target, "approve": 0, "reject": 0}
-            raw[key][r.vote_type] = r.cnt
+        # Build matrix
+        matrix_agg = defaultdict(lambda: {"approve": 0, "reject": 0})
+        all_models = set()
+        for v in votes:
+            voter = io_map.get(v["voter_model_io_id"], "unknown")
+            target = io_map.get(v["target_model_io_id"], "unknown")
+            all_models.add(voter)
+            all_models.add(target)
+            vtype = v.get("vote_type", "")
+            if vtype == "approve":
+                matrix_agg[(voter, target)]["approve"] += 1
+            elif vtype == "reject":
+                matrix_agg[(voter, target)]["reject"] += 1
 
-        return {"models": sorted(models_set), "matrix": list(raw.values())}
-
-    async def get_performance_trend(
-        self, session: AsyncSession, days: int = 30,
-    ) -> Dict[str, Any]:
-        """按日期×模型聚合延迟/成本/成功率趋势"""
-        since = datetime.utcnow() - timedelta(days=days)
-
-        date_expr = func.date(DecisionHarness.created_at)
-        q = (
-            select(
-                date_expr.label("date"),
-                ModelIO.model_provider,
-                ModelIO.model_name,
-                func.avg(ModelIO.latency_ms).label("avg_latency"),
-                func.avg(ModelIO.cost_usd).label("avg_cost"),
-                func.count().label("runs"),
-                func.sum(case((ModelIO.status == "success", 1), else_=0)).label("success_count"),
-            )
-            .join(DecisionHarness, ModelIO.harness_id == DecisionHarness.id)
-            .where(DecisionHarness.created_at >= since)
-            .group_by(
-                date_expr,
-                ModelIO.model_provider,
-                ModelIO.model_name,
-            )
-            .order_by(date_expr)
-        )
-        res = await session.execute(q)
-        rows = res.all()
-
-        dates_set: set = set()
-        model_data: Dict[str, List] = {}
-        for r in rows:
-            d = str(r.date)[:10]  # ensure YYYY-MM-DD
-            dates_set.add(d)
-            name = f"{r.model_provider}:{r.model_name}"
-            if name not in model_data:
-                model_data[name] = []
-            model_data[name].append({
-                "date": d,
-                "latency": round(float(r.avg_latency or 0), 0),
-                "cost": round(float(r.avg_cost or 0), 4),
-                "success_rate": round(float(r.success_count) / r.runs * 100, 1) if r.runs else 0,
-                "runs": r.runs,
-            })
+        matrix = [
+            {"voter": k[0], "target": k[1], "approve": v["approve"], "reject": v["reject"]}
+            for k, v in matrix_agg.items()
+        ]
 
         return {
-            "dates": sorted(dates_set),
-            "models": [{"name": k, "data": v} for k, v in model_data.items()],
+            "models": sorted(all_models),
+            "matrix": matrix,
         }
 
-    async def get_cost_analysis(self, session: AsyncSession) -> Dict[str, Any]:
+    async def get_performance_trend(self, days: int = 30) -> Dict[str, Any]:
+        """按日期x模型聚合延迟/成本/成功率趋势"""
+        since_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        harness_repo = SupabaseRepository("decision_harness")
+        io_repo = SupabaseRepository("model_io")
+
+        harnesses = harness_repo.select_data(gte={"created_at": since_iso})
+        if not harnesses:
+            return {"dates": [], "models": []}
+        harness_map = {h["id"]: h["created_at"][:10] for h in harnesses}
+        harness_ids = list(harness_map.keys())
+
+        io_rows = io_repo.select_data(in_={"harness_id": harness_ids})
+        if not io_rows:
+            return {"dates": [], "models": []}
+
+        # Group by (date, model)
+        groups = defaultdict(list)
+        for r in io_rows:
+            d = harness_map.get(r.get("harness_id"), "unknown")
+            model = f"{r.get('model_provider')}:{r.get('model_name')}"
+            groups[(d, model)].append(r)
+
+        all_dates = sorted(set(k[0] for k in groups))
+        model_data = defaultdict(list)
+        for (d, model), rows in sorted(groups.items()):
+            latencies = [r["latency_ms"] for r in rows if r.get("latency_ms") is not None]
+            costs = [r["cost_usd"] for r in rows if r.get("cost_usd") is not None]
+            success = sum(1 for r in rows if r.get("status") == "success")
+            total = len(rows)
+            model_data[model].append({
+                "date": d,
+                "latency": round(sum(latencies) / len(latencies)) if latencies else 0,
+                "cost": round(sum(costs) / len(costs), 4) if costs else 0,
+                "success_rate": round(success / total * 100, 1) if total > 0 else 0,
+                "runs": total,
+            })
+
+        models = [{"name": name, "data": data} for name, data in model_data.items()]
+
+        return {
+            "dates": all_dates,
+            "models": models,
+        }
+
+    async def get_cost_analysis(self) -> Dict[str, Any]:
         """每模型运营指标：延迟 / 成本 / token / error rate"""
-        # 基础聚合（兼容 SQLite + PostgreSQL）
-        q = (
-            select(
-                ModelIO.model_provider,
-                ModelIO.model_name,
-                func.avg(ModelIO.latency_ms).label("avg_latency"),
-                func.max(ModelIO.latency_ms).label("max_latency"),
-                func.avg(ModelIO.cost_usd).label("avg_cost"),
-                func.sum(ModelIO.cost_usd).label("total_cost"),
-                func.avg(ModelIO.input_token_count).label("avg_input_tokens"),
-                func.avg(ModelIO.output_token_count).label("avg_output_tokens"),
-                func.count().label("total_runs"),
-                func.sum(case((ModelIO.status != "success", 1), else_=0)).label("error_count"),
-            )
-            .group_by(ModelIO.model_provider, ModelIO.model_name)
-        )
-        res = await session.execute(q)
-        rows = res.all()
+        io_repo = SupabaseRepository("model_io")
+        io_rows = io_repo.select_data()
+
+        if not io_rows:
+            return {"models": []}
+
+        # Group by model
+        groups = defaultdict(list)
+        for r in io_rows:
+            model = f"{r.get('model_provider')}:{r.get('model_name')}"
+            groups[model].append(r)
 
         models = []
-        for r in rows:
-            # p95 近似：使用 avg + (max - avg) * 0.5 作为简易近似
-            avg_lat = r.avg_latency or 0
-            max_lat = r.max_latency or 0
-            p95_approx = avg_lat + (max_lat - avg_lat) * 0.5
+        for name, rows in groups.items():
+            latencies = [r["latency_ms"] for r in rows if r.get("latency_ms") is not None]
+            costs = [r["cost_usd"] for r in rows if r.get("cost_usd") is not None]
+            input_tokens = [r["input_token_count"] for r in rows if r.get("input_token_count") is not None]
+            output_tokens = [r["output_token_count"] for r in rows if r.get("output_token_count") is not None]
+            total_runs = len(rows)
+            error_count = sum(1 for r in rows if r.get("status") != "success")
+
+            avg_latency = round(sum(latencies) / len(latencies)) if latencies else 0
+            max_latency = max(latencies) if latencies else 0
+            # Approximate p95 as avg + 0.5 * (max - avg)
+            p95_latency = round(avg_latency + (max_latency - avg_latency) * 0.5) if latencies else 0
+
             models.append({
-                "name": f"{r.model_provider}:{r.model_name}",
-                "avg_latency": round(avg_lat, 0),
-                "p95_latency": round(p95_approx, 0),
-                "avg_cost": round(r.avg_cost or 0, 4),
-                "total_cost": round(r.total_cost or 0, 2),
-                "avg_input_tokens": round(r.avg_input_tokens or 0, 0),
-                "avg_output_tokens": round(r.avg_output_tokens or 0, 0),
-                "total_runs": r.total_runs,
-                "error_rate": round(r.error_count / r.total_runs * 100, 1) if r.total_runs else 0,
+                "name": name,
+                "avg_latency": avg_latency,
+                "p95_latency": p95_latency,
+                "avg_cost": round(sum(costs) / len(costs), 4) if costs else 0,
+                "total_cost": round(sum(costs), 2) if costs else 0,
+                "avg_input_tokens": round(sum(input_tokens) / len(input_tokens)) if input_tokens else 0,
+                "avg_output_tokens": round(sum(output_tokens) / len(output_tokens)) if output_tokens else 0,
+                "total_runs": total_runs,
+                "error_rate": round(error_count / total_runs * 100, 1) if total_runs > 0 else 0,
             })
 
         return {"models": models}
 
-    async def get_counterfactual_summary(self, session: AsyncSession) -> Dict[str, Any]:
+    async def get_counterfactual_summary(self) -> Dict[str, Any]:
         """反事实对比：adopted vs missed 平均收益"""
-        q = (
-            select(
-                ModelIO.model_provider,
-                ModelIO.model_name,
-                Counterfactual.was_adopted,
-                func.avg(Counterfactual.hypothetical_return_pct).label("avg_return"),
-                func.count().label("cnt"),
-            )
-            .join(ModelIO, Counterfactual.model_io_id == ModelIO.id)
-            .group_by(
-                ModelIO.model_provider,
-                ModelIO.model_name,
-                Counterfactual.was_adopted,
-            )
-        )
-        res = await session.execute(q)
-        rows = res.all()
+        cf_repo = SupabaseRepository("counterfactual")
+        io_repo = SupabaseRepository("model_io")
 
-        model_map: Dict[str, Dict] = {}
-        for r in rows:
-            name = f"{r.model_provider}:{r.model_name}"
-            if name not in model_map:
-                model_map[name] = {
-                    "name": name,
-                    "adopted_avg_return": 0, "adopted_count": 0,
-                    "missed_avg_return": 0, "missed_count": 0,
-                    "opportunity_cost": 0,
-                }
-            entry = model_map[name]
-            if r.was_adopted:
-                entry["adopted_avg_return"] = round(r.avg_return or 0, 2)
-                entry["adopted_count"] = r.cnt
+        cf_rows = cf_repo.select_data()
+        if not cf_rows:
+            return {"models": []}
+
+        # Get all model_io IDs
+        io_ids = list(set(r["model_io_id"] for r in cf_rows if r.get("model_io_id")))
+        io_rows = io_repo.select_data(in_={"id": io_ids})
+        io_map = {r["id"]: f"{r['model_provider']}:{r['model_name']}" for r in io_rows}
+
+        # Group by (model, was_adopted)
+        groups = defaultdict(lambda: {"returns": [], "count": 0})
+        for r in cf_rows:
+            model = io_map.get(r.get("model_io_id"), "unknown")
+            adopted = r.get("was_adopted", False)
+            key = (model, adopted)
+            groups[key]["returns"].append(r.get("hypothetical_return_pct", 0) or 0)
+            groups[key]["count"] += 1
+
+        # Aggregate per model
+        model_agg = defaultdict(lambda: {
+            "adopted_avg_return": 0, "adopted_count": 0,
+            "missed_avg_return": 0, "missed_count": 0,
+        })
+        for (model, adopted), data in groups.items():
+            avg_ret = round(sum(data["returns"]) / len(data["returns"]), 2) if data["returns"] else 0
+            if adopted:
+                model_agg[model]["adopted_avg_return"] = avg_ret
+                model_agg[model]["adopted_count"] = data["count"]
             else:
-                entry["missed_avg_return"] = round(r.avg_return or 0, 2)
-                entry["missed_count"] = r.cnt
+                model_agg[model]["missed_avg_return"] = avg_ret
+                model_agg[model]["missed_count"] = data["count"]
 
-        # opportunity_cost = missed_avg_return − adopted_avg_return
-        for m in model_map.values():
-            m["opportunity_cost"] = round(
-                m["missed_avg_return"] - m["adopted_avg_return"], 2
-            )
+        models = []
+        for name, agg in model_agg.items():
+            models.append({
+                "name": name,
+                "adopted_avg_return": agg["adopted_avg_return"],
+                "adopted_count": agg["adopted_count"],
+                "missed_avg_return": agg["missed_avg_return"],
+                "missed_count": agg["missed_count"],
+                "opportunity_cost": round(agg["missed_avg_return"] - agg["adopted_avg_return"], 2),
+            })
 
-        return {"models": list(model_map.values())}
+        return {"models": models}
 
 
 _evaluation_service: Optional[EvaluationService] = None

@@ -1,16 +1,15 @@
-"""指数数据服务 — FMP 为主, Alpha Vantage 为备"""
+"""指数数据服务 — FMP 为主, Alpha Vantage 为备 (Supabase REST API)"""
 
+import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
 import httpx
-from sqlalchemy import select, func, and_
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from uteki.common.config import settings
-from uteki.domains.index.models.index_price import IndexPrice
-from uteki.domains.index.models.watchlist import Watchlist
+from uteki.common.database import SupabaseRepository, db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +41,63 @@ FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 AV_BASE_URL = "https://www.alphavantage.co/query"
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+INDEX_PRICE_TABLE = "index_prices"
+WATCHLIST_TABLE = "watchlist"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_id(data: dict) -> dict:
+    """Ensure dict has id + timestamps for a new row."""
+    if "id" not in data:
+        data["id"] = str(uuid4())
+    data.setdefault("created_at", _now_iso())
+    data.setdefault("updated_at", _now_iso())
+    return data
+
+
+async def _backup_price_rows(rows: list):
+    try:
+        from uteki.domains.index.models.index_price import IndexPrice
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(IndexPrice, k)}
+                await session.merge(IndexPrice(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for index_prices: {e}")
+
+
+async def _backup_watchlist_rows(rows: list):
+    try:
+        from uteki.domains.index.models.watchlist import Watchlist
+        async with db_manager.get_postgres_session() as session:
+            for row in rows:
+                safe = {k: v for k, v in row.items() if hasattr(Watchlist, k)}
+                await session.merge(Watchlist(**safe))
+    except Exception as e:
+        logger.warning(f"SQLite backup failed for watchlist: {e}")
+
+
+def _parse_date(value) -> date:
+    """Parse a date value that may be a string or a date object."""
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
 class DataService:
     """指数 ETF 数据获取与存储服务"""
 
     def __init__(self):
         self._http_client: Optional[httpx.AsyncClient] = None
+        self.price_repo = SupabaseRepository(INDEX_PRICE_TABLE)
+        self.watchlist_repo = SupabaseRepository(WATCHLIST_TABLE)
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -55,7 +106,7 @@ class DataService:
 
     # ── Quote (real-time / near-real-time) ──
 
-    async def get_quote(self, symbol: str, session: AsyncSession) -> Dict[str, Any]:
+    async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """获取 ETF 实时报价，FMP 为主，AV 为备，最终 fallback 到 DB 缓存"""
         quote = await self._fetch_quote_fmp(symbol)
         if quote:
@@ -66,7 +117,7 @@ class DataService:
             return quote
 
         # Fallback: 从 DB 取最近一条价格
-        return await self._get_cached_quote(symbol, session)
+        return self._get_cached_quote(symbol)
 
     async def _fetch_quote_fmp(self, symbol: str) -> Optional[Dict[str, Any]]:
         if not settings.fmp_api_key:
@@ -152,64 +203,59 @@ class DataService:
             logger.error(f"AV quote error for {symbol}: {e}")
             return None
 
-    async def _get_cached_quote(self, symbol: str, session: AsyncSession) -> Dict[str, Any]:
+    def _get_cached_quote(self, symbol: str) -> Dict[str, Any]:
         """从 DB 取最近缓存价格"""
-        query = (
-            select(IndexPrice)
-            .where(IndexPrice.symbol == symbol)
-            .order_by(IndexPrice.date.desc())
-            .limit(1)
+        row = self.price_repo.select_one(
+            eq={"symbol": symbol},
+            order="date.desc",
         )
-        result = await session.execute(query)
-        row = result.scalar_one_or_none()
         if row:
             return {
                 "symbol": symbol,
-                "price": row.close,
+                "price": row.get("close"),
                 "change_pct": None,
                 "pe_ratio": None,
                 "market_cap": None,
-                "volume": row.volume,
+                "volume": row.get("volume"),
                 "high_52w": None,
                 "low_52w": None,
                 "ma50": None,
                 "ma200": None,
                 "rsi": None,
-                "timestamp": row.date.isoformat(),
+                "timestamp": row.get("date"),
                 "stale": True,
                 # Cached data has OHLC from DB
-                "today_open": row.open,
-                "today_high": row.high,
-                "today_low": row.low,
+                "today_open": row.get("open"),
+                "today_high": row.get("high"),
+                "today_low": row.get("low"),
                 "previous_close": None,
             }
         return {"symbol": symbol, "price": None, "stale": True, "error": "No data available"}
 
     # ── Historical data ──
 
-    async def get_history(
+    def get_history(
         self,
         symbol: str,
-        session: AsyncSession,
         start: Optional[str] = None,
         end: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """获取历史日线数据，优先从 DB 读取"""
-        query = select(IndexPrice).where(IndexPrice.symbol == symbol)
-        if start:
-            query = query.where(IndexPrice.date >= date.fromisoformat(start))
-        if end:
-            query = query.where(IndexPrice.date <= date.fromisoformat(end))
-        query = query.order_by(IndexPrice.date.asc())
+        eq = {"symbol": symbol}
+        gte = {"date": start} if start else None
+        lte = {"date": end} if end else None
 
-        result = await session.execute(query)
-        rows = result.scalars().all()
-        return [r.to_dict() for r in rows]
+        rows = self.price_repo.select_data(
+            eq=eq,
+            gte=gte,
+            lte=lte,
+            order="date.asc",
+        )
+        return rows
 
     async def fetch_and_store_history(
         self,
         symbol: str,
-        session: AsyncSession,
         from_date: Optional[str] = None,
     ) -> int:
         """从 FMP stable 拉取历史数据并存入 DB，返回新增条数"""
@@ -237,71 +283,70 @@ class DataService:
             if not historical:
                 return 0
 
-            count = 0
+            batch = []
             for item in historical:
                 try:
-                    price_date = date.fromisoformat(item["date"])
-                    # Check if record already exists (works on both SQLite and PostgreSQL)
-                    exists_q = select(IndexPrice.id).where(
-                        and_(IndexPrice.symbol == symbol, IndexPrice.date == price_date)
+                    price_date_str = str(item["date"])[:10]
+                    # Check if record already exists
+                    existing = self.price_repo.select_one(
+                        eq={"symbol": symbol, "date": price_date_str},
                     )
-                    existing = await session.execute(exists_q)
-                    if existing.scalar_one_or_none():
+                    if existing:
                         continue  # Skip existing record
 
-                    price = IndexPrice(
-                        symbol=symbol,
-                        date=price_date,
-                        open=item["open"],
-                        high=item["high"],
-                        low=item["low"],
-                        close=item["close"],
-                        volume=item.get("volume", 0),
-                    )
-                    session.add(price)
-                    count += 1
+                    row = _ensure_id({
+                        "symbol": symbol,
+                        "date": price_date_str,
+                        "open": item["open"],
+                        "high": item["high"],
+                        "low": item["low"],
+                        "close": item["close"],
+                        "volume": item.get("volume", 0),
+                    })
+                    batch.append(row)
                 except Exception as e:
                     logger.warning(f"Skip price row {symbol}/{item.get('date')}: {e}")
 
-            await session.commit()
+            if batch:
+                self.price_repo.upsert(batch)
+                await _backup_price_rows(batch)
+
+            count = len(batch)
             logger.info(f"Stored {count} price records for {symbol}")
             return count
         except Exception as e:
             logger.error(f"FMP history fetch error for {symbol}: {e}")
-            await session.rollback()
             return 0
 
-    async def initial_history_load(self, symbol: str, session: AsyncSession) -> int:
+    async def initial_history_load(self, symbol: str) -> int:
         """初始加载：拉取最近 5 年历史数据"""
         five_years_ago = (date.today() - timedelta(days=5 * 365)).isoformat()
-        return await self.fetch_and_store_history(symbol, session, from_date=five_years_ago)
+        return await self.fetch_and_store_history(symbol, from_date=five_years_ago)
 
-    async def incremental_update(self, symbol: str, session: AsyncSession) -> int:
+    async def incremental_update(self, symbol: str) -> int:
         """增量更新：只拉取缺失的日期"""
-        query = (
-            select(func.max(IndexPrice.date))
-            .where(IndexPrice.symbol == symbol)
+        rows = self.price_repo.select_data(
+            eq={"symbol": symbol},
+            order="date.desc",
+            limit=1,
         )
-        result = await session.execute(query)
-        last_date = result.scalar_one_or_none()
 
-        if last_date:
+        if rows:
+            last_date = _parse_date(rows[0]["date"])
             from_date = (last_date + timedelta(days=1)).isoformat()
         else:
             from_date = (date.today() - timedelta(days=5 * 365)).isoformat()
 
-        return await self.fetch_and_store_history(symbol, session, from_date=from_date)
+        return await self.fetch_and_store_history(symbol, from_date=from_date)
 
     async def incremental_update_with_retry(
-        self, symbol: str, session: AsyncSession, max_retries: int = 3
+        self, symbol: str, max_retries: int = 3
     ) -> Dict[str, Any]:
         """带重试的增量更新"""
-        import asyncio
-
         last_error = None
         for attempt in range(max_retries):
             try:
-                count = await self.incremental_update(symbol, session)
+                count = await self.incremental_update(symbol)
                 return {"symbol": symbol, "status": "success", "records": count}
             except Exception as e:
                 last_error = str(e)
@@ -313,18 +358,18 @@ class DataService:
         return {"symbol": symbol, "status": "failed", "error": last_error}
 
     async def smart_backfill(
-        self, symbol: str, session: AsyncSession, lookback_days: int = 30
+        self, symbol: str, lookback_days: int = 30
     ) -> Dict[str, Any]:
         """
         智能回填：检测最近 N 天内的缺失交易日并补齐
         用于处理：任务漏执行、同步失败等场景
         """
         # 1. 验证数据连续性
-        validation = await self.validate_data_continuity(symbol, session)
+        validation = self.validate_data_continuity(symbol)
 
         if not validation.get("last_date"):
             # 无数据，执行初始加载
-            count = await self.initial_history_load(symbol, session)
+            count = await self.initial_history_load(symbol)
             return {
                 "symbol": symbol,
                 "action": "initial_load",
@@ -332,11 +377,11 @@ class DataService:
             }
 
         # 2. 检查是否有缺失日期（仅看最近 lookback_days 天）
-        last_date = date.fromisoformat(validation["last_date"])
+        last_date = _parse_date(validation["last_date"])
         cutoff_date = date.today() - timedelta(days=lookback_days)
         recent_missing = [
             d for d in validation.get("missing_dates", [])
-            if date.fromisoformat(d) >= cutoff_date
+            if _parse_date(d) >= cutoff_date
         ]
 
         # 3. 检查是否落后于当前日期（排除周末、假日和今天）
@@ -353,12 +398,12 @@ class DataService:
         if recent_missing or days_behind > 0:
             # 从缺失日期的最早一天开始重新拉取
             if recent_missing:
-                earliest_missing = min(date.fromisoformat(d) for d in recent_missing)
+                earliest_missing = min(_parse_date(d) for d in recent_missing)
                 from_date = (earliest_missing - timedelta(days=1)).isoformat()
             else:
                 from_date = last_date.isoformat()
 
-            count = await self.fetch_and_store_history(symbol, session, from_date=from_date)
+            count = await self.fetch_and_store_history(symbol, from_date=from_date)
             return {
                 "symbol": symbol,
                 "action": "backfill",
@@ -373,29 +418,29 @@ class DataService:
             "records": 0,
         }
 
-    async def update_all_watchlist(self, session: AsyncSession) -> Dict[str, int]:
+    async def update_all_watchlist(self) -> Dict[str, int]:
         """更新观察池内所有 active symbol 的数据"""
-        query = select(Watchlist).where(Watchlist.is_active == True)
-        result = await session.execute(query)
-        symbols = result.scalars().all()
+        watchlist_rows = self.watchlist_repo.select_data(
+            eq={"is_active": True},
+        )
 
         results = {}
-        for w in symbols:
-            count = await self.incremental_update(w.symbol, session)
-            results[w.symbol] = count
+        for w in watchlist_rows:
+            count = await self.incremental_update(w["symbol"])
+            results[w["symbol"]] = count
 
         return results
 
     async def robust_update_all(
-        self, session: AsyncSession, validate: bool = True, backfill: bool = True
+        self, validate: bool = True, backfill: bool = True
     ) -> Dict[str, Any]:
         """
         健壮的全量更新：带重试、回填、验证
         用于调度任务，处理各种异常场景
         """
-        query = select(Watchlist).where(Watchlist.is_active == True)
-        result = await session.execute(query)
-        symbols = result.scalars().all()
+        watchlist_rows = self.watchlist_repo.select_data(
+            eq={"is_active": True},
+        )
 
         results = {
             "success": [],
@@ -405,12 +450,12 @@ class DataService:
             "total_records": 0,
         }
 
-        for w in symbols:
-            symbol = w.symbol
+        for w in watchlist_rows:
+            symbol = w["symbol"]
 
             # 1. 智能回填（检测并补齐缺失数据）
             if backfill:
-                backfill_result = await self.smart_backfill(symbol, session)
+                backfill_result = await self.smart_backfill(symbol)
                 if backfill_result["action"] == "backfill":
                     results["backfilled"].append(backfill_result)
                     results["total_records"] += backfill_result.get("records", 0)
@@ -421,7 +466,7 @@ class DataService:
                     continue  # 已回填，跳过增量更新
 
             # 2. 带重试的增量更新
-            update_result = await self.incremental_update_with_retry(symbol, session)
+            update_result = await self.incremental_update_with_retry(symbol)
 
             if update_result["status"] == "success":
                 results["success"].append(symbol)
@@ -434,7 +479,7 @@ class DataService:
 
             # 3. 数据验证（检测异常价格）
             if validate and update_result["status"] == "success":
-                anomalies = await self.validate_prices(symbol, session)
+                anomalies = self.validate_prices(symbol)
                 if anomalies:
                     results["anomalies"].extend(anomalies)
 
@@ -452,54 +497,51 @@ class DataService:
 
     # ── Data validation ──
 
-    async def validate_prices(self, symbol: str, session: AsyncSession) -> List[Dict[str, Any]]:
+    def validate_prices(self, symbol: str) -> List[Dict[str, Any]]:
         """验证价格数据：检测异常波动（>20%）"""
-        query = (
-            select(IndexPrice)
-            .where(IndexPrice.symbol == symbol)
-            .order_by(IndexPrice.date.asc())
+        rows = self.price_repo.select_data(
+            eq={"symbol": symbol},
+            order="date.asc",
         )
-        result = await session.execute(query)
-        rows = result.scalars().all()
 
         anomalies = []
         for i in range(1, len(rows)):
-            prev_close = rows[i - 1].close
-            curr_close = rows[i].close
-            if prev_close > 0:
+            prev_close = rows[i - 1].get("close", 0)
+            curr_close = rows[i].get("close", 0)
+            if prev_close and prev_close > 0:
                 change_pct = abs((curr_close - prev_close) / prev_close * 100)
                 if change_pct > 20:
+                    row_date = rows[i].get("date", "")
                     anomalies.append({
                         "symbol": symbol,
-                        "date": rows[i].date.isoformat(),
+                        "date": str(row_date)[:10],
                         "prev_close": prev_close,
                         "close": curr_close,
                         "change_pct": round(change_pct, 2),
                         "needs_review": True,
                     })
                     logger.warning(
-                        f"Price anomaly: {symbol} {rows[i].date} "
+                        f"Price anomaly: {symbol} {row_date} "
                         f"changed {change_pct:.1f}% from {prev_close} to {curr_close}"
                     )
         return anomalies
 
     # ── Technical indicators ──
 
-    async def get_indicators(self, symbol: str, session: AsyncSession) -> Dict[str, Any]:
+    def get_indicators(self, symbol: str) -> Dict[str, Any]:
         """计算技术指标：MA50, MA200, RSI(14)"""
-        query = (
-            select(IndexPrice)
-            .where(IndexPrice.symbol == symbol)
-            .order_by(IndexPrice.date.desc())
-            .limit(250)  # 足够计算 MA200 + RSI
+        rows = self.price_repo.select_data(
+            eq={"symbol": symbol},
+            order="date.desc",
+            limit=250,  # 足够计算 MA200 + RSI
         )
-        result = await session.execute(query)
-        rows = list(reversed(result.scalars().all()))
+        # Reverse so oldest first (select was desc for limit)
+        rows = list(reversed(rows))
 
         if not rows:
             return {"symbol": symbol, "ma50": None, "ma200": None, "rsi": None}
 
-        closes = [r.close for r in rows]
+        closes = [r.get("close", 0) for r in rows]
 
         ma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else None
         ma200 = sum(closes[-200:]) / 200 if len(closes) >= 200 else None
@@ -533,22 +575,17 @@ class DataService:
 
     # ── Data Continuity Validation ──
 
-    async def validate_data_continuity(
-        self, symbol: str, session: AsyncSession
-    ) -> Dict[str, Any]:
+    def validate_data_continuity(self, symbol: str) -> Dict[str, Any]:
         """
         验证数据连续性：检测缺失的交易日（排除周末）
         Returns: {symbol, is_valid, missing_dates, first_date, last_date, total_records}
         """
-        query = (
-            select(IndexPrice.date)
-            .where(IndexPrice.symbol == symbol)
-            .order_by(IndexPrice.date.asc())
+        rows = self.price_repo.select_data(
+            eq={"symbol": symbol},
+            order="date.asc",
         )
-        result = await session.execute(query)
-        dates = [row[0] for row in result.fetchall()]
 
-        if not dates:
+        if not rows:
             return {
                 "symbol": symbol,
                 "is_valid": False,
@@ -558,6 +595,8 @@ class DataService:
                 "total_records": 0,
                 "error": "No data available",
             }
+
+        dates = [_parse_date(r["date"]) for r in rows]
 
         missing_dates = []
         first_date = dates[0]
@@ -585,99 +624,106 @@ class DataService:
             "total_records": len(dates),
         }
 
-    async def validate_all_watchlist(
-        self, session: AsyncSession
-    ) -> Dict[str, Dict[str, Any]]:
+    def validate_all_watchlist(self) -> Dict[str, Dict[str, Any]]:
         """验证观察池内所有 symbol 的数据连续性"""
-        query = select(Watchlist).where(Watchlist.is_active == True)
-        result = await session.execute(query)
-        symbols = result.scalars().all()
+        watchlist_rows = self.watchlist_repo.select_data(
+            eq={"is_active": True},
+        )
 
         results = {}
-        for w in symbols:
-            validation = await self.validate_data_continuity(w.symbol, session)
-            results[w.symbol] = validation
+        for w in watchlist_rows:
+            symbol = w["symbol"]
+            validation = self.validate_data_continuity(symbol)
+            results[symbol] = validation
             if not validation["is_valid"]:
                 logger.warning(
-                    f"Data gaps detected for {w.symbol}: {len(validation['missing_dates'])} missing days"
+                    f"Data gaps detected for {symbol}: {len(validation['missing_dates'])} missing days"
                 )
 
         return results
 
     # ── Watchlist CRUD ──
 
-    async def get_watchlist(self, session: AsyncSession, active_only: bool = True) -> List[Dict[str, Any]]:
-        query = select(Watchlist)
-        if active_only:
-            query = query.where(Watchlist.is_active == True)
-        query = query.order_by(Watchlist.created_at.asc())
-        result = await session.execute(query)
-        return [w.to_dict() for w in result.scalars().all()]
+    def get_watchlist(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        eq = {"is_active": True} if active_only else None
+        return self.watchlist_repo.select_data(
+            eq=eq,
+            order="created_at.asc",
+        )
 
     async def add_to_watchlist(
-        self, symbol: str, session: AsyncSession,
+        self, symbol: str,
         name: Optional[str] = None, etf_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """添加到观察池，触发历史数据加载"""
         # 检查是否已存在
-        query = select(Watchlist).where(Watchlist.symbol == symbol.upper())
-        result = await session.execute(query)
-        existing = result.scalar_one_or_none()
+        existing = self.watchlist_repo.select_one(
+            eq={"symbol": symbol.upper()},
+        )
 
         if existing:
-            if not existing.is_active:
-                existing.is_active = True
-                await session.commit()
-            return existing.to_dict()
+            if not existing.get("is_active"):
+                self.watchlist_repo.update(
+                    data={"is_active": True, "updated_at": _now_iso()},
+                    eq={"id": existing["id"]},
+                )
+                existing["is_active"] = True
+                await _backup_watchlist_rows([existing])
+            return existing
 
-        item = Watchlist(
-            symbol=symbol.upper(),
-            name=name,
-            etf_type=etf_type,
-            is_active=True,
-        )
-        session.add(item)
-        await session.commit()
-        await session.refresh(item)
+        new_item = _ensure_id({
+            "symbol": symbol.upper(),
+            "name": name,
+            "etf_type": etf_type,
+            "is_active": True,
+        })
+        result = self.watchlist_repo.upsert(new_item)
+        row = result.data[0] if result.data else new_item
+        await _backup_watchlist_rows([row])
 
         # 后台加载历史数据
-        await self.initial_history_load(symbol.upper(), session)
+        await self.initial_history_load(symbol.upper())
 
-        return item.to_dict()
+        return row
 
-    async def remove_from_watchlist(self, symbol: str, session: AsyncSession) -> bool:
+    async def remove_from_watchlist(self, symbol: str) -> bool:
         """从观察池移除（标记为 inactive，保留数据）"""
-        query = select(Watchlist).where(Watchlist.symbol == symbol.upper())
-        result = await session.execute(query)
-        item = result.scalar_one_or_none()
-        if item:
-            item.is_active = False
-            await session.commit()
+        existing = self.watchlist_repo.select_one(
+            eq={"symbol": symbol.upper()},
+        )
+        if existing:
+            self.watchlist_repo.update(
+                data={"is_active": False, "updated_at": _now_iso()},
+                eq={"id": existing["id"]},
+            )
+            existing["is_active"] = False
+            await _backup_watchlist_rows([existing])
             return True
         return False
 
-    async def seed_default_watchlist(self, session: AsyncSession) -> int:
+    async def seed_default_watchlist(self) -> int:
         """预设默认观察池（仅当池为空时）"""
-        query = select(func.count()).select_from(Watchlist)
-        result = await session.execute(query)
-        count = result.scalar_one()
-        if count > 0:
+        result = self.watchlist_repo.select("*", count="exact")
+        if result.count and result.count > 0:
             return 0
 
-        added = 0
+        batch = []
         for item in DEFAULT_WATCHLIST:
-            w = Watchlist(
-                symbol=item["symbol"],
-                name=item["name"],
-                etf_type=item["etf_type"],
-                notes=item.get("notes"),
-                is_active=True,
-            )
-            session.add(w)
-            added += 1
-        await session.commit()
-        logger.info(f"Seeded {added} default watchlist items")
-        return added
+            row = _ensure_id({
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "etf_type": item["etf_type"],
+                "notes": item.get("notes"),
+                "is_active": True,
+            })
+            batch.append(row)
+
+        if batch:
+            self.watchlist_repo.upsert(batch)
+            await _backup_watchlist_rows(batch)
+
+        logger.info(f"Seeded {len(batch)} default watchlist items")
+        return len(batch)
 
 
 # Singleton

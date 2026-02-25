@@ -1,4 +1,4 @@
-"""Agent 独立回测服务
+"""Agent 独立回测服务 — Supabase REST API 版
 
 对单个 Agent 运行历史回测：
 1. 用历史价格构建 mock harness
@@ -12,18 +12,16 @@ import math
 from datetime import date, timedelta
 from typing import Optional, List, Dict, Any
 
-from sqlalchemy import select, and_
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from uteki.common.config import settings
-from uteki.common.database import db_manager
-from uteki.domains.index.models.index_price import IndexPrice
-from uteki.domains.index.models.watchlist import Watchlist
+from uteki.common.database import SupabaseRepository, db_manager
 
 logger = logging.getLogger(__name__)
 
 # 前瞻窗口（天数）
 FORWARD_WINDOWS = [5, 10, 20]
+
+WATCHLIST_TABLE = "watchlist"
+PRICE_TABLE = "index_prices"
 
 
 class AgentBacktestService:
@@ -35,7 +33,6 @@ class AgentBacktestService:
         start_date: date,
         end_date: date,
         frequency: str,  # "weekly" / "biweekly" / "monthly"
-        session: AsyncSession,
         budget: float = 10000.0,
     ) -> Dict[str, Any]:
         """执行回测
@@ -45,14 +42,13 @@ class AgentBacktestService:
             start_date: 回测起始日
             end_date: 回测结束日
             frequency: 决策频率
-            session: DB session
             budget: 初始预算
 
         Returns:
             回测结果：收益曲线、准确率、Sharpe、最大回撤、benchmark 对比
         """
         # 1. 获取 watchlist
-        watchlist = await self._get_watchlist(session)
+        watchlist = await self._get_watchlist()
         if not watchlist:
             return {"error": "No watchlist available"}
 
@@ -64,7 +60,7 @@ class AgentBacktestService:
             return {"error": "No decision dates in range"}
 
         # 3. 加载所有需要的历史价格
-        prices = await self._load_prices(symbols, start_date, end_date + timedelta(days=30), session)
+        prices = await self._load_prices(symbols, start_date, end_date + timedelta(days=30))
 
         # 4. 逐个日期运行 agent
         decisions: List[Dict[str, Any]] = []
@@ -85,7 +81,7 @@ class AgentBacktestService:
         model_config = None
 
         # Try DB config
-        db_models = await load_models_from_db(session)
+        db_models = load_models_from_db()
         for m in db_models:
             if m["provider"] == provider and m["model"] == model:
                 model_config = m
@@ -115,7 +111,7 @@ class AgentBacktestService:
             # 运行 skill pipeline
             try:
                 decision = await self._run_agent(
-                    model_config, agent_key, mock_harness, session
+                    model_config, agent_key, mock_harness
                 )
             except Exception as e:
                 logger.error(f"Backtest agent error on {decision_date}: {e}")
@@ -203,30 +199,28 @@ class AgentBacktestService:
             current += delta
         return dates
 
-    async def _get_watchlist(self, session: AsyncSession) -> List[Dict[str, Any]]:
-        q = select(Watchlist).where(Watchlist.is_active == True)
-        result = await session.execute(q)
-        return [{"symbol": w.symbol, "name": w.name} for w in result.scalars().all()]
+    async def _get_watchlist(self) -> List[Dict[str, Any]]:
+        repo = SupabaseRepository(WATCHLIST_TABLE)
+        rows = repo.select_data(eq={"is_active": True})
+        return [{"symbol": w["symbol"], "name": w["name"]} for w in rows]
 
     async def _load_prices(
-        self, symbols: List[str], start: date, end: date, session: AsyncSession
+        self, symbols: List[str], start: date, end: date
     ) -> Dict[str, List[Dict[str, Any]]]:
         """加载所有标的的历史价格"""
         prices: Dict[str, List[Dict[str, Any]]] = {}
+        repo = SupabaseRepository(PRICE_TABLE)
+        start_str = start.isoformat()
+        end_str = end.isoformat()
+
         for symbol in symbols:
-            q = (
-                select(IndexPrice)
-                .where(
-                    and_(
-                        IndexPrice.symbol == symbol,
-                        IndexPrice.date >= start,
-                        IndexPrice.date <= end,
-                    )
-                )
-                .order_by(IndexPrice.date.asc())
+            rows = repo.select_data(
+                eq={"symbol": symbol},
+                gte={"date": start_str},
+                lte={"date": end_str},
+                order="date.asc",
             )
-            result = await session.execute(q)
-            prices[symbol] = [p.to_dict() for p in result.scalars().all()]
+            prices[symbol] = rows
         return prices
 
     def _build_mock_harness(
@@ -244,7 +238,10 @@ class AgentBacktestService:
             # 找到 target_date 或之前最近的价格
             price_on_date = None
             for p in reversed(symbol_prices):
-                if date.fromisoformat(p["date"]) <= target_date:
+                p_date = p["date"]
+                if isinstance(p_date, str):
+                    p_date = date.fromisoformat(p_date)
+                if p_date <= target_date:
                     price_on_date = p
                     break
 
@@ -290,7 +287,6 @@ class AgentBacktestService:
         model_config: Dict[str, Any],
         agent_key: str,
         harness_data: Dict[str, Any],
-        session: AsyncSession,
     ) -> Dict[str, Any]:
         """运行单个 agent 的 skill pipeline"""
         from uteki.domains.index.services.agent_skills import AgentSkillRunner
@@ -309,6 +305,7 @@ class AgentBacktestService:
         fake = FakeHarness(harness_data)
         user_prompt = ArenaService._serialize_harness(fake)
 
+        # AgentSkillRunner may still need a session (SNB trading domain)
         async with db_manager.get_postgres_session() as agent_session:
             runner = AgentSkillRunner(
                 model_config=model_config,
@@ -342,7 +339,10 @@ class AgentBacktestService:
             base_price = None
             base_idx = None
             for i, p in enumerate(symbol_prices):
-                if date.fromisoformat(p["date"]) >= target_date:
+                p_date = p["date"]
+                if isinstance(p_date, str):
+                    p_date = date.fromisoformat(p_date)
+                if p_date >= target_date:
                     base_price = p["close"]
                     base_idx = i
                     break
