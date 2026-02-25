@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     default_page_size: int = 100
     max_page_size: int = 1000
 
+    # Supabase (REST API over HTTPS)
+    supabase_url: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    supabase_service_key: Optional[str] = None
+
     # 功能开关
     enable_agent: bool = True
     enable_trading: bool = False

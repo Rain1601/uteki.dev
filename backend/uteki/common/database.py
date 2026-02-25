@@ -9,11 +9,262 @@ Note: Admin Domain currently only requires PostgreSQL.
 Redis will be used for caching and task queues in future domains.
 """
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_value(val: Any) -> Any:
+    """将 Python 值序列化为 Supabase REST API 兼容格式"""
+    if isinstance(val, datetime):
+        return val.isoformat()
+    return val
+
+
+def _serialize_row(data: dict) -> dict:
+    """序列化整行数据"""
+    return {k: _serialize_value(v) for k, v in data.items()}
+
+
+class SupabaseRepository:
+    """
+    Supabase REST API 通用数据访问层。
+
+    封装 supabase-py 的 table().select/insert/upsert/update/delete() 调用，
+    提供统一的过滤、排序、分页接口。
+
+    Usage:
+        repo = SupabaseRepository("news_articles")
+        rows = repo.select(eq={"source": "jeff-cox"}, order="published_at.desc", limit=10)
+        repo.insert({"id": "xxx", "title": "test"})
+        repo.upsert([row1, row2])
+        repo.update(eq={"id": "xxx"}, data={"title": "new"})
+        repo.delete(eq={"id": "xxx"})
+    """
+
+    def __init__(self, table_name: str):
+        self.table_name = table_name
+
+    def _get_client(self):
+        return db_manager.get_supabase()
+
+    def _apply_filters(self, query, *, eq=None, neq=None, gt=None, lt=None,
+                        gte=None, lte=None, like=None, ilike=None, is_=None,
+                        in_=None):
+        """Apply filter parameters to a Supabase query builder."""
+        if eq:
+            for k, v in eq.items():
+                query = query.eq(k, v)
+        if neq:
+            for k, v in neq.items():
+                query = query.neq(k, v)
+        if gt:
+            for k, v in gt.items():
+                query = query.gt(k, v)
+        if lt:
+            for k, v in lt.items():
+                query = query.lt(k, v)
+        if gte:
+            for k, v in gte.items():
+                query = query.gte(k, v)
+        if lte:
+            for k, v in lte.items():
+                query = query.lte(k, v)
+        if like:
+            for k, v in like.items():
+                query = query.like(k, v)
+        if ilike:
+            for k, v in ilike.items():
+                query = query.ilike(k, v)
+        if is_:
+            for k, v in is_.items():
+                query = query.is_(k, v)
+        if in_:
+            for k, v in in_.items():
+                query = query.in_(k, v)
+        return query
+
+    def select(
+        self,
+        columns: str = "*",
+        *,
+        eq: Optional[Dict[str, Any]] = None,
+        neq: Optional[Dict[str, Any]] = None,
+        gt: Optional[Dict[str, Any]] = None,
+        lt: Optional[Dict[str, Any]] = None,
+        gte: Optional[Dict[str, Any]] = None,
+        lte: Optional[Dict[str, Any]] = None,
+        like: Optional[Dict[str, Any]] = None,
+        ilike: Optional[Dict[str, Any]] = None,
+        is_: Optional[Dict[str, Any]] = None,
+        in_: Optional[Dict[str, Any]] = None,
+        order: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        single: bool = False,
+        count: Optional[str] = None,
+    ) -> Any:
+        """
+        SELECT with filters, ordering, pagination.
+
+        Args:
+            columns: Comma-separated column names or "*"
+            eq/neq/gt/lt/gte/lte/like/ilike/is_/in_: Filter dicts {column: value}
+            order: "column.asc" or "column.desc"
+            limit: Max rows
+            offset: Skip rows
+            single: Return single row (raises if not exactly one)
+            count: "exact" to include total count in response
+
+        Returns:
+            List[dict] or single dict (if single=True)
+        """
+        sb = self._get_client()
+        query = sb.table(self.table_name).select(columns, count=count)
+
+        query = self._apply_filters(
+            query, eq=eq, neq=neq, gt=gt, lt=lt, gte=gte, lte=lte,
+            like=like, ilike=ilike, is_=is_, in_=in_,
+        )
+
+        if order:
+            # Parse "column.desc" → order("column", desc=True)
+            parts = order.split(".")
+            col = parts[0]
+            desc = len(parts) > 1 and parts[1].lower() == "desc"
+            query = query.order(col, desc=desc)
+
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+
+        if single:
+            result = query.single().execute()
+        else:
+            result = query.execute()
+
+        return result
+
+    def select_data(self, *args, **kwargs) -> List[dict]:
+        """Shortcut: select().data — returns just the data list."""
+        return self.select(*args, **kwargs).data
+
+    def select_one(self, **kwargs) -> Optional[dict]:
+        """Shortcut: select first row or None."""
+        kwargs["limit"] = 1
+        rows = self.select_data(**kwargs)
+        return rows[0] if rows else None
+
+    def insert(self, data: dict | list, *, upsert: bool = False) -> Any:
+        """
+        INSERT one or many rows.
+
+        Args:
+            data: Single dict or list of dicts
+            upsert: If True, use upsert instead of insert
+        """
+        sb = self._get_client()
+        if isinstance(data, list):
+            rows = [_serialize_row(d) for d in data]
+        else:
+            rows = _serialize_row(data)
+
+        if upsert:
+            return sb.table(self.table_name).upsert(rows).execute()
+        return sb.table(self.table_name).insert(rows).execute()
+
+    def upsert(self, data: dict | list) -> Any:
+        """UPSERT (insert or update on conflict)."""
+        return self.insert(data, upsert=True)
+
+    def update(
+        self,
+        data: dict,
+        *,
+        eq: Optional[Dict[str, Any]] = None,
+        neq: Optional[Dict[str, Any]] = None,
+        gt: Optional[Dict[str, Any]] = None,
+        lt: Optional[Dict[str, Any]] = None,
+        gte: Optional[Dict[str, Any]] = None,
+        lte: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        UPDATE rows matching filters.
+
+        Args:
+            data: Dict of column→value to set
+            eq/neq/gt/lt/gte/lte: Filter dicts
+        """
+        sb = self._get_client()
+        query = sb.table(self.table_name).update(_serialize_row(data))
+        query = self._apply_filters(query, eq=eq, neq=neq, gt=gt, lt=lt, gte=gte, lte=lte)
+        return query.execute()
+
+    def delete(
+        self,
+        *,
+        eq: Optional[Dict[str, Any]] = None,
+        neq: Optional[Dict[str, Any]] = None,
+        gt: Optional[Dict[str, Any]] = None,
+        lt: Optional[Dict[str, Any]] = None,
+        gte: Optional[Dict[str, Any]] = None,
+        lte: Optional[Dict[str, Any]] = None,
+        in_: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """DELETE rows matching filters."""
+        sb = self._get_client()
+        query = sb.table(self.table_name).delete()
+        query = self._apply_filters(query, eq=eq, neq=neq, gt=gt, lt=lt, gte=gte, lte=lte, in_=in_)
+        return query.execute()
+
+    def rpc(self, function_name: str, params: Optional[dict] = None) -> Any:
+        """Call a Supabase RPC function."""
+        sb = self._get_client()
+        return sb.rpc(function_name, params or {}).execute()
+
+
+async def write_with_backup(
+    table_name: str,
+    data: dict | list,
+    model_class=None,
+    *,
+    upsert: bool = True,
+) -> Any:
+    """
+    写入 Supabase 后异步备份到 SQLite。
+
+    Args:
+        table_name: Supabase table name
+        data: Single dict or list of dicts
+        model_class: SQLAlchemy model class for SQLite backup (optional)
+        upsert: Use upsert (default) or insert
+
+    Returns:
+        Supabase response
+    """
+    # 1. 主写入 Supabase
+    repo = SupabaseRepository(table_name)
+    if upsert:
+        result = repo.upsert(data)
+    else:
+        result = repo.insert(data)
+
+    # 2. 异步备份到 SQLite（不阻断主流程）
+    if model_class is not None:
+        try:
+            rows = data if isinstance(data, list) else [data]
+            async with db_manager.get_postgres_session() as session:
+                for row in rows:
+                    instance = model_class(**row)
+                    await session.merge(instance)
+        except Exception as e:
+            logger.warning(f"SQLite backup failed for {table_name}: {e}")
+
+    return result
 
 
 class DatabaseManager:
@@ -46,6 +297,10 @@ class DatabaseManager:
         self.qdrant_client = None
         self.minio_client = None
 
+        # Supabase REST API (HTTPS, 不受代理限制)
+        self.supabase_client = None
+        self.supabase_available = False
+
         # Fallback flags
         self.use_postgres_for_analytics = False  # Fallback when ClickHouse down
         self.disable_agent_memory = False  # Fallback when Qdrant down
@@ -61,6 +316,13 @@ class DatabaseManager:
             raise RuntimeError(
                 f"{db_type} is not available. This is a critical dependency. "
                 f"Check your configuration and database setup."
+            )
+
+        # Try Supabase REST API（非阻断，不可用则只用本地 SQLite）
+        self.supabase_available = await self._init_supabase()
+        if not self.supabase_available:
+            logger.warning(
+                "Supabase is not available. Remote sync will be disabled."
             )
 
         # Try Redis (Important - Tier 2)
@@ -150,6 +412,37 @@ class DatabaseManager:
         except Exception as e:
             db_type = "SQLite" if settings.database_type == "sqlite" else "PostgreSQL"
             logger.error(f"✗ {db_type} connection failed: {e}")
+            return False
+
+    async def _init_supabase(self) -> bool:
+        """Initialize Supabase REST API client (HTTPS, proxy-friendly)"""
+        try:
+            from uteki.common.config import settings
+
+            if not settings.supabase_url or not settings.supabase_service_key:
+                logger.info("Supabase not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing)")
+                return False
+
+            from supabase import create_client
+
+            self.supabase_client = create_client(
+                settings.supabase_url,
+                settings.supabase_service_key
+            )
+
+            # 测试连接：查询 schema 验证 API 可用
+            self.supabase_client.table('_ping_test').select('*').limit(1).execute()
+            # 表不存在会抛异常，但只要不是网络错误就说明 API 通了
+            logger.info("✓ Supabase REST API connection established")
+            return True
+        except Exception as e:
+            err_str = str(e)
+            # PGRST 错误码说明 API 正常工作，只是表不存在
+            if 'PGRST' in err_str:
+                logger.info("✓ Supabase REST API connection established")
+                return True
+            logger.warning(f"✗ Supabase connection failed: {e}")
+            self.supabase_client = None
             return False
 
     async def _init_redis(self) -> bool:
@@ -246,6 +539,7 @@ class DatabaseManager:
         """Log current database availability status"""
         status = {
             "PostgreSQL": "✓" if self.postgres_available else "✗",
+            "Supabase": "✓" if self.supabase_available else "⚠ (remote sync disabled)",
             "Redis": "✓" if self.redis_available else "✗",
             "ClickHouse": "✓" if self.clickhouse_available else "⚠ (using PostgreSQL fallback)",
             "Qdrant": "✓" if self.qdrant_available else "⚠ (agent memory disabled)",
@@ -299,6 +593,18 @@ class DatabaseManager:
             except Exception:
                 await session.rollback()
                 raise
+
+    def get_supabase(self):
+        """
+        Get Supabase REST API client.
+
+        Usage:
+            sb = db_manager.get_supabase()
+            sb.table('news_articles').select('*').execute()
+        """
+        if not self.supabase_available:
+            raise RuntimeError("Supabase is not available")
+        return self.supabase_client
 
     async def get_redis(self):
         """
@@ -378,6 +684,20 @@ async def get_session():
     Usage:
         @router.get("/")
         async def endpoint(session: AsyncSession = Depends(get_session)):
+            ...
+    """
+    async with db_manager.get_postgres_session() as session:
+        yield session
+
+
+async def get_news_session():
+    """
+    FastAPI dependency for News domain session.
+    Uses local database (SQLite/PostgreSQL). Supabase sync is handled separately.
+
+    Usage:
+        @router.get("/")
+        async def endpoint(session: AsyncSession = Depends(get_news_session)):
             ...
     """
     async with db_manager.get_postgres_session() as session:
