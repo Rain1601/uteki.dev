@@ -1,16 +1,14 @@
-"""Jeff Cox 新闻服务 - 整合 RSS 监控和网页爬虫"""
+"""Jeff Cox 新闻服务 - 整合 RSS 监控和网页爬虫（Supabase REST API）"""
 
 import asyncio
 import hashlib
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime
-from sqlalchemy import select, or_
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from uteki.domains.news.models import NewsArticle
 from .cnbc_scraper import CNBCWebScraper
 from .cnbc_graphql import CNBCGraphQLCollector, get_graphql_collector
+from .sync_service import get_news_repo, backup_to_sqlite, _serialize_value
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +20,7 @@ class JeffCoxService:
     策略：
     1. 从作者页面监控新文章
     2. 爬取新文章的完整内容
-    3. 统一存储到 NewsArticle 表
+    3. 统一存储到 news_articles 表（Supabase）
     """
 
     def __init__(self):
@@ -32,7 +30,6 @@ class JeffCoxService:
 
     async def collect_from_author_page(
         self,
-        session: AsyncSession,
         max_news: int = 20
     ) -> List[str]:
         """
@@ -47,13 +44,13 @@ class JeffCoxService:
             if not article_urls:
                 return []
 
+            repo = get_news_repo()
+
             # 过滤出数据库中不存在的
             missing_urls = []
             for url in article_urls[:max_news]:
-                stmt = select(NewsArticle).where(NewsArticle.url == url)
-                result = await session.execute(stmt)
-                exists = result.scalar_one_or_none()
-                if not exists:
+                existing = repo.select_one(eq={"url": url})
+                if not existing:
                     missing_urls.append(url)
 
             logger.info(f"发现 {len(missing_urls)} 篇新文章待采集")
@@ -65,7 +62,6 @@ class JeffCoxService:
 
     async def collect_from_urls(
         self,
-        session: AsyncSession,
         urls: List[str]
     ) -> int:
         """
@@ -78,6 +74,7 @@ class JeffCoxService:
             return 0
 
         success_count = 0
+        repo = get_news_repo()
 
         for i, url in enumerate(urls, 1):
             try:
@@ -92,10 +89,7 @@ class JeffCoxService:
                 article_id = hashlib.md5(url.encode()).hexdigest()[:20]
 
                 # 检查是否已存在
-                stmt = select(NewsArticle).where(NewsArticle.url == url)
-                result = await session.execute(stmt)
-                existing = result.scalar_one_or_none()
-
+                existing = repo.select_one(eq={"url": url})
                 if existing:
                     logger.info(f"文章已存在，跳过: {url}")
                     continue
@@ -105,30 +99,35 @@ class JeffCoxService:
                 title_lower = article_data.get('title', '').lower()
                 is_important = any(kw in title_lower for kw in important_keywords)
 
-                # 创建新文章
-                new_article = NewsArticle(
-                    id=article_id,
-                    source='cnbc_jeff_cox',
-                    title=article_data.get('title', ''),
-                    content='',
-                    content_full=article_data.get('content_full', ''),
-                    summary_keypoints=article_data.get('summary_keypoints', ''),
-                    url=url,
-                    author=article_data.get('author', 'Jeff Cox'),
-                    published_at=article_data.get('published_at'),
-                    category='finance',
-                    keywords='Jeff Cox,CNBC,经济',
-                    tags=['finance', 'economy'],
-                    is_full_content=True,
-                    scraped_at=datetime.utcnow(),
-                    important=is_important
-                )
+                # 构建文章数据 dict
+                published_at = article_data.get('published_at')
+                scraped_at = datetime.utcnow()
 
-                session.add(new_article)
-                await session.flush()
+                article_row = {
+                    'id': article_id,
+                    'source': 'cnbc_jeff_cox',
+                    'title': article_data.get('title', ''),
+                    'content': '',
+                    'content_full': article_data.get('content_full', ''),
+                    'summary_keypoints': article_data.get('summary_keypoints', ''),
+                    'url': url,
+                    'author': article_data.get('author', 'Jeff Cox'),
+                    'published_at': _serialize_value(published_at),
+                    'category': 'finance',
+                    'keywords': 'Jeff Cox,CNBC,经济',
+                    'tags': ['finance', 'economy'],
+                    'is_full_content': True,
+                    'scraped_at': _serialize_value(scraped_at),
+                    'important': is_important,
+                }
 
-                pub_time = article_data.get('published_at')
-                pub_str = pub_time.strftime('%Y-%m-%d %H:%M') if pub_time else '未知'
+                # 写入 Supabase
+                repo.upsert(article_row)
+
+                # 备份到 SQLite
+                await backup_to_sqlite([article_row])
+
+                pub_str = published_at.strftime('%Y-%m-%d %H:%M') if published_at else '未知'
                 logger.info(f"保存成功: [{pub_str}] {article_data.get('title', '')[:60]}")
 
                 success_count += 1
@@ -140,13 +139,11 @@ class JeffCoxService:
                 logger.error(f"处理文章失败 {url}: {e}", exc_info=True)
                 continue
 
-        await session.commit()
         logger.info(f"从 URL 列表采集完成: 成功 {success_count} 篇")
         return success_count
 
     async def collect_and_enrich(
         self,
-        session: AsyncSession,
         max_news: int = 10
     ) -> Dict:
         """
@@ -164,12 +161,12 @@ class JeffCoxService:
             start_time = datetime.now()
 
             # 从作者页面获取新文章 URL
-            author_page_urls = await self.collect_from_author_page(session, max_news)
+            author_page_urls = await self.collect_from_author_page(max_news)
 
             new_articles_count = 0
             if author_page_urls:
                 logger.info(f"发现 {len(author_page_urls)} 篇新文章，开始爬取...")
-                new_articles_count = await self.collect_from_urls(session, author_page_urls)
+                new_articles_count = await self.collect_from_urls(author_page_urls)
 
             duration = (datetime.now() - start_time).total_seconds()
 
@@ -200,37 +197,42 @@ class JeffCoxService:
 
     async def get_articles(
         self,
-        session: AsyncSession,
         limit: int = 20,
         offset: int = 0,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         full_content_only: bool = False,
         category: Optional[str] = None
-    ) -> List[NewsArticle]:
+    ) -> List[Dict]:
         """查询 Jeff Cox 文章列表"""
         try:
-            stmt = select(NewsArticle).where(
-                NewsArticle.source == 'cnbc_jeff_cox'
-            )
+            repo = get_news_repo()
+
+            eq_filters = {"source": "cnbc_jeff_cox"}
+            gte_filters = {}
+            lte_filters = {}
 
             if start_date:
-                stmt = stmt.where(NewsArticle.published_at >= start_date)
+                gte_filters["published_at"] = _serialize_value(start_date)
             if end_date:
-                stmt = stmt.where(NewsArticle.published_at <= end_date)
+                lte_filters["published_at"] = _serialize_value(end_date)
             if full_content_only:
-                stmt = stmt.where(NewsArticle.is_full_content == True)
-            if category:
-                # 根据 category 过滤 tags 或 important
-                if category == 'important':
-                    stmt = stmt.where(NewsArticle.important == True)
-                # 其他分类可以通过 tags 过滤
+                eq_filters["is_full_content"] = True
+            if category == 'important':
+                eq_filters["important"] = True
 
-            stmt = stmt.order_by(NewsArticle.published_at.desc())
-            stmt = stmt.offset(offset).limit(limit)
+            kwargs = {
+                "eq": eq_filters,
+                "order": "published_at.desc",
+                "limit": limit,
+                "offset": offset,
+            }
+            if gte_filters:
+                kwargs["gte"] = gte_filters
+            if lte_filters:
+                kwargs["lte"] = lte_filters
 
-            result = await session.execute(stmt)
-            return list(result.scalars().all())
+            return repo.select_data(**kwargs)
 
         except Exception as e:
             logger.error(f"查询文章失败: {e}", exc_info=True)
@@ -238,7 +240,6 @@ class JeffCoxService:
 
     async def get_monthly_news(
         self,
-        session: AsyncSession,
         year: int,
         month: int,
         category: Optional[str] = None
@@ -257,21 +258,22 @@ class JeffCoxService:
                 end_date = datetime(year, month + 1, 1)
 
             articles = await self.get_articles(
-                session,
                 limit=1000,
                 start_date=start_date,
                 end_date=end_date,
                 category=category
             )
 
-            # 按日期分组
+            # 按日期分组 — published_at 从 Supabase 返回的是 ISO 字符串
             news_by_date: Dict[str, List[Dict]] = {}
             for article in articles:
-                if article.published_at:
-                    date_str = article.published_at.strftime('%Y-%m-%d')
+                published_at = article.get('published_at')
+                if published_at:
+                    # published_at is an ISO string like "2024-01-15T10:30:00+00:00"
+                    date_str = published_at[:10]
                     if date_str not in news_by_date:
                         news_by_date[date_str] = []
-                    news_by_date[date_str].append(article.to_dict())
+                    news_by_date[date_str].append(article)
 
             return news_by_date
 
@@ -281,17 +283,12 @@ class JeffCoxService:
 
     async def get_article_by_id(
         self,
-        session: AsyncSession,
         article_id: str
-    ) -> Optional[NewsArticle]:
+    ) -> Optional[Dict]:
         """根据 ID 获取单篇文章"""
         try:
-            stmt = select(NewsArticle).where(
-                NewsArticle.id == article_id,
-                NewsArticle.source == 'cnbc_jeff_cox'
-            )
-            result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            repo = get_news_repo()
+            return repo.select_one(eq={"id": article_id, "source": "cnbc_jeff_cox"})
 
         except Exception as e:
             logger.error(f"获取文章详情失败 (ID: {article_id}): {e}", exc_info=True)
@@ -299,11 +296,10 @@ class JeffCoxService:
 
     async def get_latest_news(
         self,
-        session: AsyncSession,
         limit: int = 10
-    ) -> List[NewsArticle]:
+    ) -> List[Dict]:
         """获取最新新闻"""
-        return await self.get_articles(session, limit=limit)
+        return await self.get_articles(limit=limit)
 
 
 # 全局服务实例

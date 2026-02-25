@@ -5,6 +5,12 @@ from .news_analysis_service import NewsAnalysisService, get_news_analysis_servic
 from .translation_service import TranslationService, get_translation_service
 from .bloomberg_service import BloombergService, get_bloomberg_service
 from .bloomberg_apify import BloombergApifyClient, get_bloomberg_apify_client
+from .sync_service import (
+    sync_articles_to_supabase,
+    sync_article_to_supabase,
+    migrate_local_to_supabase,
+    migrate_supabase_to_local,
+)
 
 __all__ = [
     "JeffCoxService",
@@ -20,4 +26,8 @@ __all__ = [
     "get_bloomberg_service",
     "BloombergApifyClient",
     "get_bloomberg_apify_client",
+    "sync_articles_to_supabase",
+    "sync_article_to_supabase",
+    "migrate_local_to_supabase",
+    "migrate_supabase_to_local",
 ]

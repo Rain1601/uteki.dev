@@ -1,15 +1,12 @@
-"""Bloomberg 新闻服务 - 整合 Apify 抓取和数据管理"""
+"""Bloomberg 新闻服务 - 整合 Apify 抓取和数据管理（Supabase REST API）"""
 
 import hashlib
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from uteki.domains.news.models import NewsArticle
 from .bloomberg_apify import get_bloomberg_apify_client
+from .sync_service import get_news_repo, backup_to_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +17,9 @@ class BloombergService:
 
     策略：
     1. 通过 Apify Category Scraper 获取分类页文章列表
-    2. 与数据库去重，筛选新文章
+    2. 与 Supabase 去重，筛选新文章
     3. 通过 Apify News Scraper 获取新文章全文
-    4. 写入 news_articles 表
+    4. 写入 Supabase + SQLite 备份
     """
 
     def __init__(self):
@@ -31,7 +28,6 @@ class BloombergService:
 
     async def collect_and_enrich(
         self,
-        session: AsyncSession,
         max_news: int = 20,
         category_urls: Optional[List[str]] = None,
     ) -> Dict:
@@ -39,15 +35,16 @@ class BloombergService:
         完整抓取流程
 
         1. Category Scraper 获取文章列表
-        2. 数据库 URL 去重
+        2. Supabase URL 去重
         3. News Scraper 逐篇获取全文
-        4. 写入数据库
+        4. 写入 Supabase + SQLite 备份
 
         Returns:
             抓取结果统计
         """
         try:
             start_time = datetime.now()
+            repo = get_news_repo()
 
             # 阶段 1：获取文章列表
             articles_meta = await self.apify_client.fetch_category_articles(
@@ -67,15 +64,14 @@ class BloombergService:
                     "method": "apify_bloomberg",
                 }
 
-            # 阶段 2：数据库 URL 去重
+            # 阶段 2：Supabase URL 去重
             new_articles = []
             for meta in articles_meta:
                 url = meta.get("url", "")
                 if not url:
                     continue
-                stmt = select(NewsArticle).where(NewsArticle.url == url)
-                result = await session.execute(stmt)
-                if not result.scalar_one_or_none():
+                existing = repo.select_one(eq={"url": url})
+                if not existing:
                     new_articles.append(meta)
 
             logger.info(
@@ -93,8 +89,9 @@ class BloombergService:
                     "method": "apify_bloomberg",
                 }
 
-            # 阶段 3 & 4：逐篇获取全文并写入
+            # 阶段 3 & 4：逐篇获取全文并构建数据
             saved_count = 0
+            saved_articles_data = []
             for i, meta in enumerate(new_articles, 1):
                 url = meta["url"]
                 try:
@@ -107,55 +104,57 @@ class BloombergService:
 
                     if full_article and full_article.get("content_full"):
                         # 全文获取成功
-                        new_article = NewsArticle(
-                            id=article_id,
-                            source="bloomberg",
-                            title=full_article.get("title") or meta.get("title", ""),
-                            content="",
-                            content_full=full_article["content_full"],
-                            url=url,
-                            author=full_article.get("author") or meta.get("author", ""),
-                            published_at=full_article.get("published_at") or meta.get("published_at"),
-                            category="fixed_income",
-                            keywords="Bloomberg,fixed income,bonds",
-                            tags=["bloomberg", "fixed_income", "bonds"],
-                            is_full_content=True,
-                            scraped_at=datetime.utcnow(),
-                        )
+                        article_data = {
+                            "id": article_id,
+                            "source": "bloomberg",
+                            "title": full_article.get("title") or meta.get("title", ""),
+                            "content": "",
+                            "content_full": full_article["content_full"],
+                            "url": url,
+                            "author": full_article.get("author") or meta.get("author", ""),
+                            "published_at": full_article.get("published_at") or meta.get("published_at"),
+                            "category": "fixed_income",
+                            "keywords": "Bloomberg,fixed income,bonds",
+                            "tags": ["bloomberg", "fixed_income", "bonds"],
+                            "is_full_content": True,
+                            "scraped_at": datetime.utcnow().isoformat(),
+                        }
                     else:
                         # 全文获取失败，降级保存元数据
                         logger.warning(f"全文获取失败，降级保存: {url}")
-                        new_article = NewsArticle(
-                            id=article_id,
-                            source="bloomberg",
-                            title=meta.get("title", ""),
-                            content="",
-                            content_full="",
-                            url=url,
-                            author=meta.get("author", ""),
-                            published_at=meta.get("published_at"),
-                            category="fixed_income",
-                            keywords="Bloomberg,fixed income,bonds",
-                            tags=["bloomberg", "fixed_income", "bonds"],
-                            is_full_content=False,
-                            scraped_at=datetime.utcnow(),
-                        )
+                        article_data = {
+                            "id": article_id,
+                            "source": "bloomberg",
+                            "title": meta.get("title", ""),
+                            "content": "",
+                            "content_full": "",
+                            "url": url,
+                            "author": meta.get("author", ""),
+                            "published_at": meta.get("published_at"),
+                            "category": "fixed_income",
+                            "keywords": "Bloomberg,fixed income,bonds",
+                            "tags": ["bloomberg", "fixed_income", "bonds"],
+                            "is_full_content": False,
+                            "scraped_at": datetime.utcnow().isoformat(),
+                        }
 
-                    session.add(new_article)
-                    await session.flush()
+                    saved_articles_data.append(article_data)
                     saved_count += 1
 
-                    pub_time = new_article.published_at
-                    pub_str = pub_time.strftime("%Y-%m-%d %H:%M") if pub_time else "未知"
+                    pub_time = article_data.get("published_at")
+                    pub_str = pub_time[:16] if pub_time else "未知"
                     logger.info(
-                        f"保存成功: [{pub_str}] {new_article.title[:60]}"
+                        f"保存成功: [{pub_str}] {article_data['title'][:60]}"
                     )
 
                 except Exception as e:
                     logger.error(f"处理文章失败 {url}: {e}", exc_info=True)
                     continue
 
-            await session.commit()
+            # 批量 upsert 到 Supabase + 备份到 SQLite
+            if saved_articles_data:
+                repo.upsert(saved_articles_data)
+                await backup_to_sqlite(saved_articles_data)
 
             duration = (datetime.now() - start_time).total_seconds()
             result = {
@@ -183,30 +182,39 @@ class BloombergService:
 
     async def get_articles(
         self,
-        session: AsyncSession,
         limit: int = 20,
         offset: int = 0,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         category: Optional[str] = None,
-    ) -> List[NewsArticle]:
+    ) -> List[Dict]:
         """查询 Bloomberg 文章列表"""
         try:
-            stmt = select(NewsArticle).where(NewsArticle.source == "bloomberg")
+            repo = get_news_repo()
+
+            eq = {"source": "bloomberg"}
+            gte = {}
+            lte = {}
 
             if start_date:
-                stmt = stmt.where(NewsArticle.published_at >= start_date)
+                gte["published_at"] = start_date.isoformat()
             if end_date:
-                stmt = stmt.where(NewsArticle.published_at <= end_date)
-            if category:
-                if category == "important":
-                    stmt = stmt.where(NewsArticle.important == True)
+                lte["published_at"] = end_date.isoformat()
+            if category and category == "important":
+                eq["important"] = True
 
-            stmt = stmt.order_by(NewsArticle.published_at.desc())
-            stmt = stmt.offset(offset).limit(limit)
+            kwargs = {
+                "eq": eq,
+                "order": "published_at.desc",
+                "limit": limit,
+                "offset": offset,
+            }
+            if gte:
+                kwargs["gte"] = gte
+            if lte:
+                kwargs["lte"] = lte
 
-            result = await session.execute(stmt)
-            return list(result.scalars().all())
+            return repo.select_data(**kwargs)
 
         except Exception as e:
             logger.error(f"查询 Bloomberg 文章失败: {e}", exc_info=True)
@@ -214,7 +222,6 @@ class BloombergService:
 
     async def get_monthly_news(
         self,
-        session: AsyncSession,
         year: int,
         month: int,
         category: Optional[str] = None,
@@ -228,7 +235,6 @@ class BloombergService:
                 end_date = datetime(year, month + 1, 1)
 
             articles = await self.get_articles(
-                session,
                 limit=1000,
                 start_date=start_date,
                 end_date=end_date,
@@ -237,11 +243,12 @@ class BloombergService:
 
             news_by_date: Dict[str, List[Dict]] = {}
             for article in articles:
-                if article.published_at:
-                    date_str = article.published_at.strftime("%Y-%m-%d")
+                published_at = article.get("published_at")
+                if published_at:
+                    date_str = published_at[:10]
                     if date_str not in news_by_date:
                         news_by_date[date_str] = []
-                    news_by_date[date_str].append(article.to_dict())
+                    news_by_date[date_str].append(article)
 
             return news_by_date
 
@@ -251,17 +258,12 @@ class BloombergService:
 
     async def get_article_by_id(
         self,
-        session: AsyncSession,
         article_id: str,
-    ) -> Optional[NewsArticle]:
+    ) -> Optional[Dict]:
         """根据 ID 获取单篇文章"""
         try:
-            stmt = select(NewsArticle).where(
-                NewsArticle.id == article_id,
-                NewsArticle.source == "bloomberg",
-            )
-            result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            repo = get_news_repo()
+            return repo.select_one(eq={"id": article_id, "source": "bloomberg"})
 
         except Exception as e:
             logger.error(f"获取 Bloomberg 文章详情失败 (ID: {article_id}): {e}", exc_info=True)
@@ -269,11 +271,10 @@ class BloombergService:
 
     async def get_latest_news(
         self,
-        session: AsyncSession,
         limit: int = 10,
-    ) -> List[NewsArticle]:
+    ) -> List[Dict]:
         """获取最新 Bloomberg 新闻"""
-        return await self.get_articles(session, limit=limit)
+        return await self.get_articles(limit=limit)
 
 
 # 全局服务实例

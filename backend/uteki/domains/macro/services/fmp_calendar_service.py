@@ -4,16 +4,21 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import httpx
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from uteki.common.config import settings
-from uteki.domains.macro.models import EconomicEvent
+from uteki.common.database import SupabaseRepository, db_manager
 
 logger = logging.getLogger(__name__)
 
 # DB 缓存 TTL（秒）— FMP 数据在 DB 中的有效期
 CACHE_TTL_SECONDS = 3600  # 1 小时
+
+# Supabase table name
+EVENTS_TABLE = "economic_events"
+
+
+def _get_events_repo() -> SupabaseRepository:
+    return SupabaseRepository(EVENTS_TABLE)
 
 
 # FOMC 会议日程表（手动维护）
@@ -74,16 +79,7 @@ class FMPCalendarService:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None
     ) -> Dict:
-        """
-        从 FMP 获取经济日历数据
-
-        Args:
-            from_date: 开始日期 YYYY-MM-DD
-            to_date: 结束日期 YYYY-MM-DD
-
-        Returns:
-            {"success": bool, "data": List[Dict], "error": Optional[str]}
-        """
+        """从 FMP 获取经济日历数据"""
         if not self.api_key:
             return {"success": False, "error": "FMP API 密钥未配置", "data": []}
 
@@ -143,7 +139,7 @@ class FMPCalendarService:
                     "id": f"fmp_{event_datetime.strftime('%Y%m%d')}_{event_name.replace(' ', '_')[:30]}",
                     "title": event_name,
                     "event_type": event_type,
-                    "start_date": event_datetime,
+                    "start_date": event_datetime.isoformat(),
                     "status": "past" if event_datetime < datetime.now() else "upcoming",
                     "importance": event.get("impact", "medium").lower(),
                     "actual_value": event.get("actual"),
@@ -165,16 +161,7 @@ class FMPCalendarService:
         year: int,
         month: Optional[int] = None
     ) -> List[Dict]:
-        """
-        获取 FOMC 会议日程
-
-        Args:
-            year: 年份
-            month: 月份（可选，如果提供则只返回该月的会议）
-
-        Returns:
-            FOMC 会议列表
-        """
+        """获取 FOMC 会议日程"""
         meetings = []
         now = datetime.now()
 
@@ -199,8 +186,8 @@ class FMPCalendarService:
                 "id": f"fomc_{meeting_date.strftime('%Y%m%d')}",
                 "title": f"FOMC Meeting ({meeting['quarter']})",
                 "event_type": "fomc",
-                "start_date": meeting_date,
-                "end_date": end_date,
+                "start_date": meeting_date.isoformat(),
+                "end_date": end_date.isoformat(),
                 "status": status,
                 "importance": "critical",
                 "has_press_conference": meeting["has_press_conference"],
@@ -211,89 +198,102 @@ class FMPCalendarService:
 
         return meetings
 
-    async def _save_events_to_db(self, session: AsyncSession, events: List[Dict]) -> int:
-        """将 FMP 事件 upsert 到 economic_events 表"""
+    async def _save_events_to_db(self, events: List[Dict]) -> int:
+        """将 FMP 事件 upsert 到 Supabase + SQLite 备份"""
         saved = 0
-        now = datetime.utcnow()
+        now = datetime.utcnow().isoformat()
+        repo = _get_events_repo()
+
+        rows = []
         for event in events:
             try:
-                start_date = event.get("start_date")
-                if isinstance(start_date, str):
-                    start_date = datetime.fromisoformat(start_date)
-
-                db_event = EconomicEvent(
-                    id=event["id"],
-                    event_type=event.get("event_type", "economic_data"),
-                    title=event.get("title", ""),
-                    start_date=start_date,
-                    status=event.get("status", "upcoming"),
-                    importance=event.get("importance", "medium"),
-                    actual_value=event.get("actual_value"),
-                    expected_value=event.get("expected_value"),
-                    previous_value=event.get("previous_value"),
-                    source="fmp",
-                )
-                db_event.updated_at = now
-                await session.merge(db_event)
+                rows.append({
+                    "id": event["id"],
+                    "event_type": event.get("event_type", "economic_data"),
+                    "title": event.get("title", ""),
+                    "start_date": event.get("start_date"),
+                    "status": event.get("status", "upcoming"),
+                    "importance": event.get("importance", "medium"),
+                    "actual_value": event.get("actual_value"),
+                    "expected_value": event.get("expected_value"),
+                    "previous_value": event.get("previous_value"),
+                    "source": "fmp",
+                    "updated_at": now,
+                })
                 saved += 1
             except Exception as e:
-                logger.warning(f"保存事件失败: {event.get('id')}, {e}")
+                logger.warning(f"准备事件失败: {event.get('id')}, {e}")
                 continue
-        await session.commit()
-        logger.info(f"已保存 {saved} 条 FMP 事件到 DB")
+
+        if rows:
+            try:
+                repo.upsert(rows)
+                logger.info(f"已保存 {saved} 条 FMP 事件到 Supabase")
+
+                # SQLite 备份
+                try:
+                    from uteki.domains.macro.models import EconomicEvent
+                    async with db_manager.get_postgres_session() as session:
+                        for row in rows:
+                            db_event = EconomicEvent(**row)
+                            await session.merge(db_event)
+                except Exception as e:
+                    logger.warning(f"SQLite backup failed for economic_events: {e}")
+            except Exception as e:
+                logger.warning(f"Supabase upsert failed: {e}")
+
         return saved
 
     async def _load_events_from_db(
         self,
-        session: AsyncSession,
         year: int,
         month: int,
         event_type: Optional[str] = None,
-    ) -> Tuple[List[Dict], Optional[datetime]]:
-        """从 DB 加载 FMP 缓存事件，返回 (events, max_updated_at)"""
-        start_date = datetime(year, month, 1)
+    ) -> Tuple[List[Dict], Optional[str]]:
+        """从 Supabase 加载 FMP 缓存事件，返回 (events, max_updated_at)"""
+        start_date = datetime(year, month, 1).isoformat()
         if month == 12:
-            end_date = datetime(year + 1, 1, 1)
+            end_date = datetime(year + 1, 1, 1).isoformat()
         else:
-            end_date = datetime(year, month + 1, 1)
+            end_date = datetime(year, month + 1, 1).isoformat()
 
-        query = select(EconomicEvent).where(
-            EconomicEvent.source == "fmp",
-            EconomicEvent.start_date >= start_date,
-            EconomicEvent.start_date < end_date,
-        )
+        repo = _get_events_repo()
 
-        if event_type and event_type != "all":
-            if "," in event_type:
-                types = event_type.split(",")
-                query = query.where(EconomicEvent.event_type.in_(types))
-            else:
-                query = query.where(EconomicEvent.event_type == event_type)
+        try:
+            rows = repo.select_data(
+                eq={"source": "fmp"},
+                gte={"start_date": start_date},
+                lt={"start_date": end_date},
+            )
 
-        result = await session.execute(query)
-        rows = result.scalars().all()
+            if event_type and event_type != "all":
+                if "," in event_type:
+                    types = event_type.split(",")
+                    rows = [r for r in rows if r.get("event_type") in types]
+                else:
+                    rows = [r for r in rows if r.get("event_type") == event_type]
 
-        if not rows:
+            if not rows:
+                return [], None
+
+            max_updated = max(
+                (r.get("updated_at", "") for r in rows if r.get("updated_at")),
+                default=None
+            )
+            return rows, max_updated
+
+        except Exception as e:
+            logger.warning(f"Failed to load events from Supabase: {e}")
             return [], None
-
-        events = [row.to_dict() for row in rows]
-        max_updated = max(row.updated_at for row in rows if row.updated_at)
-        return events, max_updated
 
     async def get_monthly_events_enriched(
         self,
-        session: AsyncSession,
         year: int,
         month: int,
         event_type: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict:
-        """
-        获取指定月份的所有经济事件（DB 缓存优先 + FMP 数据增强）
-
-        Returns:
-            {"success": bool, "data": Dict[str, List], "fmp_status": str}
-        """
+        """获取指定月份的所有经济事件（Supabase 缓存优先 + FMP 数据增强）"""
         try:
             start_date = datetime(year, month, 1)
             if month == 12:
@@ -304,28 +304,26 @@ class FMPCalendarService:
             # 1. 获取 FOMC 会议（内存数据，无延迟）
             fomc_meetings = self.get_fomc_meetings(year, month)
 
-            # 2. DB-first 缓存策略获取 FMP 事件
+            # 2. Supabase-first 缓存策略获取 FMP 事件
             fmp_events: List[Dict] = []
             fmp_status = "failed"
             fmp_error = None
 
-            # 先查 DB 缓存（event_type 过滤在 DB 层做，FOMC 过滤在合并后做）
-            db_events, max_updated = await self._load_events_from_db(
-                session, year, month
-            )
+            db_events, max_updated = await self._load_events_from_db(year, month)
 
-            cache_fresh = (
-                max_updated is not None
-                and (datetime.utcnow() - max_updated).total_seconds() < CACHE_TTL_SECONDS
-            )
+            cache_fresh = False
+            if max_updated:
+                try:
+                    updated_dt = datetime.fromisoformat(max_updated.replace("Z", "+00:00").replace("+00:00", ""))
+                    cache_fresh = (datetime.utcnow() - updated_dt).total_seconds() < CACHE_TTL_SECONDS
+                except (ValueError, TypeError):
+                    pass
 
             if db_events and cache_fresh and not force_refresh:
-                # DB 缓存有效，直接使用
                 fmp_events = db_events
                 fmp_status = "cached"
-                logger.info(f"使用 DB 缓存: {year}-{month:02d}, {len(fmp_events)} 条事件")
+                logger.info(f"使用 Supabase 缓存: {year}-{month:02d}, {len(fmp_events)} 条事件")
             else:
-                # 缓存过期或不存在，调用 FMP API
                 fmp_result = await self.fetch_economic_calendar(
                     start_date.strftime("%Y-%m-%d"),
                     end_date.strftime("%Y-%m-%d")
@@ -334,16 +332,13 @@ class FMPCalendarService:
                 if fmp_result["success"]:
                     fmp_events = fmp_result.get("data", [])
                     fmp_status = "success"
-                    # 写入 DB 缓存
-                    await self._save_events_to_db(session, fmp_events)
+                    await self._save_events_to_db(fmp_events)
                 elif db_events:
-                    # FMP 失败但有旧缓存，使用旧数据
                     fmp_events = db_events
                     fmp_status = "cached_stale"
                     fmp_error = fmp_result.get("error")
                     logger.warning(f"FMP 失败，使用过期缓存: {fmp_error}")
                 else:
-                    # FMP 失败且无缓存
                     fmp_status = "failed"
                     fmp_error = fmp_result.get("error")
 
@@ -361,23 +356,13 @@ class FMPCalendarService:
             # 5. 按日期分组
             events_by_date: Dict[str, List] = {}
             for event in all_events:
-                date = event.get("start_date")
-                if isinstance(date, datetime):
-                    date_str = date.strftime("%Y-%m-%d")
-                else:
-                    date_str = str(date)[:10]
+                date = event.get("start_date", "")
+                date_str = str(date)[:10]
 
                 if date_str not in events_by_date:
                     events_by_date[date_str] = []
 
-                # 转换 datetime 为字符串
-                event_dict = dict(event)
-                if isinstance(event_dict.get("start_date"), datetime):
-                    event_dict["start_date"] = event_dict["start_date"].isoformat()
-                if isinstance(event_dict.get("end_date"), datetime):
-                    event_dict["end_date"] = event_dict["end_date"].isoformat()
-
-                events_by_date[date_str].append(event_dict)
+                events_by_date[date_str].append(event)
 
             return {
                 "success": True,
@@ -395,30 +380,38 @@ class FMPCalendarService:
                 "error": str(e)
             }
 
-    async def get_statistics(self, session: AsyncSession) -> Dict:
-        """获取事件统计信息（优先从 DB 聚合）"""
+    async def get_statistics(self) -> Dict:
+        """获取事件统计信息"""
         try:
             current_year = datetime.now().year
             fomc_count = len([m for m in FOMC_MEETINGS_2024_2025
                             if datetime.strptime(m["date"], "%Y-%m-%d").year == current_year])
 
-            # 尝试从 DB 聚合 FMP 事件统计
-            query = (
-                select(EconomicEvent.event_type, func.count())
-                .where(
-                    EconomicEvent.source == "fmp",
-                    EconomicEvent.start_date >= datetime(current_year, 1, 1),
-                    EconomicEvent.start_date < datetime(current_year + 1, 1, 1),
-                )
-                .group_by(EconomicEvent.event_type)
-            )
-            result = await session.execute(query)
-            db_counts = {row[0]: row[1] for row in result.all()}
+            # 从 Supabase 聚合 FMP 事件统计
+            repo = _get_events_repo()
+            start_of_year = datetime(current_year, 1, 1).isoformat()
+            end_of_year = datetime(current_year + 1, 1, 1).isoformat()
 
-            if db_counts:
-                by_type = {"fomc": fomc_count, **db_counts}
-                total = fomc_count + sum(db_counts.values())
-            else:
+            try:
+                rows = repo.select_data(
+                    eq={"source": "fmp"},
+                    gte={"start_date": start_of_year},
+                    lt={"start_date": end_of_year},
+                )
+
+                # 手动按 event_type 分组计数
+                db_counts: Dict[str, int] = {}
+                for row in rows:
+                    et = row.get("event_type", "other")
+                    db_counts[et] = db_counts.get(et, 0) + 1
+
+                if db_counts:
+                    by_type = {"fomc": fomc_count, **db_counts}
+                    total = fomc_count + sum(db_counts.values())
+                else:
+                    by_type = {"fomc": fomc_count}
+                    total = fomc_count
+            except Exception:
                 by_type = {"fomc": fomc_count}
                 total = fomc_count
 

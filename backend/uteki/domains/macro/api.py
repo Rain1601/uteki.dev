@@ -2,10 +2,8 @@
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, Query
 
-from uteki.common.database import get_session
 from uteki.domains.macro.services import get_fmp_calendar_service
 
 logger = logging.getLogger(__name__)
@@ -18,10 +16,9 @@ async def get_monthly_events_enriched(
     month: int,
     event_type: Optional[str] = Query(None, description="事件类型: all/fomc/employment/inflation/consumption,gdp"),
     refresh: Optional[bool] = Query(None, description="强制刷新缓存"),
-    session: AsyncSession = Depends(get_session)
 ):
     """
-    获取指定月份的经济事件（包含 FMP 数据增强，DB 缓存优先）
+    获取指定月份的经济事件（包含 FMP 数据增强，Supabase 缓存优先）
 
     Returns:
         按日期分组的事件字典，包含 actual/forecast/previous 数据
@@ -29,7 +26,7 @@ async def get_monthly_events_enriched(
     try:
         service = get_fmp_calendar_service()
         result = await service.get_monthly_events_enriched(
-            session, year, month, event_type,
+            year, month, event_type,
             force_refresh=bool(refresh),
         )
 
@@ -41,13 +38,11 @@ async def get_monthly_events_enriched(
 
 
 @router.get("/statistics")
-async def get_statistics(
-    session: AsyncSession = Depends(get_session)
-):
+async def get_statistics():
     """获取事件统计信息"""
     try:
         service = get_fmp_calendar_service()
-        result = await service.get_statistics(session)
+        result = await service.get_statistics()
 
         return result
 

@@ -4,10 +4,12 @@ import logging
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from uteki.common.database import get_session
-from uteki.domains.news.services import get_jeff_cox_service, get_translation_service
+from uteki.domains.auth.deps import get_current_user
+from uteki.domains.news.services import (
+    get_jeff_cox_service, get_translation_service,
+    migrate_local_to_supabase, migrate_supabase_to_local,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,7 +20,6 @@ async def get_monthly_news(
     year: int,
     month: int,
     category: Optional[str] = Query(None, description="分类筛选: all/important/crypto/stocks/forex"),
-    session: AsyncSession = Depends(get_session)
 ):
     """
     获取指定月份的 Jeff Cox 新闻
@@ -28,7 +29,7 @@ async def get_monthly_news(
     """
     try:
         service = get_jeff_cox_service()
-        news_by_date = await service.get_monthly_news(session, year, month, category)
+        news_by_date = await service.get_monthly_news(year, month, category)
 
         return {
             "success": True,
@@ -46,21 +47,18 @@ async def get_monthly_news(
 
 
 @router.get("/jeff-cox/article/{article_id}")
-async def get_article_detail(
-    article_id: str,
-    session: AsyncSession = Depends(get_session)
-):
+async def get_article_detail(article_id: str):
     """获取文章详情"""
     try:
         service = get_jeff_cox_service()
-        article = await service.get_article_by_id(session, article_id)
+        article = await service.get_article_by_id(article_id)
 
         if not article:
             raise HTTPException(status_code=404, detail="文章不存在")
 
         return {
             "success": True,
-            "data": article.to_dict()
+            "data": article
         }
 
     except HTTPException:
@@ -73,16 +71,15 @@ async def get_article_detail(
 @router.get("/jeff-cox/latest")
 async def get_latest_news(
     limit: int = Query(10, ge=1, le=100),
-    session: AsyncSession = Depends(get_session)
 ):
     """获取最新新闻"""
     try:
         service = get_jeff_cox_service()
-        articles = await service.get_latest_news(session, limit)
+        articles = await service.get_latest_news(limit)
 
         return {
             "success": True,
-            "data": [article.to_dict() for article in articles],
+            "data": articles,
             "total_count": len(articles)
         }
 
@@ -94,7 +91,7 @@ async def get_latest_news(
 @router.post("/jeff-cox/scrape")
 async def trigger_scrape(
     max_news: int = Query(10, ge=1, le=50),
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     手动触发新闻抓取
@@ -104,7 +101,7 @@ async def trigger_scrape(
     """
     try:
         service = get_jeff_cox_service()
-        result = await service.collect_and_enrich(session, max_news)
+        result = await service.collect_and_enrich(max_news)
 
         return result
 
@@ -117,7 +114,7 @@ async def trigger_scrape(
 async def translate_pending_articles(
     limit: int = Query(10, ge=1, le=50, description="最多翻译多少篇"),
     provider: str = Query("deepseek", description="翻译提供商: deepseek/qwen"),
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     翻译待翻译的新闻文章
@@ -127,7 +124,7 @@ async def translate_pending_articles(
     """
     try:
         translation_service = get_translation_service(provider)
-        result = await translation_service.translate_pending_articles(session, limit)
+        result = await translation_service.translate_pending_articles(limit)
 
         return {
             "success": True,
@@ -144,7 +141,7 @@ async def translate_pending_articles(
 async def translate_article(
     article_id: str,
     provider: str = Query("deepseek", description="翻译提供商: deepseek/qwen"),
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     翻译单篇文章
@@ -154,7 +151,7 @@ async def translate_article(
     """
     try:
         translation_service = get_translation_service(provider)
-        result = await translation_service.translate_article(article_id, session)
+        result = await translation_service.translate_article(article_id)
 
         return {
             "success": True,
@@ -173,7 +170,7 @@ async def translate_article(
 async def label_unlabeled_articles(
     limit: int = Query(10, ge=1, le=50, description="最多标签多少篇"),
     provider: str = Query("deepseek", description="LLM 提供商: deepseek/qwen"),
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     为已翻译但未标签的文章生成标签
@@ -183,7 +180,7 @@ async def label_unlabeled_articles(
     """
     try:
         translation_service = get_translation_service(provider)
-        result = await translation_service.label_unlabeled_articles(session, limit)
+        result = await translation_service.label_unlabeled_articles(limit)
 
         return {
             "success": True,
@@ -200,7 +197,7 @@ async def label_unlabeled_articles(
 async def label_article(
     article_id: str,
     provider: str = Query("deepseek", description="LLM 提供商: deepseek/qwen"),
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     为单篇文章生成标签
@@ -210,7 +207,7 @@ async def label_article(
     """
     try:
         translation_service = get_translation_service(provider)
-        result = await translation_service.label_article(article_id, session)
+        result = await translation_service.label_article(article_id)
 
         return {
             "success": True,
@@ -222,4 +219,26 @@ async def label_article(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"标签文章失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/migrate-to-supabase")
+async def migrate_to_supabase(user: dict = Depends(get_current_user)):
+    """将本地新闻数据迁移到 Supabase"""
+    try:
+        stats = await migrate_local_to_supabase()
+        return {"success": True, **stats}
+    except Exception as e:
+        logger.error(f"迁移到 Supabase 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sync-from-supabase")
+async def sync_from_supabase(user: dict = Depends(get_current_user)):
+    """将 Supabase 新闻数据同步到本地"""
+    try:
+        stats = await migrate_supabase_to_local()
+        return {"success": True, **stats}
+    except Exception as e:
+        logger.error(f"从 Supabase 同步失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

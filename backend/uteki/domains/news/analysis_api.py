@@ -6,9 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from uteki.common.database import get_session
+from uteki.domains.auth.deps import get_current_user
 from uteki.domains.news.services import get_news_analysis_service
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ class EventAnalysisRequest(BaseModel):
 @router.post("/analyze-news-stream")
 async def analyze_news_stream(
     request: NewsAnalysisRequest,
-    session: AsyncSession = Depends(get_session)
+    user: dict = Depends(get_current_user),
 ):
     """
     流式分析新闻内容（Server-Sent Events）
@@ -54,7 +52,6 @@ async def analyze_news_stream(
                 content=request.content,
                 source=request.source,
                 article_id=request.article_id,
-                session=session
             ):
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
@@ -74,7 +71,10 @@ async def analyze_news_stream(
 
 
 @router.post("/analyze-event-stream")
-async def analyze_event_stream(request: EventAnalysisRequest):
+async def analyze_event_stream(
+    request: EventAnalysisRequest,
+    user: dict = Depends(get_current_user),
+):
     """
     流式分析经济事件（Server-Sent Events）
 
