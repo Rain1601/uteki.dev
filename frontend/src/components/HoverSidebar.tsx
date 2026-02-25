@@ -382,7 +382,7 @@ export default function HoverSidebar() {
   // 桌面端使用原有的悬浮侧边栏
   return (
     <>
-      {/* 毛玻璃遮罩层 - 覆盖主内容区域 */}
+      {/* 遮罩层 - 覆盖主内容区域 */}
       <Box
         sx={{
           position: 'fixed',
@@ -390,8 +390,7 @@ export default function HoverSidebar() {
           left: SIDEBAR_COLLAPSED_WIDTH,
           right: 0,
           bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.06)',
-          backdropFilter: 'blur(2px)',
+          backgroundColor: 'rgba(0, 0, 0, 0.03)',
           opacity: isHovered ? 1 : 0,
           pointerEvents: isHovered ? 'auto' : 'none',
           transition: 'opacity 0.35s cubic-bezier(0.23, 1, 0.32, 1)',
@@ -481,13 +480,11 @@ export default function HoverSidebar() {
           left: 0,
           width: `${SIDEBAR_EXPANDED_WIDTH}px`,
           height: '100%',
-          background: `${theme.background.deepest}f2`, // 半透明
-          backdropFilter: 'blur(16px) saturate(1.2)',
+          background: theme.background.deepest,
           borderRight: `1px solid ${theme.border.default}`,
-          boxShadow: '4px 0 16px rgba(0, 0, 0, 0.15)',
+          boxShadow: isHovered ? '4px 0 16px rgba(0, 0, 0, 0.15)' : 'none',
           transform: isHovered ? 'translateX(0)' : 'translateX(-100%)',
-          opacity: isHovered ? 1 : 0,
-          transition: 'transform 0.35s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s cubic-bezier(0.23, 1, 0.32, 1)',
+          transition: 'transform 0.35s cubic-bezier(0.23, 1, 0.32, 1), box-shadow 0.35s ease',
           zIndex: 1301,
           overflow: 'hidden',
           '&::before': {
