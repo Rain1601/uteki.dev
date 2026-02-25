@@ -124,10 +124,12 @@ export function analyzeNewsStream(
 
   const fetchStream = async () => {
     try {
+      const token = localStorage.getItem('auth_token');
       const response = await fetch(`${API_BASE_URL}/api/news-analysis/analyze-news-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           title,
@@ -213,10 +215,12 @@ export function analyzeEventStream(
 
   const fetchStream = async () => {
     try {
+      const token = localStorage.getItem('auth_token');
       const response = await fetch(`${API_BASE_URL}/api/news-analysis/analyze-event-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           event_title: eventTitle,

@@ -32,31 +32,30 @@ async def main():
         "bloomberg credit market bonds yield",
     ]
 
-    async with db_manager.get_postgres_session() as session:
-        # 抓取 News 部分
-        print("\n=== 抓取 Bloomberg News ===")
-        # 直接用 apify_client 搜索，再手动调用 collect
-        service.apify_client = BloombergApifyClient()
+    # 抓取 News 部分
+    print("\n=== 抓取 Bloomberg News ===")
+    # 直接用 apify_client 搜索，再手动调用 collect
+    service.apify_client = BloombergApifyClient()
 
-        # 覆盖默认搜索词，先抓 news
-        original_queries = service.apify_client.__class__.__dict__.get('DEFAULT_SEARCH_QUERIES')
+    # 覆盖默认搜索词，先抓 news
+    original_queries = service.apify_client.__class__.__dict__.get('DEFAULT_SEARCH_QUERIES')
 
-        # 用 news queries 搜索
-        import uteki.domains.news.services.bloomberg_apify as apify_mod
-        old_queries = apify_mod.DEFAULT_SEARCH_QUERIES
+    # 用 news queries 搜索
+    import uteki.domains.news.services.bloomberg_apify as apify_mod
+    old_queries = apify_mod.DEFAULT_SEARCH_QUERIES
 
-        apify_mod.DEFAULT_SEARCH_QUERIES = news_queries
-        result_news = await service.collect_and_enrich(session, max_news=10)
-        print(f"News 结果: {result_news}")
+    apify_mod.DEFAULT_SEARCH_QUERIES = news_queries
+    result_news = await service.collect_and_enrich(max_news=10)
+    print(f"News 结果: {result_news}")
 
-        # 用 bond queries 搜索
-        print("\n=== 抓取 Bloomberg Bond ===")
-        apify_mod.DEFAULT_SEARCH_QUERIES = bond_queries
-        result_bond = await service.collect_and_enrich(session, max_news=10)
-        print(f"Bond 结果: {result_bond}")
+    # 用 bond queries 搜索
+    print("\n=== 抓取 Bloomberg Bond ===")
+    apify_mod.DEFAULT_SEARCH_QUERIES = bond_queries
+    result_bond = await service.collect_and_enrich(max_news=10)
+    print(f"Bond 结果: {result_bond}")
 
-        # 恢复
-        apify_mod.DEFAULT_SEARCH_QUERIES = old_queries
+    # 恢复
+    apify_mod.DEFAULT_SEARCH_QUERIES = old_queries
 
     print("\n持久化完成!")
     print(f"  News: 发现 {result_news.get('new_urls_found', 0)} 篇, 保存 {result_news.get('new_articles_saved', 0)} 篇")
