@@ -50,9 +50,9 @@ poetry.lock
 *.sqlite
 *.sqlite3
 
-# Logs (keep directory structure and README, ignore log files)
-logs/*.log
-logs/*.log.*
+# Logs (keep directory structure, ignore all log files including rotated)
+logs/
+*.log.*
 
 # Environment variables
 .env
@@ -84,6 +84,13 @@ frontend/build/
 
 # Docker
 *.log
+
+# SQL scripts (migrations managed externally)
+backend/uteki/scripts/*.sql
+
+# OpenSpec change artifacts (design docs, not code)
+openspec/changes/
+backend/openspec/
 
 # Backup files
 *.bak
