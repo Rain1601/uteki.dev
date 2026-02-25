@@ -4,11 +4,9 @@ Auth API - OAuth登录端点
 from fastapi import APIRouter, Depends, Response, Request, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from typing import Optional
-from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 import os
 
-from uteki.common.database import get_session
 from uteki.common.config import settings
 from uteki.domains.admin.service import UserService
 from .service import AuthService
@@ -18,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize auth service
+# Initialize services
 auth_service = AuthService()
+user_service = UserService()
 
 
 def get_frontend_url() -> str:
     """获取前端URL，用于登录后重定向"""
-    # 生产环境使用环境变量，开发环境使用 localhost
     if settings.environment == "production":
         return "https://uteki-frontend-ob52o276la-uc.a.run.app"
     return "http://localhost:5173"
@@ -42,7 +40,6 @@ async def github_login(
     if not settings.github_client_id:
         raise HTTPException(status_code=500, detail="GitHub OAuth not configured")
 
-    # 使用 redirect_url 作为 state（简化实现）
     state = redirect_url or get_frontend_url()
     login_url = auth_service.get_github_login_url(state=state)
     return RedirectResponse(url=login_url)
@@ -52,13 +49,11 @@ async def github_login(
 async def github_callback(
     code: str = Query(...),
     state: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_session),
 ):
     """GitHub OAuth 回调处理"""
     frontend_url = state or get_frontend_url()
 
     try:
-        # 获取用户信息
         user_info = await auth_service.exchange_github_code(code)
         if not user_info:
             logger.error("GitHub OAuth: Failed to get user info")
@@ -66,10 +61,7 @@ async def github_callback(
 
         logger.info(f"GitHub OAuth: Got user info for {user_info.get('email')}")
 
-        # 创建或获取用户
-        user_service = UserService()
         user = await user_service.get_or_create_oauth_user(
-            session=session,
             oauth_provider=user_info["provider"],
             oauth_id=user_info["provider_id"],
             email=user_info.get("email"),
@@ -77,12 +69,10 @@ async def github_callback(
             avatar_url=user_info.get("avatar"),
         )
 
-        logger.info(f"GitHub OAuth: User created/found with id {user.id}")
+        logger.info(f"GitHub OAuth: User created/found with id {user['id']}")
 
-        # 生成 JWT token
-        token = auth_service.create_user_token(str(user.id), user_info)
+        token = auth_service.create_user_token(str(user["id"]), user_info)
 
-        # 重定向到前端，通过 URL hash 传递 token（跨域场景）
         redirect_url = f"{frontend_url}#token={token}"
         response = RedirectResponse(url=redirect_url)
         response.set_cookie(
@@ -121,13 +111,11 @@ async def google_login(
 async def google_callback(
     code: str = Query(...),
     state: Optional[str] = Query(None),
-    session: AsyncSession = Depends(get_session),
 ):
     """Google OAuth 回调处理"""
     frontend_url = state or get_frontend_url()
 
     try:
-        # 获取用户信息
         user_info = await auth_service.exchange_google_code(code)
         if not user_info:
             logger.error("Google OAuth: Failed to get user info")
@@ -135,10 +123,7 @@ async def google_callback(
 
         logger.info(f"Google OAuth: Got user info for {user_info.get('email')}")
 
-        # 创建或获取用户
-        user_service = UserService()
         user = await user_service.get_or_create_oauth_user(
-            session=session,
             oauth_provider=user_info["provider"],
             oauth_id=user_info["provider_id"],
             email=user_info.get("email"),
@@ -146,12 +131,10 @@ async def google_callback(
             avatar_url=user_info.get("avatar"),
         )
 
-        logger.info(f"Google OAuth: User created/found with id {user.id}")
+        logger.info(f"Google OAuth: User created/found with id {user['id']}")
 
-        # 生成 JWT token
-        token = auth_service.create_user_token(str(user.id), user_info)
+        token = auth_service.create_user_token(str(user["id"]), user_info)
 
-        # 重定向到前端
         redirect_url = f"{frontend_url}#token={token}"
         response = RedirectResponse(url=redirect_url)
         response.set_cookie(
@@ -191,14 +174,10 @@ async def logout(response: Response):
 
 
 @router.get("/debug/test-user-creation")
-async def debug_test_user_creation(
-    session: AsyncSession = Depends(get_session),
-):
+async def debug_test_user_creation():
     """Debug: 测试用户创建流程"""
     try:
-        user_service = UserService()
         user = await user_service.get_or_create_oauth_user(
-            session=session,
             oauth_provider="test",
             oauth_id="test-123",
             email="test@example.com",
@@ -207,9 +186,9 @@ async def debug_test_user_creation(
         )
         return {
             "success": True,
-            "user_id": str(user.id),
-            "email": user.email,
-            "username": user.username,
+            "user_id": str(user["id"]),
+            "email": user["email"],
+            "username": user["username"],
         }
     except Exception as e:
         logger.error(f"Debug user creation error: {str(e)}", exc_info=True)
@@ -218,4 +197,3 @@ async def debug_test_user_creation(
             "error": str(e),
             "error_type": type(e).__name__,
         }
-    return {"message": "Logged out successfully"}
