@@ -53,6 +53,8 @@ trafilatura = "^1.12.0"
 apify-client = "^1.8.0"
 # Task scheduling
 apscheduler = "^3.10.4"
+# Supabase REST API
+supabase = "^2.0.0"
 # Monitoring
 prometheus-client = "^0.20.0"
 email-validator = "^2.3.0"
