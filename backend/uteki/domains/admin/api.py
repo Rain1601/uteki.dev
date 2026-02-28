@@ -2,10 +2,12 @@
 Admin domain API routes - FastAPI路由
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, HTTPException, status, Query
+from fastapi.encoders import jsonable_encoder
 from typing import List
 
+from uteki.common.cache import get_cache_service
 from uteki.common.database import db_manager
 from uteki.domains.admin import schemas
 from uteki.domains.admin.service import (
@@ -18,6 +20,13 @@ from uteki.domains.admin.service import (
     get_data_source_config_service,
     get_encryption_service,
 )
+
+_TTL = 86400
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
 
 router = APIRouter()
 
@@ -72,6 +81,7 @@ async def create_api_key(data: schemas.APIKeyCreate):
         status="success",
         details={"provider": data.provider, "environment": data.environment},
     )
+    await get_cache_service().delete_pattern("uteki:admin:api_keys:")
 
     return schemas.APIKeyResponse(
         id=api_key["id"],
@@ -94,34 +104,46 @@ async def list_api_keys(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有API密钥配置（不包含敏感信息）"""
-    items, total = await api_key_svc.list_api_keys(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedAPIKeysResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await api_key_svc.list_api_keys(skip, limit)
+        return jsonable_encoder(schemas.PaginatedAPIKeysResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:api_keys:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
 @router.get("/api-keys/{api_key_id}", response_model=schemas.APIKeyResponse, summary="获取API密钥")
 async def get_api_key(api_key_id: str):
     """获取指定API密钥（不包含敏感信息）"""
-    api_key = await api_key_svc.get_api_key(api_key_id, decrypt=False)
-    if not api_key:
-        raise HTTPException(status_code=404, detail="API key not found")
+    cache = get_cache_service()
 
-    return schemas.APIKeyResponse(
-        id=api_key["id"],
-        provider=api_key["provider"],
-        display_name=api_key["display_name"],
-        environment=api_key["environment"],
-        description=api_key.get("description"),
-        is_active=api_key["is_active"],
-        has_secret=api_key.get("api_secret") is not None,
-        created_at=api_key["created_at"],
-        updated_at=api_key["updated_at"],
+    async def _fetch():
+        api_key = await api_key_svc.get_api_key(api_key_id, decrypt=False)
+        if not api_key:
+            raise HTTPException(status_code=404, detail="API key not found")
+        return jsonable_encoder(schemas.APIKeyResponse(
+            id=api_key["id"],
+            provider=api_key["provider"],
+            display_name=api_key["display_name"],
+            environment=api_key["environment"],
+            description=api_key.get("description"),
+            is_active=api_key["is_active"],
+            has_secret=api_key.get("api_secret") is not None,
+            created_at=api_key["created_at"],
+            updated_at=api_key["updated_at"],
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:api_keys:get:{_today()}:{api_key_id}", _fetch, ttl=_TTL,
     )
 
 
@@ -139,6 +161,7 @@ async def update_api_key(api_key_id: str, data: schemas.APIKeyUpdate):
         resource_id=api_key_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:api_keys:")
 
     return schemas.APIKeyResponse(
         id=api_key["id"],
@@ -170,6 +193,7 @@ async def delete_api_key(api_key_id: str):
         resource_id=api_key_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:api_keys:")
 
     return schemas.MessageResponse(message="API key deleted successfully")
 
@@ -187,6 +211,7 @@ async def create_user(data: schemas.UserCreate):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = await user_svc.create_user(data)
+    await get_cache_service().delete_pattern("uteki:admin:users:")
     return user
 
 
@@ -196,24 +221,37 @@ async def list_users(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有用户"""
-    items, total = await user_svc.list_users(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedUsersResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await user_svc.list_users(skip, limit)
+        return jsonable_encoder(schemas.PaginatedUsersResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:users:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
 @router.get("/users/{user_id}", response_model=schemas.UserResponse, summary="获取用户")
 async def get_user(user_id: str):
     """获取指定用户"""
-    user = await user_svc.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    cache = get_cache_service()
+
+    async def _fetch():
+        user = await user_svc.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return jsonable_encoder(user)
+
+    return await cache.get_or_set(
+        f"uteki:admin:users:get:{_today()}:{user_id}", _fetch, ttl=_TTL,
+    )
 
 
 @router.patch("/users/{user_id}", response_model=schemas.UserResponse, summary="更新用户")
@@ -222,6 +260,7 @@ async def update_user(user_id: str, data: schemas.UserUpdate):
     user = await user_svc.update_user(user_id, data)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    await get_cache_service().delete_pattern("uteki:admin:users:")
     return user
 
 
@@ -234,23 +273,36 @@ async def update_user(user_id: str, data: schemas.UserUpdate):
 async def set_config(data: schemas.SystemConfigCreate):
     """设置系统配置（创建或更新）"""
     config = await config_svc.set_config(data)
+    await get_cache_service().delete_pattern("uteki:admin:configs:")
     return config
 
 
 @router.get("/config", response_model=List[schemas.SystemConfigResponse], summary="列出所有配置")
 async def list_configs():
     """列出所有系统配置"""
-    configs = await config_svc.list_all_configs()
-    return configs
+    cache = get_cache_service()
+
+    async def _fetch():
+        configs = await config_svc.list_all_configs()
+        return jsonable_encoder(configs)
+
+    return await cache.get_or_set(f"uteki:admin:configs:list:{_today()}", _fetch, ttl=_TTL)
 
 
 @router.get("/config/{config_key}", response_model=schemas.SystemConfigResponse, summary="获取配置")
 async def get_config(config_key: str):
     """获取指定配置"""
-    config = await config_svc.get_config(config_key)
-    if not config:
-        raise HTTPException(status_code=404, detail="Config not found")
-    return config
+    cache = get_cache_service()
+
+    async def _fetch():
+        config = await config_svc.get_config(config_key)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config not found")
+        return jsonable_encoder(config)
+
+    return await cache.get_or_set(
+        f"uteki:admin:configs:get:{_today()}:{config_key}", _fetch, ttl=_TTL,
+    )
 
 
 @router.delete("/config/{config_key}", response_model=schemas.MessageResponse, summary="删除配置")
@@ -259,6 +311,7 @@ async def delete_config(config_key: str):
     success = await config_svc.delete_config(config_key)
     if not success:
         raise HTTPException(status_code=404, detail="Config not found")
+    await get_cache_service().delete_pattern("uteki:admin:configs:")
     return schemas.MessageResponse(message="Config deleted successfully")
 
 
@@ -273,14 +326,20 @@ async def list_audit_logs(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有审计日志"""
-    items, total = await audit_svc.list_all_logs(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedAuditLogsResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await audit_svc.list_all_logs(skip, limit)
+        return jsonable_encoder(schemas.PaginatedAuditLogsResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:audit_logs:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
@@ -291,14 +350,20 @@ async def list_user_audit_logs(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出指定用户的审计日志"""
-    items, total = await audit_svc.list_user_logs(user_id, skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedAuditLogsResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await audit_svc.list_user_logs(user_id, skip, limit)
+        return jsonable_encoder(schemas.PaginatedAuditLogsResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:audit_logs:user:{_today()}:{user_id}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
@@ -330,6 +395,7 @@ async def create_llm_provider(data: schemas.LLMProviderCreate):
         status="success",
         details={"provider": data.provider, "model": data.model},
     )
+    await get_cache_service().delete_pattern("uteki:admin:llm_providers:")
 
     return provider
 
@@ -344,14 +410,20 @@ async def list_llm_providers(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有LLM提供商配置"""
-    items, total = await llm_svc.list_providers(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedLLMProvidersResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await llm_svc.list_providers(skip, limit)
+        return jsonable_encoder(schemas.PaginatedLLMProvidersResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:llm_providers:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
@@ -362,8 +434,15 @@ async def list_llm_providers(
 )
 async def list_active_llm_providers():
     """列出所有激活的LLM提供商（按优先级排序）"""
-    providers = await llm_svc.list_active_providers()
-    return providers
+    cache = get_cache_service()
+
+    async def _fetch():
+        providers = await llm_svc.list_active_providers()
+        return jsonable_encoder(providers)
+
+    return await cache.get_or_set(
+        f"uteki:admin:llm_providers:active:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get(
@@ -373,10 +452,17 @@ async def list_active_llm_providers():
 )
 async def get_default_llm_provider():
     """获取默认LLM提供商"""
-    provider = await llm_svc.get_default_provider()
-    if not provider:
-        raise HTTPException(status_code=404, detail="No default LLM provider configured")
-    return provider
+    cache = get_cache_service()
+
+    async def _fetch():
+        provider = await llm_svc.get_default_provider()
+        if not provider:
+            raise HTTPException(status_code=404, detail="No default LLM provider configured")
+        return jsonable_encoder(provider)
+
+    return await cache.get_or_set(
+        f"uteki:admin:llm_providers:default:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.post(
@@ -418,6 +504,8 @@ async def create_llm_provider_with_key(data: schemas.LLMProviderCreateWithKey):
         status="success",
         details={"provider": data.provider, "model": data.model},
     )
+    await get_cache_service().delete_pattern("uteki:admin:llm_providers:")
+    await get_cache_service().delete_pattern("uteki:admin:api_keys:")
 
     return provider
 
@@ -440,10 +528,17 @@ async def get_runtime_models():
 )
 async def get_llm_provider(provider_id: str):
     """获取指定LLM提供商"""
-    provider = await llm_svc.get_provider(provider_id)
-    if not provider:
-        raise HTTPException(status_code=404, detail="LLM provider not found")
-    return provider
+    cache = get_cache_service()
+
+    async def _fetch():
+        provider = await llm_svc.get_provider(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="LLM provider not found")
+        return jsonable_encoder(provider)
+
+    return await cache.get_or_set(
+        f"uteki:admin:llm_providers:get:{_today()}:{provider_id}", _fetch, ttl=_TTL,
+    )
 
 
 @router.patch(
@@ -481,6 +576,7 @@ async def update_llm_provider(provider_id: str, data: schemas.LLMProviderUpdate)
         resource_id=provider_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:llm_providers:")
 
     return provider
 
@@ -502,6 +598,7 @@ async def delete_llm_provider(provider_id: str):
         resource_id=provider_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:llm_providers:")
 
     return schemas.MessageResponse(message="LLM provider deleted successfully")
 
@@ -534,6 +631,7 @@ async def create_exchange_config(data: schemas.ExchangeConfigCreate):
         status="success",
         details={"exchange": data.exchange},
     )
+    await get_cache_service().delete_pattern("uteki:admin:exchanges:")
 
     return exchange
 
@@ -548,14 +646,20 @@ async def list_exchange_configs(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有交易所配置"""
-    items, total = await exchange_svc.list_exchanges(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedExchangeConfigsResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await exchange_svc.list_exchanges(skip, limit)
+        return jsonable_encoder(schemas.PaginatedExchangeConfigsResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:exchanges:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
@@ -566,8 +670,15 @@ async def list_exchange_configs(
 )
 async def list_active_exchanges():
     """列出所有激活的交易所配置"""
-    exchanges = await exchange_svc.list_active_exchanges()
-    return exchanges
+    cache = get_cache_service()
+
+    async def _fetch():
+        exchanges = await exchange_svc.list_active_exchanges()
+        return jsonable_encoder(exchanges)
+
+    return await cache.get_or_set(
+        f"uteki:admin:exchanges:active:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get(
@@ -577,10 +688,17 @@ async def list_active_exchanges():
 )
 async def get_exchange_config(config_id: str):
     """获取指定交易所配置"""
-    exchange = await exchange_svc.get_exchange(config_id)
-    if not exchange:
-        raise HTTPException(status_code=404, detail="Exchange config not found")
-    return exchange
+    cache = get_cache_service()
+
+    async def _fetch():
+        exchange = await exchange_svc.get_exchange(config_id)
+        if not exchange:
+            raise HTTPException(status_code=404, detail="Exchange config not found")
+        return jsonable_encoder(exchange)
+
+    return await cache.get_or_set(
+        f"uteki:admin:exchanges:get:{_today()}:{config_id}", _fetch, ttl=_TTL,
+    )
 
 
 @router.patch(
@@ -600,6 +718,7 @@ async def update_exchange_config(config_id: str, data: schemas.ExchangeConfigUpd
         resource_id=config_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:exchanges:")
 
     return exchange
 
@@ -621,6 +740,7 @@ async def delete_exchange_config(config_id: str):
         resource_id=config_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:exchanges:")
 
     return schemas.MessageResponse(message="Exchange config deleted successfully")
 
@@ -653,6 +773,7 @@ async def create_data_source_config(data: schemas.DataSourceConfigCreate):
         status="success",
         details={"source_type": data.source_type},
     )
+    await get_cache_service().delete_pattern("uteki:admin:data_sources:")
 
     return data_source
 
@@ -667,14 +788,20 @@ async def list_data_source_configs(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """列出所有数据源配置"""
-    items, total = await datasource_svc.list_data_sources(skip, limit)
+    cache = get_cache_service()
 
-    return schemas.PaginatedDataSourceConfigsResponse(
-        items=items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+    async def _fetch():
+        items, total = await datasource_svc.list_data_sources(skip, limit)
+        return jsonable_encoder(schemas.PaginatedDataSourceConfigsResponse(
+            items=items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:admin:data_sources:list:{_today()}:{skip}:{limit}", _fetch, ttl=_TTL,
     )
 
 
@@ -685,8 +812,15 @@ async def list_data_source_configs(
 )
 async def list_active_data_sources():
     """列出所有激活的数据源配置（按优先级排序）"""
-    data_sources = await datasource_svc.list_active_data_sources()
-    return data_sources
+    cache = get_cache_service()
+
+    async def _fetch():
+        data_sources = await datasource_svc.list_active_data_sources()
+        return jsonable_encoder(data_sources)
+
+    return await cache.get_or_set(
+        f"uteki:admin:data_sources:active:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get(
@@ -696,8 +830,15 @@ async def list_active_data_sources():
 )
 async def list_data_sources_by_type(data_type: str):
     """根据数据类型列出数据源（如"stock", "crypto"）"""
-    data_sources = await datasource_svc.list_by_data_type(data_type)
-    return data_sources
+    cache = get_cache_service()
+
+    async def _fetch():
+        data_sources = await datasource_svc.list_by_data_type(data_type)
+        return jsonable_encoder(data_sources)
+
+    return await cache.get_or_set(
+        f"uteki:admin:data_sources:by_type:{_today()}:{data_type}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get(
@@ -707,10 +848,17 @@ async def list_data_sources_by_type(data_type: str):
 )
 async def get_data_source_config(config_id: str):
     """获取指定数据源配置"""
-    data_source = await datasource_svc.get_data_source(config_id)
-    if not data_source:
-        raise HTTPException(status_code=404, detail="Data source config not found")
-    return data_source
+    cache = get_cache_service()
+
+    async def _fetch():
+        data_source = await datasource_svc.get_data_source(config_id)
+        if not data_source:
+            raise HTTPException(status_code=404, detail="Data source config not found")
+        return jsonable_encoder(data_source)
+
+    return await cache.get_or_set(
+        f"uteki:admin:data_sources:get:{_today()}:{config_id}", _fetch, ttl=_TTL,
+    )
 
 
 @router.patch(
@@ -730,6 +878,7 @@ async def update_data_source_config(config_id: str, data: schemas.DataSourceConf
         resource_id=config_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:data_sources:")
 
     return data_source
 
@@ -751,6 +900,7 @@ async def delete_data_source_config(config_id: str):
         resource_id=config_id,
         status="success",
     )
+    await get_cache_service().delete_pattern("uteki:admin:data_sources:")
 
     return schemas.MessageResponse(message="Data source config deleted successfully")
 
@@ -763,14 +913,21 @@ async def delete_data_source_config(config_id: str):
 @router.get("/system/server-ip", summary="获取服务器公网IP")
 async def get_server_ip():
     """获取服务器的公网IP地址"""
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get("https://api.ipify.org?format=json")
-            data = response.json()
-            return {"ip": data["ip"]}
-    except Exception as e:
-        return {"ip": None, "error": str(e)}
+    cache = get_cache_service()
+
+    async def _fetch():
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("https://api.ipify.org?format=json")
+                data = response.json()
+                return {"ip": data["ip"]}
+        except Exception as e:
+            return {"ip": None, "error": str(e)}
+
+    return await cache.get_or_set(
+        f"uteki:admin:server_ip:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get("/system/health", summary="系统健康检查")

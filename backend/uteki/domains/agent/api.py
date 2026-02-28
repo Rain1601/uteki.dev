@@ -2,6 +2,7 @@
 Agent domain API routes - FastAPI路由
 """
 
+from datetime import date
 from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import StreamingResponse, Response
 from typing import List, Optional
@@ -12,6 +13,7 @@ import uuid
 import base64
 import httpx
 
+from uteki.common.cache import get_cache_service
 from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
 from uteki.domains.agent.research import ResearchRequest, DeepResearchOrchestrator
@@ -27,6 +29,14 @@ from fastapi import Depends
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_TTL = 86400
+_SHORT_TTL = 300
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
 
 # Module-level service instance (no DB session needed)
 chat_svc = get_chat_service()
@@ -55,6 +65,7 @@ async def create_conversation(
     """
     data.user_id = current_user["user_id"] if current_user else "default"
     conversation = await chat_svc.create_conversation(data)
+    await get_cache_service().delete_pattern(f"uteki:agent:conversations:{data.user_id}:")
 
     return schemas.ChatConversationResponse(
         id=conversation["id"],
@@ -80,30 +91,39 @@ async def list_conversations(
 ):
     """列出当前用户的聊天会话"""
     user_id = current_user["user_id"] if current_user else "default"
-    items, total = await chat_svc.list_conversations(
-        user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
-    )
+    cache = get_cache_service()
 
-    # 转换为响应schema
-    response_items = [
-        schemas.ChatConversationResponse(
-            id=item["id"],
-            title=item["title"],
-            mode=item["mode"],
-            user_id=item.get("user_id"),
-            is_archived=item.get("is_archived", False),
-            created_at=item["created_at"],
-            updated_at=item["updated_at"],
+    async def _fetch():
+        items, total = await chat_svc.list_conversations(
+            user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
         )
-        for item in items
-    ]
 
-    return schemas.PaginatedConversationsResponse(
-        items=response_items,
-        total=total,
-        page=skip // limit + 1,
-        page_size=limit,
-        total_pages=(total + limit - 1) // limit,
+        # 转换为响应schema
+        response_items = [
+            schemas.ChatConversationResponse(
+                id=item["id"],
+                title=item["title"],
+                mode=item["mode"],
+                user_id=item.get("user_id"),
+                is_archived=item.get("is_archived", False),
+                created_at=item["created_at"],
+                updated_at=item["updated_at"],
+            )
+            for item in items
+        ]
+
+        from fastapi.encoders import jsonable_encoder
+        return jsonable_encoder(schemas.PaginatedConversationsResponse(
+            items=response_items,
+            total=total,
+            page=skip // limit + 1,
+            page_size=limit,
+            total_pages=(total + limit - 1) // limit,
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:agent:conversations:{user_id}:list:{_today()}:{skip}:{limit}:{include_archived}",
+        _fetch, ttl=_SHORT_TTL,
     )
 
 
@@ -114,35 +134,43 @@ async def list_conversations(
 )
 async def get_conversation(conversation_id: str):
     """获取指定聊天会话的详细信息（包含消息历史）"""
-    conversation = await chat_svc.get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    cache = get_cache_service()
 
-    # 获取消息历史
-    messages = await chat_svc.get_conversation_messages(conversation_id)
+    async def _fetch():
+        conversation = await chat_svc.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return schemas.ChatConversationDetailResponse(
-        id=conversation["id"],
-        title=conversation["title"],
-        mode=conversation["mode"],
-        user_id=conversation.get("user_id"),
-        is_archived=conversation.get("is_archived", False),
-        created_at=conversation["created_at"],
-        updated_at=conversation["updated_at"],
-        messages=[
-            schemas.ChatMessageResponse(
-                id=msg["id"],
-                conversation_id=msg["conversation_id"],
-                role=msg["role"],
-                content=msg["content"],
-                llm_provider=msg.get("llm_provider"),
-                llm_model=msg.get("llm_model"),
-                token_usage=msg.get("token_usage"),
-                created_at=msg["created_at"],
-                updated_at=msg["updated_at"],
-            )
-            for msg in messages
-        ],
+        # 获取消息历史
+        messages = await chat_svc.get_conversation_messages(conversation_id)
+
+        from fastapi.encoders import jsonable_encoder
+        return jsonable_encoder(schemas.ChatConversationDetailResponse(
+            id=conversation["id"],
+            title=conversation["title"],
+            mode=conversation["mode"],
+            user_id=conversation.get("user_id"),
+            is_archived=conversation.get("is_archived", False),
+            created_at=conversation["created_at"],
+            updated_at=conversation["updated_at"],
+            messages=[
+                schemas.ChatMessageResponse(
+                    id=msg["id"],
+                    conversation_id=msg["conversation_id"],
+                    role=msg["role"],
+                    content=msg["content"],
+                    llm_provider=msg.get("llm_provider"),
+                    llm_model=msg.get("llm_model"),
+                    token_usage=msg.get("token_usage"),
+                    created_at=msg["created_at"],
+                    updated_at=msg["updated_at"],
+                )
+                for msg in messages
+            ],
+        ))
+
+    return await cache.get_or_set(
+        f"uteki:agent:conversations:get:{_today()}:{conversation_id}", _fetch, ttl=_SHORT_TTL,
     )
 
 
@@ -159,6 +187,7 @@ async def update_conversation(
     conversation = await chat_svc.update_conversation(conversation_id, data)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    await get_cache_service().delete_pattern("uteki:agent:conversations:")
 
     return schemas.ChatConversationResponse(
         id=conversation["id"],
@@ -181,6 +210,7 @@ async def delete_conversation(conversation_id: str):
     success = await chat_svc.delete_conversation(conversation_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    await get_cache_service().delete_pattern("uteki:agent:conversations:")
 
     return schemas.MessageResponse(message="Conversation deleted successfully")
 
@@ -226,6 +256,9 @@ async def chat(data: schemas.ChatRequest):
             }
             yield f"data: {json.dumps(error_data)}\n\n"
 
+    # Invalidate conversation caches after chat
+    await get_cache_service().delete_pattern("uteki:agent:conversations:")
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -265,6 +298,8 @@ async def chat_sync(data: schemas.ChatRequest):
             status_code=500, detail="Failed to generate response"
         )
 
+    await get_cache_service().delete_pattern("uteki:agent:conversations:")
+
     # 返回完整响应
     return schemas.ChatResponse(
         conversation_id=conversation_id,
@@ -287,44 +322,51 @@ async def get_available_models():
     """
     返回所有支持的模型列表（从 DB model_config 读取）
     """
-    from uteki.domains.index.services.arena_service import load_models_from_db
+    cache = get_cache_service()
 
-    PROVIDER_ICONS = {
-        "anthropic": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
-        "openai": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
-        "deepseek": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
-        "google": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
-        "qwen": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
-        "minimax": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
-        "doubao": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/doubao-color.png",
-    }
-    PROVIDER_DISPLAY = {
-        "anthropic": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",
-        "google": "Google", "qwen": "Qwen", "minimax": "MiniMax", "doubao": "豆包",
-    }
+    async def _fetch():
+        from uteki.domains.index.services.arena_service import load_models_from_db
 
-    db_models = load_models_from_db()
-    if not db_models:
-        return {
-            "models": [],
-            "default_model": None,
-            "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。",
+        PROVIDER_ICONS = {
+            "anthropic": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
+            "openai": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
+            "deepseek": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
+            "google": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
+            "qwen": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
+            "minimax": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
+            "doubao": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/doubao-color.png",
+        }
+        PROVIDER_DISPLAY = {
+            "anthropic": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",
+            "google": "Google", "qwen": "Qwen", "minimax": "MiniMax", "doubao": "豆包",
         }
 
-    all_models = []
-    for m in db_models:
-        all_models.append({
-            "id": m["model"],
-            "name": m["model"],
-            "provider": PROVIDER_DISPLAY.get(m["provider"], m["provider"]),
-            "icon": PROVIDER_ICONS.get(m["provider"], ""),
-            "available": True,
-        })
+        db_models = load_models_from_db()
+        if not db_models:
+            return {
+                "models": [],
+                "default_model": None,
+                "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。",
+            }
 
-    return {
-        "models": all_models,
-        "default_model": db_models[0]["model"] if db_models else None,
-    }
+        all_models = []
+        for m in db_models:
+            all_models.append({
+                "id": m["model"],
+                "name": m["model"],
+                "provider": PROVIDER_DISPLAY.get(m["provider"], m["provider"]),
+                "icon": PROVIDER_ICONS.get(m["provider"], ""),
+                "available": True,
+            })
+
+        return {
+            "models": all_models,
+            "default_model": db_models[0]["model"] if db_models else None,
+        }
+
+    return await cache.get_or_set(
+        f"uteki:agent:models_available:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 # ============================================================================
