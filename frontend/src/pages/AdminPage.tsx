@@ -23,24 +23,10 @@ import {
   InputLabel,
   Slider,
 } from '@mui/material';
-import {
-  Refresh as RefreshIcon,
-  ContentCopy as CopyIcon,
-  Public as PublicIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Close as CloseIcon,
-  Edit as EditIcon,
-  Save as SaveIcon,
-  Visibility as VisibilityIcon,
-  VisibilityOff as VisibilityOffIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-  Star as StarIcon,
-} from '@mui/icons-material';
+import { RefreshCw as RefreshIcon, Copy as CopyIcon, Globe as PublicIcon, Plus as AddIcon, Trash2 as DeleteIcon, X as CloseIcon, Pencil as EditIcon, Save as SaveIcon, Eye as VisibilityIcon, EyeOff as VisibilityOffIcon, ChevronDown as ExpandMoreIcon, ChevronUp as ExpandLessIcon, Star as StarIcon } from 'lucide-react';
 import LoadingDots from '../components/LoadingDots';
 import { useTheme } from '../theme/ThemeProvider';
-import { useToast } from '../components/Toast';
+import { toast } from 'sonner';
 import { get } from '../api/client';
 import { adminApi } from '../api/admin';
 import { useSystemHealth } from '../hooks/useAdmin';
@@ -71,7 +57,6 @@ const PROVIDERS = Object.keys(PROVIDER_DEFAULTS);
 export default function AdminPage() {
   const { theme } = useTheme();
   const isDark = theme.mode === 'dark';
-  const { showToast } = useToast();
   const [tab, setTab] = useState<'overview' | 'exchanges' | 'models'>('overview');
 
   const cardBg = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)';
@@ -110,16 +95,16 @@ export default function AdminPage() {
         ))}
       </Box>
 
-      {tab === 'overview' && <OverviewTab theme={theme} isDark={isDark} showToast={showToast} />}
-      {tab === 'exchanges' && <ExchangesTab theme={theme} isDark={isDark} showToast={showToast} cardBg={cardBg} cardBorder={cardBorder} />}
-      {tab === 'models' && <ModelsTab theme={theme} isDark={isDark} showToast={showToast} cardBg={cardBg} cardBorder={cardBorder} />}
+      {tab === 'overview' && <OverviewTab theme={theme} isDark={isDark} />}
+      {tab === 'exchanges' && <ExchangesTab theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder} />}
+      {tab === 'models' && <ModelsTab theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder} />}
     </Box>
   );
 }
 
 /* ═══════════════ Overview Tab ═══════════════ */
 
-function OverviewTab({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
+function OverviewTab({ theme, isDark }: { theme: any; isDark: boolean }) {
   const [ipAddress, setIpAddress] = useState<string | null>(null);
   const [ipLoading, setIpLoading] = useState(false);
   const [ipCopied, setIpCopied] = useState(false);
@@ -139,9 +124,9 @@ function OverviewTab({ theme, isDark, showToast }: { theme: any; isDark: boolean
     try {
       await navigator.clipboard.writeText(ipAddress);
       setIpCopied(true);
-      showToast('IP 已复制', 'success');
+      toast.success('IP 已复制');
       setTimeout(() => setIpCopied(false), 2000);
-    } catch { showToast('复制失败', 'error'); }
+    } catch { toast.error('复制失败'); }
   };
 
   useEffect(() => { fetchIp(); }, []);
@@ -165,7 +150,7 @@ function OverviewTab({ theme, isDark, showToast }: { theme: any; isDark: boolean
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <PublicIcon sx={{ color: theme.brand.primary }} />
+                <PublicIcon size={24} style={{ color: theme.brand.primary }} />
                 <Typography sx={{ fontWeight: 600, fontSize: 15 }}>服务器 IP</Typography>
               </Box>
               <IconButton size="small" onClick={fetchIp} disabled={ipLoading}><RefreshIcon /></IconButton>
@@ -173,7 +158,7 @@ function OverviewTab({ theme, isDark, showToast }: { theme: any; isDark: boolean
             {ipLoading ? <LoadingDots text="获取中" /> : ipAddress ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5, bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)', borderRadius: 1, border: `1px solid ${theme.border.default}` }}>
                 <Typography sx={{ flex: 1, fontFamily: 'monospace', fontSize: 18, fontWeight: 600, color: theme.brand.primary }}>{ipAddress}</Typography>
-                <Tooltip title={ipCopied ? '已复制!' : '复制'}><IconButton size="small" onClick={copyIp}><CopyIcon fontSize="small" /></IconButton></Tooltip>
+                <Tooltip title={ipCopied ? '已复制!' : '复制'}><IconButton size="small" onClick={copyIp}><CopyIcon size={18} /></IconButton></Tooltip>
               </Box>
             ) : <Alert severity="error">无法获取 IP</Alert>}
           </CardContent>
@@ -209,7 +194,7 @@ function OverviewTab({ theme, isDark, showToast }: { theme: any; isDark: boolean
 
 /* ═══════════════ Exchanges Tab ═══════════════ */
 
-function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: any; isDark: boolean; showToast: any; cardBg: string; cardBorder: string }) {
+function ExchangesTab({ theme, isDark, cardBg, cardBorder }: { theme: any; isDark: boolean; cardBg: string; cardBorder: string }) {
   const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [editExchange, setEditExchange] = useState<string | null>(null);
@@ -252,10 +237,10 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
           ...(apiSecret ? { api_secret: apiSecret } : {}),
           extra_config: Object.keys(extraConfig).length > 0 ? extraConfig : undefined,
         });
-        showToast('已更新', 'success');
+        toast.success('已更新');
       } else {
         // Create
-        if (!apiKey) { showToast('请输入 API Key', 'error'); setSaving(false); return; }
+        if (!apiKey) { toast.error('请输入 API Key'); setSaving(false); return; }
         await adminApi.apiKeys.create({
           provider: exchangeName,
           display_name: ex.label,
@@ -265,13 +250,13 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
           environment: 'production',
           is_active: true,
         });
-        showToast('已创建', 'success');
+        toast.success('已创建');
       }
       setEditExchange(null);
       setForm({});
       load();
     } catch (e: any) {
-      showToast(e.message || '保存失败', 'error');
+      toast.error(e.message || '保存失败');
     } finally { setSaving(false); }
   };
 
@@ -280,10 +265,10 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
     if (!key) return;
     try {
       await adminApi.apiKeys.delete(key.id);
-      showToast('已删除', 'success');
+      toast.success('已删除');
       setDeleteConfirm(null);
       load();
-    } catch (e: any) { showToast(e.message || '删除失败', 'error'); }
+    } catch (e: any) { toast.error(e.message || '删除失败'); }
   };
 
   if (loading) return <LoadingDots text="加载中" fontSize={13} />;
@@ -334,7 +319,7 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
                 </Button>
                 {configured && (
                   <IconButton size="small" onClick={() => setDeleteConfirm(ex.name)} sx={{ color: theme.text.muted, '&:hover': { color: '#f44336' } }}>
-                    <DeleteIcon fontSize="small" />
+                    <DeleteIcon size={18} />
                   </IconButton>
                 )}
               </Box>
@@ -357,7 +342,7 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
                       sx: { color: theme.text.primary, fontSize: 13, fontFamily: 'monospace' },
                       endAdornment: (
                         <IconButton size="small" onClick={() => setShowSecret({ ...showSecret, [field]: !showSecret[field] })} sx={{ color: theme.text.muted }}>
-                          {showSecret[field] ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                          {showSecret[field] ? <VisibilityOffIcon size={18} /> : <VisibilityIcon size={18} />}
                         </IconButton>
                       ),
                     }}
@@ -400,7 +385,7 @@ function ExchangesTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme:
 
 /* ═══════════════ Models Tab ═══════════════ */
 
-function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: any; isDark: boolean; showToast: any; cardBg: string; cardBorder: string }) {
+function ModelsTab({ theme, isDark, cardBg, cardBorder }: { theme: any; isDark: boolean; cardBg: string; cardBorder: string }) {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -442,7 +427,7 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
   };
 
   const handleSaveNew = async () => {
-    if (!editForm.api_key) { showToast('请输入 API Key', 'error'); return; }
+    if (!editForm.api_key) { toast.error('请输入 API Key'); return; }
     setSaving(true);
     try {
       await adminApi.llmProviders.createWithKey({
@@ -455,11 +440,11 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
         max_tokens: editForm.max_tokens,
         is_default: editForm.is_default,
       });
-      showToast('模型已添加', 'success');
+      toast.success('模型已添加');
       setExpandedId(null);
       setEditForm({});
       load();
-    } catch (e: any) { showToast(e.message || '创建失败', 'error'); }
+    } catch (e: any) { toast.error(e.message || '创建失败'); }
     finally { setSaving(false); }
   };
 
@@ -479,11 +464,11 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
       if (Object.keys(config).length > 0) update.config = config;
 
       await adminApi.llmProviders.update(id, update);
-      showToast('已更新', 'success');
+      toast.success('已更新');
       setExpandedId(null);
       setEditForm({});
       load();
-    } catch (e: any) { showToast(e.message || '更新失败', 'error'); }
+    } catch (e: any) { toast.error(e.message || '更新失败'); }
     finally { setSaving(false); }
   };
 
@@ -491,16 +476,16 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
     try {
       await adminApi.llmProviders.update(id, { [field]: value });
       load();
-    } catch { showToast('操作失败', 'error'); }
+    } catch { toast.error('操作失败'); }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await adminApi.llmProviders.delete(id);
-      showToast('已删除', 'success');
+      toast.success('已删除');
       setDeleteConfirm(null);
       load();
-    } catch (e: any) { showToast(e.message || '删除失败', 'error'); }
+    } catch (e: any) { toast.error(e.message || '删除失败'); }
   };
 
   const startEdit = (p: LLMProvider) => {
@@ -562,7 +547,7 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary }}>{p.model}</Typography>
                     {p.is_default && (
-                      <Chip icon={<StarIcon sx={{ fontSize: 10 }} />} label="默认" size="small" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(255,193,7,0.15)', color: '#ffc107', '& .MuiChip-icon': { color: '#ffc107' } }} />
+                      <Chip icon={<StarIcon size={10} />} label="默认" size="small" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(255,193,7,0.15)', color: '#ffc107', '& .MuiChip-icon': { color: '#ffc107' } }} />
                     )}
                   </Box>
                   <Typography sx={{ fontSize: 11, color: theme.text.muted, lineHeight: 1.3 }}>
@@ -577,7 +562,7 @@ function ModelsTab({ theme, isDark, showToast, cardBg, cardBorder }: { theme: an
                   onClick={e => e.stopPropagation()}
                   sx={{ '& .MuiSwitch-switchBase.Mui-checked': { color: theme.brand.primary }, '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: theme.brand.primary } }}
                 />
-                {expandedId === p.id ? <ExpandLessIcon sx={{ color: theme.text.muted, fontSize: 18 }} /> : <ExpandMoreIcon sx={{ color: theme.text.muted, fontSize: 18 }} />}
+                {expandedId === p.id ? <ExpandLessIcon size={18} style={{ color: theme.text.muted }} /> : <ExpandMoreIcon size={18} style={{ color: theme.text.muted }} />}
               </Box>
 
               {/* Expanded edit */}
@@ -691,7 +676,7 @@ function ModelEditCard({ theme, isDark, cardBorder, editForm, setEditForm, showK
           value={editForm.api_key || ''} onChange={e => setEditForm({ ...editForm, api_key: e.target.value })}
           InputProps={{
             sx: { color: theme.text.primary, fontSize: 12, fontFamily: 'monospace' },
-            endAdornment: <IconButton size="small" onClick={() => setShowKey(!showKey)} sx={{ color: theme.text.muted }}>{showKey ? <VisibilityOffIcon sx={{ fontSize: 16 }} /> : <VisibilityIcon sx={{ fontSize: 16 }} />}</IconButton>,
+            endAdornment: <IconButton size="small" onClick={() => setShowKey(!showKey)} sx={{ color: theme.text.muted }}>{showKey ? <VisibilityOffIcon size={16} /> : <VisibilityIcon size={16} />}</IconButton>,
           }}
           InputLabelProps={labelSx} sx={{ flex: 1, ...inputSx }}
         />
@@ -711,16 +696,16 @@ function ModelEditCard({ theme, isDark, cardBorder, editForm, setEditForm, showK
         <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
           {onToggleDefault && (
             <IconButton size="small" onClick={onToggleDefault} sx={{ color: isDefault ? '#ffc107' : theme.text.muted }}>
-              <StarIcon sx={{ fontSize: 18 }} />
+              <StarIcon size={18} />
             </IconButton>
           )}
           {onDelete && (
             <IconButton size="small" onClick={onDelete} sx={{ color: theme.text.muted, '&:hover': { color: '#f44336' } }}>
-              <DeleteIcon sx={{ fontSize: 18 }} />
+              <DeleteIcon size={18} />
             </IconButton>
           )}
           <Button size="small" onClick={onCancel} sx={{ textTransform: 'none', fontSize: 12, color: theme.text.muted, minWidth: 'auto', px: 1 }}>取消</Button>
-          <Button size="small" startIcon={<SaveIcon sx={{ fontSize: 14 }} />} onClick={onSave} disabled={saving}
+          <Button size="small" startIcon={<SaveIcon size={14} />} onClick={onSave} disabled={saving}
             sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, fontSize: 12, borderRadius: 1.5, minWidth: 'auto', px: 1.5, '&:hover': { bgcolor: theme.brand.hover }, '&.Mui-disabled': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', color: theme.text.muted } }}>
             {saving ? '...' : '保存'}
           </Button>

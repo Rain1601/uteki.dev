@@ -28,7 +28,7 @@ export default function LoginPage() {
           justifyContent: 'center',
           alignItems: 'center',
           minHeight: '100vh',
-          bgcolor: theme.background.deepest,
+          bgcolor: theme.background.primary,
         }}
       >
         <LoadingDots text="加载中" fontSize={16} />

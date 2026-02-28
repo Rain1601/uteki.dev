@@ -16,12 +16,7 @@ import {
   Tooltip,
   SwipeableDrawer,
 } from '@mui/material';
-import {
-  Send as SendIcon,
-  Add as AddIcon,
-  History as HistoryIcon,
-  Search as SearchIcon,
-} from '@mui/icons-material';
+import { SendHorizonal as SendIcon, Plus as AddIcon, History as HistoryIcon, Search as SearchIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive, useKeyboardVisibility } from '../hooks/useResponsive';
 import ChatMessage from '../components/ChatMessage';
@@ -500,7 +495,7 @@ export default function AgentChatPage() {
         m: -3,
         display: 'flex',
         flexDirection: 'column',
-        bgcolor: theme.background.deepest,
+        bgcolor: theme.background.primary,
         color: theme.text.primary,
         position: 'relative',
         overflow: 'hidden',
@@ -543,7 +538,7 @@ export default function AgentChatPage() {
             },
           }}
         >
-          <HistoryIcon sx={{ fontSize: '20px' }} />
+          <HistoryIcon size={20} />
           {!(isMobile || isSmallScreen) && (
             <Box
               component="span"
@@ -585,7 +580,7 @@ export default function AgentChatPage() {
             },
           }}
         >
-          <AddIcon sx={{ fontSize: '20px' }} />
+          <AddIcon size={20} />
           {!(isMobile || isSmallScreen) && (
             <Box
               component="span"
@@ -701,7 +696,7 @@ export default function AgentChatPage() {
                         },
                       }}
                     >
-                      <SendIcon />
+                      <SendIcon size={20} />
                     </IconButton>
                   ),
                 }}
@@ -751,7 +746,7 @@ export default function AgentChatPage() {
                     },
                   }}
                 >
-                  <SearchIcon sx={{ fontSize: '16px' }} />
+                  <SearchIcon size={16} />
                   <span>Research</span>
                 </Button>
 
@@ -950,7 +945,7 @@ export default function AgentChatPage() {
                   },
                 }}
               >
-                <SearchIcon sx={{ fontSize: '16px' }} />
+                <SearchIcon size={16} />
                 <span>Research</span>
               </Button>
 
@@ -1062,7 +1057,7 @@ export default function AgentChatPage() {
                       color: message.trim() && !isStreaming ? theme.brand.primary : theme.text.disabled,
                     }}
                   >
-                    <SendIcon />
+                    <SendIcon size={20} />
                   </IconButton>
                 ),
               }}

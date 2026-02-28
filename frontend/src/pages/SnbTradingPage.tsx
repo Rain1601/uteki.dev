@@ -28,18 +28,10 @@ import {
   Select,
   SelectChangeEvent,
 } from '@mui/material';
-import {
-  Refresh as RefreshIcon,
-  EditOutlined as EditIcon,
-  NoteAdd as AddCommentIcon,
-  Add as AddIcon,
-  Close as CloseIcon,
-  LockOutlined as LockIcon,
-  QrCode2 as QrCodeIcon,
-} from '@mui/icons-material';
+import { RefreshCw as RefreshIcon, Pencil as EditIcon, FilePlus as AddCommentIcon, Plus as AddIcon, X as CloseIcon, Lock as LockIcon, QrCode as QrCodeIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import LoadingDots from '../components/LoadingDots';
-import { useToast } from '../components/Toast';
+import { toast } from 'sonner';
 import {
   SnbBalance,
   SnbPosition,
@@ -61,7 +53,6 @@ import {
 
 export default function SnbTradingPage() {
   const { theme, isDark } = useTheme();
-  const { showToast } = useToast();
 
   // Availability state
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -208,7 +199,7 @@ export default function SnbTradingPage() {
       // 密钥已自动存入 DB（已登录用户），无需重启后端
       setTotpConfigured(true);
     } catch (e: any) {
-      showToast('生成 TOTP 密钥失败', 'error');
+      toast.error('生成 TOTP 密钥失败');
     } finally {
       setTotpSetupLoading(false);
     }
@@ -220,15 +211,15 @@ export default function SnbTradingPage() {
     try {
       const result = await placeOrder(orderForm);
       if (result.success) {
-        showToast('下单成功', 'success');
+        toast.success('下单成功');
         setOrderDialogOpen(false);
         setOrderForm({ symbol: '', side: 'BUY', quantity: 0, order_type: 'MKT', price: undefined, time_in_force: 'DAY', totp_code: '' });
         loadOrders();
       } else {
-        showToast(result.error || '下单失败', 'error');
+        toast.error(result.error || '下单失败');
       }
     } catch (e: any) {
-      showToast(e.response?.data?.detail || '下单失败', 'error');
+      toast.error(e.response?.data?.detail || '下单失败');
     } finally {
       setOrderSubmitting(false);
     }
@@ -239,15 +230,15 @@ export default function SnbTradingPage() {
     try {
       const result = await cancelOrder(cancelOrderId, cancelTotpCode);
       if (result.success) {
-        showToast('撤单成功', 'success');
+        toast.success('撤单成功');
         setCancelDialogOpen(false);
         setCancelTotpCode('');
         loadOrders();
       } else {
-        showToast(result.error || '撤单失败', 'error');
+        toast.error(result.error || '撤单失败');
       }
     } catch (e: any) {
-      showToast(e.response?.data?.detail || '撤单失败', 'error');
+      toast.error(e.response?.data?.detail || '撤单失败');
     } finally {
       setCancelSubmitting(false);
     }
@@ -276,14 +267,14 @@ export default function SnbTradingPage() {
         notes: notesForm.notes,
       });
       if (result.success) {
-        showToast('备注已保存', 'success');
+        toast.success('备注已保存');
         setNotesDialogOpen(false);
         loadTransactions();
       } else {
-        showToast(result.error || '保存失败', 'error');
+        toast.error(result.error || '保存失败');
       }
     } catch (e: any) {
-      showToast('保存失败', 'error');
+      toast.error('保存失败');
     } finally {
       setNotesSubmitting(false);
     }
@@ -340,7 +331,7 @@ export default function SnbTradingPage() {
           bgcolor: theme.background.primary, color: theme.text.primary, p: 3,
         }}
       >
-        <LockIcon sx={{ fontSize: 48, color: theme.text.muted, mb: 2 }} />
+        <LockIcon size={48} style={{ color: theme.text.muted, marginBottom: 16 }} />
         <Typography sx={{ fontSize: 20, fontWeight: 600, mb: 1 }}>雪盈证券 · 仅限本地使用</Typography>
         <Typography sx={{ fontSize: 14, color: theme.text.muted, textAlign: 'center', maxWidth: 480, lineHeight: 1.8 }}>
           此功能需要在本地部署环境中配置雪盈证券 API 密钥才能使用。
@@ -646,7 +637,7 @@ export default function SnbTradingPage() {
                           <TableCell sx={tableCellSx}>
                             <Tooltip title={tx.note ? '编辑备注' : '添加备注'}>
                               <IconButton size="small" onClick={() => openNotesDialog(tx)} sx={{ color: theme.text.muted }}>
-                                {tx.note ? <EditIcon fontSize="small" /> : <AddCommentIcon fontSize="small" />}
+                                {tx.note ? <EditIcon size={18} /> : <AddCommentIcon size={18} />}
                               </IconButton>
                             </Tooltip>
                           </TableCell>
@@ -870,7 +861,7 @@ function TotpSetupInline({ theme, isDark, cardBg, cardBorder, totpSetup, totpSet
 
   return (
     <Box sx={{ p: 2, bgcolor: isDark ? 'rgba(255,193,7,0.06)' : 'rgba(255,193,7,0.04)', borderRadius: 2, border: `1px solid ${isDark ? 'rgba(255,193,7,0.2)' : 'rgba(255,193,7,0.15)'}`, textAlign: 'center' }}>
-      <QrCodeIcon sx={{ fontSize: 32, color: theme.brand.primary, mb: 1 }} />
+      <QrCodeIcon size={32} style={{ color: theme.brand.primary, marginBottom: 8 }} />
       <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary, mb: 0.5 }}>
         需要设置二次验证
       </Typography>

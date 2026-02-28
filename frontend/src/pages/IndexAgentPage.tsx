@@ -1,14 +1,6 @@
 import { useState } from 'react';
 import { Box, Typography, Tabs, Tab } from '@mui/material';
-import {
-  Casino as ArenaIcon,
-  ShowChart as WatchlistIcon,
-  Timeline as TimelineIcon,
-  Leaderboard as LeaderboardIcon,
-  Settings as SettingsIcon,
-  Assessment as BacktestIcon,
-  Insights as EvaluationIcon,
-} from '@mui/icons-material';
+import { Dices as ArenaIcon, LineChart as WatchlistIcon, GitBranch as TimelineIcon, Trophy as LeaderboardIcon, Settings as SettingsIcon, BarChart3 as BacktestIcon, Sparkles as EvaluationIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import ArenaView from '../components/index/ArenaView';
 import WatchlistPanel from '../components/index/WatchlistPanel';
@@ -19,13 +11,13 @@ import BacktestPanel from '../components/index/BacktestPanel';
 import EvaluationPanel from '../components/index/EvaluationPanel';
 
 const tabs = [
-  { label: 'Arena', icon: <ArenaIcon fontSize="small" /> },
-  { label: 'Watchlist', icon: <WatchlistIcon fontSize="small" /> },
-  { label: 'History', icon: <TimelineIcon fontSize="small" /> },
-  { label: 'Leaderboard', icon: <LeaderboardIcon fontSize="small" /> },
-  { label: 'Backtest', icon: <BacktestIcon fontSize="small" /> },
-  { label: 'Evaluation', icon: <EvaluationIcon fontSize="small" /> },
-  { label: 'Settings', icon: <SettingsIcon fontSize="small" /> },
+  { label: 'Arena', icon: <ArenaIcon size={18} /> },
+  { label: 'Watchlist', icon: <WatchlistIcon size={18} /> },
+  { label: 'History', icon: <TimelineIcon size={18} /> },
+  { label: 'Leaderboard', icon: <LeaderboardIcon size={18} /> },
+  { label: 'Backtest', icon: <BacktestIcon size={18} /> },
+  { label: 'Evaluation', icon: <EvaluationIcon size={18} /> },
+  { label: 'Settings', icon: <SettingsIcon size={18} /> },
 ];
 
 export default function IndexAgentPage() {

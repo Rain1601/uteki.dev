@@ -10,14 +10,7 @@ import {
   Chip,
   SelectChangeEvent,
 } from '@mui/material';
-import {
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
-  Today as TodayIcon,
-  EmojiObjects as AIIcon,
-  ThumbUp as ThumbUpIcon,
-  ThumbDown as ThumbDownIcon,
-} from '@mui/icons-material';
+import { ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, CalendarDays as TodayIcon, Lightbulb as AIIcon, ThumbsUp as ThumbUpIcon, ThumbsDown as ThumbDownIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import { getMonthlyNews, analyzeNewsStream, NewsSource } from '../api/news';
 import ArticleDetailDialog from '../components/ArticleDetailDialog';
@@ -652,7 +645,7 @@ export default function NewsTimelinePage() {
                   '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', color: theme.text.secondary },
                 }}
               >
-                <ChevronLeftIcon sx={{ fontSize: 16 }} />
+                <ChevronLeftIcon size={16} />
               </IconButton>
               <IconButton
                 size="small"
@@ -668,7 +661,7 @@ export default function NewsTimelinePage() {
                   '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', color: theme.text.secondary },
                 }}
               >
-                <TodayIcon sx={{ fontSize: 16 }} />
+                <TodayIcon size={16} />
               </IconButton>
               <IconButton
                 size="small"
@@ -683,7 +676,7 @@ export default function NewsTimelinePage() {
                   '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', color: theme.text.secondary },
                 }}
               >
-                <ChevronRightIcon sx={{ fontSize: 16 }} />
+                <ChevronRightIcon size={16} />
               </IconButton>
             </Box>
           </Box>
@@ -1280,7 +1273,7 @@ export default function NewsTimelinePage() {
                           <Button
                             size="small"
                             onClick={(e) => analyzeNews(newsItem, e)}
-                            startIcon={<AIIcon sx={{ fontSize: 14 }} />}
+                            startIcon={<AIIcon size={14} />}
                             sx={{
                               px: 1.5,
                               py: 0.5,
@@ -1438,7 +1431,7 @@ export default function NewsTimelinePage() {
                                     borderRadius: 0.5,
                                   }}
                                 >
-                                  <ThumbUpIcon sx={{ fontSize: 18 }} />
+                                  <ThumbUpIcon size={18} />
                                 </IconButton>
                                 <IconButton
                                   size="small"
@@ -1450,7 +1443,7 @@ export default function NewsTimelinePage() {
                                     borderRadius: 0.5,
                                   }}
                                 >
-                                  <ThumbDownIcon sx={{ fontSize: 18 }} />
+                                  <ThumbDownIcon size={18} />
                                 </IconButton>
                               </Box>
                             </Box>

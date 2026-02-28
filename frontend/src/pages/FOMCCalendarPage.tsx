@@ -8,15 +8,7 @@ import {
   Button,
   Divider,
 } from '@mui/material';
-import {
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
-  Event as EventIcon,
-  TrendingUp as TrendingUpIcon,
-  Assessment as AssessmentIcon,
-  Star as StarIcon,
-  EmojiObjects as AIIcon,
-} from '@mui/icons-material';
+import { ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, Calendar as EventIcon, TrendingUp as TrendingUpIcon, BarChart3 as AssessmentIcon, Star as StarIcon, Lightbulb as AIIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import LoadingDots from '../components/LoadingDots';
 import { getMonthlyEventsEnriched, getEventStatistics } from '../api/economicCalendar';
@@ -290,7 +282,7 @@ export default function FOMCCalendarPage() {
     if (sortedDates.length === 0) {
       return (
         <Box sx={{ textAlign: 'center', p: 7.5, color: theme.text.muted }}>
-          <EventIcon sx={{ fontSize: 64, mb: 2, opacity: 0.3 }} />
+          <EventIcon size={64} style={{ marginBottom: 16, opacity: 0.3 }} />
           <Typography variant="h6">No events found</Typography>
           <Typography variant="body2">Try selecting a different month or filter</Typography>
         </Box>
@@ -331,7 +323,7 @@ export default function FOMCCalendarPage() {
               gap: 1,
             }}
           >
-            <EventIcon fontSize="small" />
+            <EventIcon size={18} />
             {formattedDate}
           </Typography>
 
@@ -472,7 +464,7 @@ export default function FOMCCalendarPage() {
                   <Button
                     size="small"
                     onClick={(e) => analyzeEvent(event, e)}
-                    startIcon={<AIIcon sx={{ fontSize: 14 }} />}
+                    startIcon={<AIIcon size={14} />}
                     sx={{
                       px: 2,
                       py: 0.75,
@@ -668,11 +660,11 @@ export default function FOMCCalendarPage() {
 
           <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
             {[
-              { key: 'all', label: '全部 All', icon: <AssessmentIcon fontSize="small" /> },
-              { key: 'fomc', label: 'FOMC会议', icon: <StarIcon fontSize="small" /> },
-              { key: 'employment', label: '就业数据', icon: <TrendingUpIcon fontSize="small" /> },
-              { key: 'inflation', label: '通胀数据', icon: <TrendingUpIcon fontSize="small" /> },
-              { key: 'consumption,gdp', label: '消费&GDP', icon: <AssessmentIcon fontSize="small" /> },
+              { key: 'all', label: '全部 All', icon: <AssessmentIcon size={18} /> },
+              { key: 'fomc', label: 'FOMC会议', icon: <StarIcon size={18} /> },
+              { key: 'employment', label: '就业数据', icon: <TrendingUpIcon size={18} /> },
+              { key: 'inflation', label: '通胀数据', icon: <TrendingUpIcon size={18} /> },
+              { key: 'consumption,gdp', label: '消费&GDP', icon: <AssessmentIcon size={18} /> },
             ].map((filter) => (
               <Chip
                 key={filter.key}

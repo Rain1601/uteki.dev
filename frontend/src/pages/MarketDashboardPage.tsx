@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Box, Typography, IconButton } from '@mui/material';
-import { Refresh as RefreshIcon } from '@mui/icons-material';
+import { RefreshCw as RefreshIcon } from 'lucide-react';
 
 const AssetsTreemap = lazy(() => import('../components/macro/AssetsTreemap'));
 const TradingViewHeatmap = lazy(() => import('../components/macro/TradingViewHeatmap'));
@@ -515,7 +515,7 @@ export default function MarketDashboardPage() {
           })}
 
           <IconButton onClick={fetchAll} size="small" sx={{ color: theme.text.muted, ml: 0.5, '&:hover': { color: theme.text.primary } }}>
-            <RefreshIcon sx={{ fontSize: 16 }} />
+            <RefreshIcon size={16} />
           </IconButton>
         </Box>
       </Box>
