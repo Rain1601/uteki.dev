@@ -394,7 +394,7 @@ export default function FOMCCalendarPage() {
                   <Typography sx={{ fontSize: 13, color: theme.text.secondary, mb: 1 }}>{event.description}</Typography>
                 )}
 
-                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                   {event.importance && (
                     <Box
                       sx={{
@@ -411,6 +411,12 @@ export default function FOMCCalendarPage() {
                     >
                       {event.importance}
                     </Box>
+                  )}
+
+                  {event.status && (
+                    <Typography sx={{ fontSize: 12, color: theme.text.muted, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {event.status === 'past' ? '✅' : event.status === 'ongoing' ? '🔴' : '🔜'} {event.status === 'past' ? 'Past' : event.status === 'ongoing' ? 'Live' : 'Upcoming'}
+                    </Typography>
                   )}
 
                   {event.event_type === 'fomc' && (
@@ -430,7 +436,7 @@ export default function FOMCCalendarPage() {
                 </Box>
 
                 {/* Economic Data Display */}
-                {event.status === 'past' && event.event_type === 'economic_data' &&
+                {event.status === 'past' && event.event_type !== 'fomc' &&
                  (event.actual !== null || event.forecast !== null || event.previous !== null) && (
                   <Box
                     sx={{
@@ -442,24 +448,18 @@ export default function FOMCCalendarPage() {
                     }}
                   >
                     <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.brand.primary, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                      Economic Data
+                      经济数据 ECONOMIC DATA
                     </Typography>
-                    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                      {event.actual !== null && (
-                        <Box>
-                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>Actual</Typography>
-                          <Typography sx={{ fontSize: 16, fontWeight: 600, color: '#4caf50' }}>{event.actual}</Typography>
-                        </Box>
-                      )}
+                    <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                       {event.forecast !== null && (
                         <Box>
-                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>Forecast</Typography>
+                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>预测值 Forecast</Typography>
                           <Typography sx={{ fontSize: 16, fontWeight: 600, color: '#ff9800' }}>{event.forecast}</Typography>
                         </Box>
                       )}
                       {event.previous !== null && (
                         <Box>
-                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>Previous</Typography>
+                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>前值 Previous</Typography>
                           <Typography sx={{ fontSize: 16, fontWeight: 600, color: theme.text.secondary }}>{event.previous}</Typography>
                         </Box>
                       )}
@@ -488,7 +488,7 @@ export default function FOMCCalendarPage() {
                       },
                     }}
                   >
-                    AI Analysis
+                    AI解读
                   </Button>
                 </Box>
 
@@ -668,11 +668,11 @@ export default function FOMCCalendarPage() {
 
           <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
             {[
-              { key: 'all', label: 'All', icon: <AssessmentIcon fontSize="small" /> },
-              { key: 'fomc', label: 'FOMC', icon: <StarIcon fontSize="small" /> },
-              { key: 'employment', label: 'Employment', icon: <TrendingUpIcon fontSize="small" /> },
-              { key: 'inflation', label: 'Inflation', icon: <TrendingUpIcon fontSize="small" /> },
-              { key: 'consumption,gdp', label: 'Consumption & GDP', icon: <AssessmentIcon fontSize="small" /> },
+              { key: 'all', label: '全部 All', icon: <AssessmentIcon fontSize="small" /> },
+              { key: 'fomc', label: 'FOMC会议', icon: <StarIcon fontSize="small" /> },
+              { key: 'employment', label: '就业数据', icon: <TrendingUpIcon fontSize="small" /> },
+              { key: 'inflation', label: '通胀数据', icon: <TrendingUpIcon fontSize="small" /> },
+              { key: 'consumption,gdp', label: '消费&GDP', icon: <AssessmentIcon fontSize="small" /> },
             ].map((filter) => (
               <Chip
                 key={filter.key}
