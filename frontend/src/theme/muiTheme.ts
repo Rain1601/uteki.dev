@@ -76,7 +76,7 @@ const darkThemeOptions: ThemeOptions = {
     fontWeightBold: 600,
   },
   shape: {
-    borderRadius: 12, // 圆角设计
+    borderRadius: 12, // 统一圆角
   },
   components: {
     MuiCssBaseline: {

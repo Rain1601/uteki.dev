@@ -135,20 +135,20 @@ export const darkTheme: ColorScheme = {
   mode: 'dark',
 
   background: {
-    deepest: '#212121',      // BG1 - 深灰（匹配原项目）
-    primary: '#212121',      // BG2 - 主背景（与 deepest 统一）
-    secondary: '#2a2a2a',    // BG3 - 次背景/Paper
-    tertiary: '#303030',     // BG4 - 卡片背景/hover
-    quaternary: '#363636',
-    hover: '#303030',        // BG5 - 悬浮状态
-    active: '#3a3a3a',
+    deepest: '#0a0a0a',      // BG1 - 极深黑
+    primary: '#181c1f',      // BG2 - 主背景
+    secondary: '#1E1E1E',    // BG3 - 次背景/Paper
+    tertiary: '#262830',     // BG4 - 卡片背景
+    quaternary: '#2e3039',
+    hover: '#2e3039',        // BG5 - 悬浮状态
+    active: '#353843',
   },
 
   border: {
-    default: 'rgba(255, 255, 255, 0.1)',   // 匹配原项目
-    hover: 'rgba(255, 255, 255, 0.15)',
-    active: 'rgba(255, 255, 255, 0.2)',
-    subtle: 'rgba(255, 255, 255, 0.05)',   // 匹配原项目
+    default: '#333333',
+    hover: '#444444',
+    active: '#555555',
+    subtle: 'rgba(255, 255, 255, 0.12)',
   },
 
   text: {
@@ -272,7 +272,7 @@ export const darkTheme: ColorScheme = {
       primary: 'linear-gradient(135deg, #6495ed 0%, #5578d9 100%)',      // C1 - 道奇蓝渐变
       secondary: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',    // C3 - 紫蓝渐变
       light: 'linear-gradient(135deg, #90caf9 0%, #6495ed 100%)',        // C2 → C1
-      dark: 'linear-gradient(180deg, #181c1f 0%, #1E1E1E 100%)',         // BG2 → BG3
+      dark: 'linear-gradient(180deg, #181c1f 0%, #1E1E1E 100%)',
     },
     shadow: {
       sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
