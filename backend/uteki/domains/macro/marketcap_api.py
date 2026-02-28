@@ -1,13 +1,21 @@
 """Market Cap API — 全球资产市值排名端点"""
 
 import logging
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
+from uteki.common.cache import get_cache_service
 from uteki.domains.macro.services.marketcap_scraper_service import get_marketcap_scraper_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TTL = 86400
+
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 @router.get("")
@@ -16,25 +24,39 @@ async def get_marketcap_list(
     limit: int = Query(200, ge=1, le=500, description="Max results"),
 ):
     """获取最新全球资产市值排名"""
-    try:
-        service = get_marketcap_scraper_service()
-        data = await service.get_latest(asset_type=asset_type, limit=limit)
-        return {"success": True, "data": data, "total": len(data)}
-    except Exception as e:
-        logger.error(f"Marketcap list error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    cache = get_cache_service()
+
+    async def _fetch():
+        try:
+            service = get_marketcap_scraper_service()
+            data = await service.get_latest(asset_type=asset_type, limit=limit)
+            return {"success": True, "data": data, "total": len(data)}
+        except Exception as e:
+            logger.error(f"Marketcap list error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return await cache.get_or_set(
+        f"uteki:marketcap:list:{_today()}:{asset_type}:{limit}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get("/summary")
 async def get_marketcap_summary():
     """获取各类型市值汇总"""
-    try:
-        service = get_marketcap_scraper_service()
-        summary = await service.get_summary()
-        return {"success": True, "data": summary}
-    except Exception as e:
-        logger.error(f"Marketcap summary error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    cache = get_cache_service()
+
+    async def _fetch():
+        try:
+            service = get_marketcap_scraper_service()
+            summary = await service.get_summary()
+            return {"success": True, "data": summary}
+        except Exception as e:
+            logger.error(f"Marketcap summary error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return await cache.get_or_set(
+        f"uteki:marketcap:summary:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.post("/sync")
@@ -43,6 +65,7 @@ async def trigger_sync():
     try:
         service = get_marketcap_scraper_service()
         count = await service.sync_to_db()
+        await get_cache_service().delete_pattern("uteki:marketcap:")
         return {"success": True, "synced": count}
     except Exception as e:
         logger.error(f"Marketcap sync error: {e}", exc_info=True)

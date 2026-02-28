@@ -13,11 +13,11 @@
 import asyncio
 import logging
 import statistics
-import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
+from uteki.common.cache import get_cache_service
 from uteki.common.config import settings
 from uteki.domains.macro.services.fred_service import get_fred_service
 from uteki.domains.index.services.data_service import get_data_service
@@ -92,42 +92,21 @@ SIGNAL_LABELS = {
 
 class MarketDashboardService:
     def __init__(self):
-        self._cache: Dict[str, Dict] = {}
-
-    def _get_cached(self, key: str, ttl: int) -> Optional[Any]:
-        entry = self._cache.get(key)
-        if entry and (time.time() - entry["ts"]) < ttl:
-            return entry["data"]
-        return None
-
-    def _set_cached(self, key: str, data: Any):
-        self._cache[key] = {"data": data, "ts": time.time()}
+        pass
 
     # ── FRED helpers ──
 
     async def _fetch_fred(self, series_id: str, limit: int = 52) -> Dict:
-        ck = f"fred:{series_id}:{limit}"
-        cached = self._get_cached(ck, FRED_CACHE_TTL)
-        if cached:
-            return cached
+        """Fetch FRED series — delegates to FredService which has its own caching."""
         fred = get_fred_service()
-        result = await fred.fetch_series(series_id, limit=limit)
-        if result.get("success"):
-            self._set_cached(ck, result)
-        return result
+        return await fred.fetch_series(series_id, limit=limit)
 
     # ── FMP helpers ──
 
     async def _fetch_quote(self, symbol: str) -> Dict[str, Any]:
-        ck = f"fmp:{symbol}"
-        cached = self._get_cached(ck, FMP_CACHE_TTL)
-        if cached:
-            return cached
+        """Fetch quote — delegates to DataService which has its own caching."""
         ds = get_data_service()
-        result = await ds.get_quote(symbol)
-        if result.get("price") is not None:
-            self._set_cached(ck, result)
-        return result
+        return await ds.get_quote(symbol)
 
     async def _fetch_quotes_batch(self, symbols: List[str]) -> Dict[str, Dict]:
         tasks = [self._fetch_quote(s) for s in symbols]
@@ -145,8 +124,10 @@ class MarketDashboardService:
 
     async def _fetch_ratios_ttm(self, symbol: str) -> Optional[Dict]:
         """Fetch TTM ratios from FMP /stable/ratios-ttm, cached 15min."""
-        ck = f"ratios_ttm:{symbol}"
-        cached = self._get_cached(ck, FMP_CACHE_TTL)
+        cache = get_cache_service()
+        cache_key = f"uteki:dashboard:ratios_ttm:{symbol}"
+
+        cached = await cache.get(cache_key)
         if cached:
             return cached
         if not settings.fmp_api_key:
@@ -163,7 +144,7 @@ class MarketDashboardService:
             if not data:
                 return None
             row = data[0] if isinstance(data, list) else data
-            self._set_cached(ck, row)
+            await cache.set(cache_key, row, ttl=FMP_CACHE_TTL)
             return row
         except Exception as e:
             logger.warning(f"FMP ratios-ttm error for {symbol}: {e}")

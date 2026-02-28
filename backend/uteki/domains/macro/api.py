@@ -1,13 +1,21 @@
 """经济日历 API - FOMC 会议和经济事件"""
 
 import logging
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
+from uteki.common.cache import get_cache_service
 from uteki.domains.macro.services import get_fmp_calendar_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TTL = 86400
+
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 @router.get("/events/monthly/{year}/{month}/enriched")
@@ -23,29 +31,41 @@ async def get_monthly_events_enriched(
     Returns:
         按日期分组的事件字典，包含 actual/forecast/previous 数据
     """
-    try:
-        service = get_fmp_calendar_service()
-        result = await service.get_monthly_events_enriched(
-            year, month, event_type,
-            force_refresh=bool(refresh),
-        )
+    cache = get_cache_service()
+    cache_key = f"uteki:macro:events:{_today()}:{year}:{month}:{event_type}"
 
-        return result
+    if refresh:
+        await cache.delete(cache_key)
 
-    except Exception as e:
-        logger.error(f"获取月度事件失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    async def _fetch():
+        try:
+            service = get_fmp_calendar_service()
+            result = await service.get_monthly_events_enriched(
+                year, month, event_type,
+                force_refresh=bool(refresh),
+            )
+            return result
+        except Exception as e:
+            logger.error(f"获取月度事件失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return await cache.get_or_set(cache_key, _fetch, ttl=_TTL)
 
 
 @router.get("/statistics")
 async def get_statistics():
     """获取事件统计信息"""
-    try:
-        service = get_fmp_calendar_service()
-        result = await service.get_statistics()
+    cache = get_cache_service()
 
-        return result
+    async def _fetch():
+        try:
+            service = get_fmp_calendar_service()
+            result = await service.get_statistics()
+            return result
+        except Exception as e:
+            logger.error(f"获取统计信息失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        logger.error(f"获取统计信息失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await cache.get_or_set(
+        f"uteki:macro:statistics:{_today()}", _fetch, ttl=_TTL,
+    )

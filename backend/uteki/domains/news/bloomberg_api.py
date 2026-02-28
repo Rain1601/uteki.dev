@@ -1,14 +1,22 @@
 """Bloomberg 新闻 API - 企业债券/固收新闻接口"""
 
 import logging
+from datetime import date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 
+from uteki.common.cache import get_cache_service
 from uteki.domains.auth.deps import get_current_user
 from uteki.domains.news.services import get_bloomberg_service, get_translation_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TTL = 86400
+
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 @router.get("/bloomberg/latest")
@@ -16,19 +24,24 @@ async def get_latest_news(
     limit: int = Query(10, ge=1, le=100),
 ):
     """获取最新 Bloomberg 新闻"""
-    try:
-        service = get_bloomberg_service()
-        articles = await service.get_latest_news(limit)
+    cache = get_cache_service()
 
-        return {
-            "success": True,
-            "data": articles,
-            "total_count": len(articles),
-        }
+    async def _fetch():
+        try:
+            service = get_bloomberg_service()
+            articles = await service.get_latest_news(limit)
+            return {
+                "success": True,
+                "data": articles,
+                "total_count": len(articles),
+            }
+        except Exception as e:
+            logger.error(f"获取 Bloomberg 最新新闻失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        logger.error(f"获取 Bloomberg 最新新闻失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await cache.get_or_set(
+        f"uteki:news:bloomberg:latest:{_today()}:{limit}", _fetch, ttl=_TTL,
+    )
 
 
 @router.get("/bloomberg/monthly/{year}/{month}")
@@ -38,45 +51,52 @@ async def get_monthly_news(
     category: Optional[str] = Query(None, description="分类筛选: all/important"),
 ):
     """获取指定月份的 Bloomberg 新闻（按日期分组）"""
-    try:
-        service = get_bloomberg_service()
-        news_by_date = await service.get_monthly_news(year, month, category)
+    cache = get_cache_service()
 
-        return {
-            "success": True,
-            "data": news_by_date,
-            "date_range": {
-                "start_date": f"{year}-{month:02d}-01",
-                "end_date": f"{year}-{month:02d}-28",
-            },
-            "category": category,
-        }
+    async def _fetch():
+        try:
+            service = get_bloomberg_service()
+            news_by_date = await service.get_monthly_news(year, month, category)
+            return {
+                "success": True,
+                "data": news_by_date,
+                "date_range": {
+                    "start_date": f"{year}-{month:02d}-01",
+                    "end_date": f"{year}-{month:02d}-28",
+                },
+                "category": category,
+            }
+        except Exception as e:
+            logger.error(f"获取 Bloomberg 月度新闻失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        logger.error(f"获取 Bloomberg 月度新闻失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await cache.get_or_set(
+        f"uteki:news:bloomberg:monthly:{_today()}:{year}:{month}:{category}",
+        _fetch, ttl=_TTL,
+    )
 
 
 @router.get("/bloomberg/article/{article_id}")
 async def get_article_detail(article_id: str):
     """获取 Bloomberg 文章详情"""
-    try:
-        service = get_bloomberg_service()
-        article = await service.get_article_by_id(article_id)
+    cache = get_cache_service()
 
-        if not article:
-            raise HTTPException(status_code=404, detail="文章不存在")
+    async def _fetch():
+        try:
+            service = get_bloomberg_service()
+            article = await service.get_article_by_id(article_id)
+            if not article:
+                raise HTTPException(status_code=404, detail="文章不存在")
+            return {"success": True, "data": article}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"获取 Bloomberg 文章详情失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
-        return {
-            "success": True,
-            "data": article,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取 Bloomberg 文章详情失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await cache.get_or_set(
+        f"uteki:news:bloomberg:article:{_today()}:{article_id}", _fetch, ttl=_TTL,
+    )
 
 
 @router.post("/bloomberg/scrape")
@@ -92,6 +112,7 @@ async def trigger_scrape(
             max_news=max_news,
             category_urls=category_urls,
         )
+        await get_cache_service().delete_pattern("uteki:news:bloomberg:")
         return result
 
     except Exception as e:
@@ -111,6 +132,7 @@ async def translate_pending_articles(
         result = await translation_service.translate_pending_articles(
             limit, source_filter="bloomberg"
         )
+        await get_cache_service().delete_pattern("uteki:news:bloomberg:")
 
         return {
             "success": True,
@@ -133,6 +155,7 @@ async def translate_article(
     try:
         translation_service = get_translation_service(provider)
         result = await translation_service.translate_and_label_article(article_id)
+        await get_cache_service().delete_pattern("uteki:news:bloomberg:")
 
         return {
             "success": True,

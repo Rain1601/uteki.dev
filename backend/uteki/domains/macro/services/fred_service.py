@@ -3,11 +3,11 @@
 import csv
 import io
 import logging
-import time
 from typing import Dict, List, Optional
 
 import httpx
 
+from uteki.common.cache import get_cache_service
 from uteki.common.config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,23 +38,10 @@ class FredService:
 
     def __init__(self):
         self.api_key = settings.fred_api_key
-        self._cache: Dict[str, Dict] = {}  # key → {"data": ..., "ts": float}
         if self.api_key:
             logger.info("FRED 服务初始化完成 (JSON API 模式)")
         else:
             logger.info("FRED 服务初始化完成 (CSV fallback 模式, 无 API key)")
-
-    def _cache_key(self, series_id: str, limit: int, start: Optional[str]) -> str:
-        return f"{series_id}:{limit}:{start or ''}"
-
-    def _get_cached(self, key: str) -> Optional[Dict]:
-        entry = self._cache.get(key)
-        if entry and (time.time() - entry["ts"]) < CACHE_TTL:
-            return entry["data"]
-        return None
-
-    def _set_cached(self, key: str, data: Dict):
-        self._cache[key] = {"data": data, "ts": time.time()}
 
     async def fetch_series(
         self,
@@ -73,8 +60,10 @@ class FredService:
         Returns:
             {"success": bool, "series_id": str, "data": [...], "meta": {...}}
         """
-        ck = self._cache_key(series_id, limit, start)
-        cached = self._get_cached(ck)
+        cache = get_cache_service()
+        cache_key = f"uteki:fred:{series_id}:{limit}:{start or ''}"
+
+        cached = await cache.get(cache_key)
         if cached:
             return cached
 
@@ -84,7 +73,7 @@ class FredService:
             result = await self._fetch_via_csv(series_id, start, limit)
 
         if result["success"]:
-            self._set_cached(ck, result)
+            await cache.set(cache_key, result, ttl=CACHE_TTL)
 
         return result
 
