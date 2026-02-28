@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Card, CardContent, Typography, Chip } from '@mui/material';
-import { Lightbulb } from '@mui/icons-material';
+import { Lightbulb } from 'lucide-react';
 
 interface ThoughtProcessCardProps {
   thoughts: string[];
@@ -29,7 +29,7 @@ const ThoughtProcessCard: React.FC<ThoughtProcessCardProps> = ({ thoughts }) => 
     >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
-          <Lightbulb sx={{ mr: 1, color: '#FFA726', fontSize: 20 }} />
+          <Lightbulb size={20} style={{ marginRight: 8, color: '#FFA726' }} />
           <Typography
             variant="subtitle2"
             sx={{

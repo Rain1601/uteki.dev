@@ -15,11 +15,11 @@ import {
   DialogActions,
 } from '@mui/material';
 import {
-  Logout as LogoutIcon,
-  Login as LoginIcon,
-  Person as PersonIcon,
-  Settings as SettingsIcon,
-} from '@mui/icons-material';
+  LogOut,
+  LogIn,
+  User,
+  Settings,
+} from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useNavigate, Link } from 'react-router-dom';
 
@@ -65,14 +65,14 @@ export default function UserMenu({ collapsed = false }: UserMenuProps) {
     if (collapsed) {
       return (
         <IconButton onClick={() => navigate('/login')} sx={{ color: 'text.secondary' }}>
-          <LoginIcon />
+          <LogIn size={24} />
         </IconButton>
       );
     }
 
     return (
       <Button
-        startIcon={<LoginIcon />}
+        startIcon={<LogIn size={18} />}
         onClick={() => navigate('/login')}
         sx={{ justifyContent: 'flex-start', color: 'text.secondary' }}
         fullWidth
@@ -113,7 +113,7 @@ export default function UserMenu({ collapsed = false }: UserMenuProps) {
             alt={user?.name || 'User'}
             sx={{ width: 32, height: 32 }}
           >
-            {user?.name?.[0] || <PersonIcon />}
+            {user?.name?.[0] || <User size={20} />}
           </Avatar>
           {!collapsed && (
             <Box sx={{ overflow: 'hidden', flex: 1 }}>
@@ -139,7 +139,7 @@ export default function UserMenu({ collapsed = false }: UserMenuProps) {
               },
             }}
           >
-            <SettingsIcon fontSize="small" />
+            <Settings size={18} />
           </IconButton>
         )}
       </Box>
@@ -161,7 +161,7 @@ export default function UserMenu({ collapsed = false }: UserMenuProps) {
         </Box>
         <Divider />
         <MenuItem onClick={handleLogoutClick}>
-          <LogoutIcon sx={{ mr: 1 }} fontSize="small" />
+          <LogOut size={18} style={{ marginRight: 8 }} />
           登出
         </MenuItem>
       </Menu>

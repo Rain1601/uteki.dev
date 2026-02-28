@@ -21,14 +21,14 @@ import {
   MenuItem,
 } from '@mui/material';
 import {
-  PlayArrow as TriggerIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Close as CloseIcon,
-} from '@mui/icons-material';
+  Play,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
-import { useToast } from '../Toast';
+import { toast } from 'sonner';
 import {
   ScheduleTask,
   fetchSchedules,
@@ -46,7 +46,6 @@ import ToolsTab from './context/ToolsTab';
 
 export default function SettingsPanel() {
   const { theme, isDark } = useTheme();
-  const { showToast } = useToast();
 
   // Section state
   const [section, setSection] = useState<'context' | 'schedules' | 'debug'>('context');
@@ -76,16 +75,16 @@ export default function SettingsPanel() {
         ))}
       </Box>
 
-      {section === 'context' && <ContextSection theme={theme} isDark={isDark} showToast={showToast} />}
-      {section === 'schedules' && <ScheduleSection theme={theme} isDark={isDark} showToast={showToast} />}
-      {import.meta.env.DEV && section === 'debug' && <DebugSection theme={theme} isDark={isDark} showToast={showToast} />}
+      {section === 'context' && <ContextSection theme={theme} isDark={isDark} />}
+      {section === 'schedules' && <ScheduleSection theme={theme} isDark={isDark} />}
+      {import.meta.env.DEV && section === 'debug' && <DebugSection theme={theme} isDark={isDark} />}
     </Box>
   );
 }
 
 // ── Context ──
 
-function ContextSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
+function ContextSection({ theme, isDark }: { theme: any; isDark: boolean }) {
   const [subTab, setSubTab] = useState<'system' | 'user' | 'memory' | 'tools'>('system');
 
   const subTabs = [
@@ -115,17 +114,17 @@ function ContextSection({ theme, isDark, showToast }: { theme: any; isDark: bool
         ))}
       </Box>
 
-      {subTab === 'system' && <SystemPromptTab theme={theme} isDark={isDark} showToast={showToast} />}
-      {subTab === 'user' && <UserPromptTab theme={theme} isDark={isDark} showToast={showToast} />}
-      {subTab === 'memory' && <MemoryTab theme={theme} isDark={isDark} showToast={showToast} />}
-      {subTab === 'tools' && <ToolsTab theme={theme} isDark={isDark} showToast={showToast} />}
+      {subTab === 'system' && <SystemPromptTab theme={theme} isDark={isDark} />}
+      {subTab === 'user' && <UserPromptTab theme={theme} isDark={isDark} />}
+      {subTab === 'memory' && <MemoryTab theme={theme} isDark={isDark} />}
+      {subTab === 'tools' && <ToolsTab theme={theme} isDark={isDark} />}
     </Box>
   );
 }
 
 // ── Schedules ──
 
-function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
+function ScheduleSection({ theme, isDark }: { theme: any; isDark: boolean }) {
   const [schedules, setSchedules] = useState<ScheduleTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -150,15 +149,15 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
     try {
       const res = await createSchedule(form);
       if (res.success) {
-        showToast('Schedule created', 'success');
+        toast.success('Schedule created');
         setDialogOpen(false);
         setForm({ name: '', cron_expression: '', task_type: 'arena_run' });
         load();
       } else {
-        showToast(res.error || 'Failed', 'error');
+        toast.error(res.error || 'Failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
+      toast.error(e.message || 'Failed');
     }
   };
 
@@ -167,27 +166,27 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
       await updateSchedule(task.id, { is_enabled: !task.is_enabled });
       load();
     } catch {
-      showToast('Toggle failed', 'error');
+      toast.error('Toggle failed');
     }
   };
 
   const handleTrigger = async (taskId: string) => {
     try {
       await triggerSchedule(taskId);
-      showToast('Triggered', 'success');
+      toast.success('Triggered');
       load();
     } catch {
-      showToast('Trigger failed', 'error');
+      toast.error('Trigger failed');
     }
   };
 
   const handleDelete = async (taskId: string) => {
     try {
       await deleteSchedule(taskId);
-      showToast('Deleted', 'success');
+      toast.success('Deleted');
       load();
     } catch {
-      showToast('Delete failed', 'error');
+      toast.error('Delete failed');
     }
   };
 
@@ -202,7 +201,7 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
         </Typography>
         <Button
           size="small"
-          startIcon={<AddIcon />}
+          startIcon={<Plus size={18} />}
           onClick={() => setDialogOpen(true)}
           sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontSize: 13, fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: theme.brand.hover } }}
         >
@@ -261,12 +260,12 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
                   <TableCell sx={{ ...tableCellSx, whiteSpace: 'nowrap' }}>
                     <Tooltip title="Trigger now">
                       <IconButton size="small" onClick={() => handleTrigger(s.id)} sx={{ color: theme.brand.primary }}>
-                        <TriggerIcon fontSize="small" />
+                        <Play size={18} />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Delete">
                       <IconButton size="small" onClick={() => handleDelete(s.id)} sx={{ color: theme.text.muted, '&:hover': { color: '#f44336' } }}>
-                        <DeleteIcon fontSize="small" />
+                        <Trash2 size={18} />
                       </IconButton>
                     </Tooltip>
                   </TableCell>
@@ -288,7 +287,7 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           New Schedule
           <IconButton size="small" onClick={() => setDialogOpen(false)} sx={{ color: theme.text.muted }}>
-            <CloseIcon />
+            <X size={24} />
           </IconButton>
         </DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
@@ -341,7 +340,7 @@ function ScheduleSection({ theme, isDark, showToast }: { theme: any; isDark: boo
 
 // ── Debug ──
 
-function DebugSection({ theme, isDark, showToast }: { theme: any; isDark: boolean; showToast: any }) {
+function DebugSection({ theme, isDark }: { theme: any; isDark: boolean }) {
   const [tableLoading, setTableLoading] = useState(false);
   const [seedLoading, setSeedLoading] = useState(false);
 
@@ -349,10 +348,10 @@ function DebugSection({ theme, isDark, showToast }: { theme: any; isDark: boolea
     setTableLoading(true);
     try {
       const res = await createIndexTables();
-      if (res.success) showToast('Tables created', 'success');
-      else showToast(res.error || 'Failed', 'error');
+      if (res.success) toast.success('Tables created');
+      else toast.error(res.error || 'Failed');
     } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
+      toast.error(e.message || 'Failed');
     } finally {
       setTableLoading(false);
     }
@@ -362,10 +361,10 @@ function DebugSection({ theme, isDark, showToast }: { theme: any; isDark: boolea
     setSeedLoading(true);
     try {
       const res = await seedIndexDefaults();
-      if (res.success) showToast('Defaults seeded', 'success');
-      else showToast(res.error || 'Failed', 'error');
+      if (res.success) toast.success('Defaults seeded');
+      else toast.error(res.error || 'Failed');
     } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
+      toast.error(e.message || 'Failed');
     } finally {
       setSeedLoading(false);
     }

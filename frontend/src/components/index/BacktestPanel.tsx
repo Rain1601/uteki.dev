@@ -8,11 +8,11 @@ import {
   Chip,
 } from '@mui/material';
 import {
-  PlayArrow as RunIcon,
-} from '@mui/icons-material';
+  Play,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
-import { useToast } from '../Toast';
+import { toast } from 'sonner';
 import {
   BacktestResult,
   runBacktest,
@@ -21,7 +21,6 @@ import {
 
 export default function BacktestPanel() {
   const { theme, isDark } = useTheme();
-  const { showToast } = useToast();
 
   const [symbols, setSymbols] = useState('VOO');
   const [start, setStart] = useState('2020-01');
@@ -49,7 +48,7 @@ export default function BacktestPanel() {
         if (res.success && res.data) {
           setResults([res.data]);
         } else {
-          showToast(res.error || 'Backtest failed', 'error');
+          toast.error(res.error || 'Backtest failed');
         }
       } else {
         const res = await runBacktestCompare({
@@ -62,15 +61,15 @@ export default function BacktestPanel() {
         if (res.success && res.data) {
           setResults(res.data);
         } else {
-          showToast(res.error || 'Backtest failed', 'error');
+          toast.error(res.error || 'Backtest failed');
         }
       }
     } catch (e: any) {
-      showToast(e.response?.data?.detail || e.message || 'Backtest failed', 'error');
+      toast.error(e.response?.data?.detail || e.message || 'Backtest failed');
     } finally {
       setRunning(false);
     }
-  }, [symbols, start, end, initialCapital, monthlyDca, showToast]);
+  }, [symbols, start, end, initialCapital, monthlyDca, toast]);
 
   const cardBg = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)';
   const cardBorder = `1px solid ${theme.border.subtle}`;
@@ -137,7 +136,7 @@ export default function BacktestPanel() {
           sx={{ width: 130 }}
         />
         <Button
-          startIcon={running ? undefined : <RunIcon />}
+          startIcon={running ? undefined : <Play size={18} />}
           onClick={handleRun}
           disabled={running || !symbols.trim()}
           sx={{

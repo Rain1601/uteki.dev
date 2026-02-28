@@ -3,11 +3,12 @@ import {
   Box, Typography, Chip, Collapse,
 } from '@mui/material';
 import {
-  Visibility as PreviewIcon,
-  Edit as EditIcon,
-  ExpandMore as ExpandIcon,
-  ExpandLess as CollapseIcon,
-} from '@mui/icons-material';
+  Eye,
+  Pencil,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import LoadingDots from '../../LoadingDots';
 import { previewUserPrompt } from '../../../api/index';
 import SystemPromptTab from './SystemPromptTab';
@@ -15,7 +16,6 @@ import SystemPromptTab from './SystemPromptTab';
 interface Props {
   theme: any;
   isDark: boolean;
-  showToast: any;
 }
 
 const TEMPLATE_VARIABLES = [
@@ -35,7 +35,7 @@ const TEMPLATE_VARIABLES = [
   { name: 'task', desc: '任务定义（类型、预算、约束、标的）' },
 ];
 
-export default function UserPromptTab({ theme, isDark, showToast }: Props) {
+export default function UserPromptTab({ theme, isDark }: Props) {
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [previewText, setPreviewText] = useState('');
   const [previewVars, setPreviewVars] = useState<Record<string, string>>({});
@@ -51,21 +51,21 @@ export default function UserPromptTab({ theme, isDark, showToast }: Props) {
         setPreviewVars(res.data.variables);
         setMode('preview');
       } else {
-        showToast(res.error || 'Preview failed', 'error');
+        toast.error(res.error || 'Preview failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Preview failed', 'error');
+      toast.error(e.message || 'Preview failed');
     } finally {
       setPreviewLoading(false);
     }
-  }, [showToast]);
+  }, [toast]);
 
   return (
     <Box>
       {/* Mode toggle */}
       <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
         <Chip
-          icon={<EditIcon sx={{ fontSize: 14 }} />}
+          icon={<Pencil size={14} />}
           label="Edit"
           onClick={() => setMode('edit')}
           size="small"
@@ -77,7 +77,7 @@ export default function UserPromptTab({ theme, isDark, showToast }: Props) {
           }}
         />
         <Chip
-          icon={previewLoading ? undefined : <PreviewIcon sx={{ fontSize: 14 }} />}
+          icon={previewLoading ? undefined : <Eye size={14} />}
           label={previewLoading ? 'Loading...' : 'Preview'}
           onClick={handlePreview}
           size="small"
@@ -95,7 +95,6 @@ export default function UserPromptTab({ theme, isDark, showToast }: Props) {
           <SystemPromptTab
             theme={theme}
             isDark={isDark}
-            showToast={showToast}
             promptType="user"
           />
 
@@ -105,7 +104,7 @@ export default function UserPromptTab({ theme, isDark, showToast }: Props) {
               sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer', gap: 0.5 }}
               onClick={() => setShowVarRef(!showVarRef)}
             >
-              {showVarRef ? <CollapseIcon sx={{ fontSize: 16, color: theme.text.muted }} /> : <ExpandIcon sx={{ fontSize: 16, color: theme.text.muted }} />}
+              {showVarRef ? <ChevronUp size={16} style={{ color: theme.text.muted }} /> : <ChevronDown size={16} style={{ color: theme.text.muted }} />}
               <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.muted }}>
                 Available Variables
               </Typography>

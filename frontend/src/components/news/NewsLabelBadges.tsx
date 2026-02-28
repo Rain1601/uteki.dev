@@ -5,10 +5,10 @@
 
 import { Box, Typography } from '@mui/material';
 import {
-  TrendingUp as TrendingUpIcon,
-  TrendingDown as TrendingDownIcon,
-  TrendingFlat as TrendingFlatIcon,
-} from '@mui/icons-material';
+  TrendingUp,
+  TrendingDown,
+  Minus,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { ImportanceLevel, ImpactDirection, ConfidenceLevel } from '../../types/news';
 
@@ -140,7 +140,7 @@ export function ImpactBadge({ impact, confidence = 'high', size = 'small' }: Imp
   // Support both bullish/bearish and positive/negative naming
   const isPositive = impact === 'bullish' || impact === 'positive';
   const isNegative = impact === 'bearish' || impact === 'negative';
-  const Icon = isPositive ? TrendingUpIcon : isNegative ? TrendingDownIcon : TrendingFlatIcon;
+  const Icon = isPositive ? TrendingUp : isNegative ? TrendingDown : Minus;
 
   // Apply confidence styling
   const bgOpacity = confStyle.variant === 'outline' ? 0 : confStyle.opacity;
@@ -160,7 +160,7 @@ export function ImpactBadge({ impact, confidence = 'high', size = 'small' }: Imp
         opacity: confStyle.opacity,
       }}
     >
-      <Icon sx={{ fontSize: iconSize, color: colors.text }} />
+      <Icon size={iconSize} style={{ color: colors.text }} />
       <Typography
         sx={{
           fontSize,

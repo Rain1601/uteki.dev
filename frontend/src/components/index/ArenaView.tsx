@@ -9,16 +9,16 @@ import {
   LinearProgress,
 } from '@mui/material';
 import {
-  PlayArrow as RunIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-  CheckCircle as AdoptIcon,
-  ErrorOutline as ErrorIcon,
-  CheckCircleOutline as DoneIcon,
-} from '@mui/icons-material';
+  Play,
+  ChevronDown,
+  ChevronUp,
+  CheckCircle,
+  AlertCircle,
+  CheckCircle2,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
-import { useToast } from '../Toast';
+import { toast } from 'sonner';
 import {
   ArenaTimelinePoint,
   ArenaVote,
@@ -80,7 +80,6 @@ interface PhaseProgress {
 
 export default function ArenaView() {
   const { theme, isDark } = useTheme();
-  const { showToast } = useToast();
 
   // Timeline data
   const [timeline, setTimeline] = useState<ArenaTimelinePoint[]>([]);
@@ -167,13 +166,13 @@ export default function ArenaView() {
     try {
       await saveAgentConfig({ budget: val });
       setAgentBudget(val);
-      showToast('Budget saved', 'success');
+      toast.success('Budget saved');
     } catch {
-      showToast('Failed to save budget', 'error');
+      toast.error('Failed to save budget');
     } finally {
       setBudgetSaving(false);
     }
-  }, [budgetInput, showToast]);
+  }, [budgetInput, toast]);
 
   // Timer
   useEffect(() => {
@@ -206,9 +205,9 @@ export default function ArenaView() {
       ]);
       if (resModels.success && resModels.data) setSelectedModels(resModels.data);
       if (resVotes.success && resVotes.data) setVotes(resVotes.data);
-    } catch { showToast('Failed to load arena results', 'error'); }
+    } catch { toast.error('Failed to load arena results'); }
     finally { setDetailLoading(false); }
-  }, [timeline, showToast]);
+  }, [timeline, toast]);
 
   // Handle SSE progress events
   const handleProgressEvent = useCallback((event: ArenaProgressEvent) => {
@@ -305,11 +304,11 @@ export default function ArenaView() {
         break;
 
       case 'error':
-        showToast(event.message || 'Arena stream error', 'error');
+        toast.error(event.message || 'Arena stream error');
         setRunning(false);
         break;
     }
-  }, [showToast]);
+  }, [toast]);
 
   // Run Arena with SSE
   const handleRun = useCallback(async () => {
@@ -373,7 +372,7 @@ export default function ArenaView() {
         />
 
         <Button
-          startIcon={running ? undefined : <RunIcon sx={{ fontSize: 16 }} />}
+          startIcon={running ? undefined : <Play size={16} />}
           onClick={handleRun}
           disabled={running}
           size="small"
@@ -646,10 +645,10 @@ function ProgressModelCard({
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           {isDone && (
-            <DoneIcon sx={{ fontSize: 14, color: '#4caf50' }} />
+            <CheckCircle2 size={14} style={{ color: '#4caf50' }} />
           )}
           {isError && (
-            <ErrorIcon sx={{ fontSize: 14, color: '#f44336' }} />
+            <AlertCircle size={14} style={{ color: '#f44336' }} />
           )}
           {!isDone && !isError && (
             <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
@@ -772,8 +771,8 @@ function PipelineSteps({
               )}
               {step.output_summary && (
                 expandedSkill === step.skill
-                  ? <ExpandLessIcon sx={{ fontSize: 12, color: theme.text.muted }} />
-                  : <ExpandMoreIcon sx={{ fontSize: 12, color: theme.text.muted }} />
+                  ? <ChevronUp size={12} style={{ color: theme.text.muted }} />
+                  : <ChevronDown size={12} style={{ color: theme.text.muted }} />
               )}
             </Box>
           </Box>
@@ -1414,7 +1413,6 @@ function ModelCard({
   votes?: ArenaVote[];
   allModels?: ModelIOSummary[];
 }) {
-  const { showToast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<ModelIODetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1442,12 +1440,12 @@ function ModelCard({
     try {
       const res = await adoptModel(harnessId, model.id);
       if (res.success) {
-        showToast(`Adopted ${model.model_name}`, 'success');
+        toast.success(`Adopted ${model.model_name}`);
       } else {
-        showToast(res.error || 'Adopt failed', 'error');
+        toast.error(res.error || 'Adopt failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Adopt failed', 'error');
+      toast.error(e.message || 'Adopt failed');
     } finally {
       setAdopting(false);
     }
@@ -1500,7 +1498,7 @@ function ModelCard({
             />
           )}
           <Chip
-            icon={isError ? <ErrorIcon sx={{ fontSize: '12px !important' }} /> : undefined}
+            icon={isError ? <AlertCircle size={12} /> : undefined}
             label={statusLabel}
             size="small"
             sx={{ fontSize: 9, height: 18, bgcolor: statusBg, color: statusColor }}
@@ -1562,7 +1560,7 @@ function ModelCard({
         <Button
           size="small"
           onClick={handleExpand}
-          endIcon={expanded ? <ExpandLessIcon sx={{ fontSize: 14 }} /> : <ExpandMoreIcon sx={{ fontSize: 14 }} />}
+          endIcon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24 }}
         >
           {expanded ? 'Collapse' : 'Details'}
@@ -1579,7 +1577,7 @@ function ModelCard({
         {!isError && (
           <Button
             size="small"
-            startIcon={<AdoptIcon sx={{ fontSize: 14 }} />}
+            startIcon={<CheckCircle size={14} />}
             onClick={handleAdopt}
             disabled={adopting}
             sx={{

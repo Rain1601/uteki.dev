@@ -1,5 +1,5 @@
 import { Box, Typography } from '@mui/material';
-import { SmartToy as SmartToyIcon } from '@mui/icons-material';
+import { Bot } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
 import ReactMarkdown from 'react-markdown';
@@ -60,7 +60,7 @@ export default function ChatMessage({ message, modelIcon }: ChatMessageProps) {
             {modelIcon ? (
               <img src={modelIcon} alt="" style={{ width: 18, height: 18 }} />
             ) : (
-              <SmartToyIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+              <Bot size={16} style={{ color: theme.text.muted }} />
             )}
           </Box>
         )}

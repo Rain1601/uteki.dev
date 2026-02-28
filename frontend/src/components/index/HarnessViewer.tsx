@@ -12,9 +12,9 @@ import {
   TableRow,
 } from '@mui/material';
 import {
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-} from '@mui/icons-material';
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 
 interface HarnessViewerProps {
@@ -165,7 +165,7 @@ function CollapsibleSection({
           '&:hover': { color: theme.brand.primary },
         }}
       >
-        {open ? <ExpandLessIcon sx={{ fontSize: 16, color: theme.text.muted }} /> : <ExpandMoreIcon sx={{ fontSize: 16, color: theme.text.muted }} />}
+        {open ? <ChevronUp size={16} style={{ color: theme.text.muted }} /> : <ChevronDown size={16} style={{ color: theme.text.muted }} />}
         <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.muted }}>
           {title}
         </Typography>

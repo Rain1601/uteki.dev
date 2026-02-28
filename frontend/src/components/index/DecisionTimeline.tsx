@@ -9,9 +9,9 @@ import {
   MenuItem,
 } from '@mui/material';
 import {
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-} from '@mui/icons-material';
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
 import {
@@ -242,7 +242,7 @@ function DecisionItem({
             sx={{ fontSize: 10, height: 20, bgcolor: 'transparent', color: theme.text.muted }}
           />
         )}
-        {expanded ? <ExpandLessIcon sx={{ color: theme.text.muted, fontSize: 18 }} /> : <ExpandMoreIcon sx={{ color: theme.text.muted, fontSize: 18 }} />}
+        {expanded ? <ChevronUp size={18} style={{ color: theme.text.muted }} /> : <ChevronDown size={18} style={{ color: theme.text.muted }} />}
       </Box>
 
       {/* Detail */}

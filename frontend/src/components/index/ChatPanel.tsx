@@ -13,16 +13,16 @@ import {
   DialogActions,
 } from '@mui/material';
 import {
-  Send as SendIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-  Build as ToolIcon,
-  CheckCircle as ApproveIcon,
-  Edit as ModifyIcon,
-  SkipNext as SkipIcon,
-} from '@mui/icons-material';
+  SendHorizonal,
+  ChevronDown,
+  ChevronUp,
+  Wrench,
+  CheckCircle,
+  Pencil,
+  SkipForward,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
-import { useToast } from '../Toast';
+import { toast } from 'sonner';
 import LoadingDots from '../LoadingDots';
 import { sendAgentMessage, approveDecision, skipDecision } from '../../api/index';
 
@@ -218,7 +218,7 @@ export default function ChatPanel() {
             '&.Mui-disabled': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', color: theme.text.disabled },
           }}
         >
-          <SendIcon fontSize="small" />
+          <SendHorizonal size={18} />
         </IconButton>
       </Box>
     </Box>
@@ -239,12 +239,12 @@ function ToolCallChip({
   return (
     <Box sx={{ mb: 1 }}>
       <Chip
-        icon={<ToolIcon sx={{ fontSize: 14 }} />}
+        icon={<Wrench size={14} />}
         label={toolCall.tool}
         size="small"
         onClick={() => setExpanded(!expanded)}
         onDelete={() => setExpanded(!expanded)}
-        deleteIcon={expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+        deleteIcon={expanded ? <ChevronUp size={24} /> : <ChevronDown size={24} />}
         sx={{
           bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
           color: theme.text.secondary,
@@ -292,7 +292,6 @@ function DecisionCardInline({
   theme: any;
   isDark: boolean;
 }) {
-  const { showToast } = useToast();
   const [approveOpen, setApproveOpen] = useState(false);
   const [modifyOpen, setModifyOpen] = useState(false);
   const [totpCode, setTotpCode] = useState('');
@@ -308,15 +307,15 @@ function DecisionCardInline({
     try {
       const res = await approveDecision(card.harness_id, totpCode, modifyOpen ? editAllocations : card.allocations);
       if (res.success) {
-        showToast('Decision approved', 'success');
+        toast.success('Decision approved');
         setApproveOpen(false);
         setModifyOpen(false);
         setDecided(true);
       } else {
-        showToast(res.error || 'Approval failed', 'error');
+        toast.error(res.error || 'Approval failed');
       }
     } catch (e: any) {
-      showToast(e.response?.data?.detail || 'Approval failed', 'error');
+      toast.error(e.response?.data?.detail || 'Approval failed');
     } finally {
       setSubmitting(false);
     }
@@ -325,10 +324,10 @@ function DecisionCardInline({
   const handleSkip = async () => {
     try {
       await skipDecision(card.harness_id);
-      showToast('Decision skipped', 'success');
+      toast.success('Decision skipped');
       setDecided(true);
     } catch {
-      showToast('Skip failed', 'error');
+      toast.error('Skip failed');
     }
   };
 
@@ -386,7 +385,7 @@ function DecisionCardInline({
         <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
           <Button
             size="small"
-            startIcon={<ApproveIcon />}
+            startIcon={<CheckCircle size={18} />}
             onClick={() => { setModifyOpen(false); setApproveOpen(true); }}
             sx={{ color: '#4caf50', textTransform: 'none', fontSize: 12, fontWeight: 600 }}
           >
@@ -394,7 +393,7 @@ function DecisionCardInline({
           </Button>
           <Button
             size="small"
-            startIcon={<ModifyIcon />}
+            startIcon={<Pencil size={18} />}
             onClick={() => { setModifyOpen(true); setApproveOpen(true); }}
             sx={{ color: '#ff9800', textTransform: 'none', fontSize: 12, fontWeight: 600 }}
           >
@@ -402,7 +401,7 @@ function DecisionCardInline({
           </Button>
           <Button
             size="small"
-            startIcon={<SkipIcon />}
+            startIcon={<SkipForward size={18} />}
             onClick={handleSkip}
             sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 12 }}
           >

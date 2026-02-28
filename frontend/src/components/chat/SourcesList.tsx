@@ -11,7 +11,7 @@ import {
   ListItem,
   ListItemText,
 } from '@mui/material';
-import { ExpandMore, Link as LinkIcon, Public } from '@mui/icons-material';
+import { ChevronDown, Link, Globe } from 'lucide-react';
 
 interface Source {
   title: string;
@@ -58,7 +58,7 @@ const SourcesList: React.FC<SourcesListProps> = ({ sources, sourceUrls }) => {
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <LinkIcon sx={{ mr: 1, color: '#66BB6A', fontSize: 20 }} />
+            <Link size={20} style={{ marginRight: 8, color: '#66BB6A' }} />
             <Typography
               variant="subtitle2"
               sx={{
@@ -80,7 +80,7 @@ const SourcesList: React.FC<SourcesListProps> = ({ sources, sourceUrls }) => {
               color: 'rgba(255, 255, 255, 0.7)',
             }}
           >
-            <ExpandMore />
+            <ChevronDown size={24} />
           </IconButton>
         </Box>
 
@@ -91,7 +91,7 @@ const SourcesList: React.FC<SourcesListProps> = ({ sources, sourceUrls }) => {
             .map(([domain, count]) => (
               <Chip
                 key={domain}
-                icon={<Public sx={{ fontSize: 14 }} />}
+                icon={<Globe size={14} />}
                 label={`${domain} (${count})`}
                 size="small"
                 sx={{

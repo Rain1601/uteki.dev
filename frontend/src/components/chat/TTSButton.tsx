@@ -1,6 +1,6 @@
 import React from 'react';
 import { IconButton, CircularProgress } from '@mui/material';
-import { VolumeUp as VolumeUpIcon } from '@mui/icons-material';
+import { Volume2 } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { useTTS } from '../../hooks/useTTS';
 
@@ -42,7 +42,7 @@ const TTSButton: React.FC<TTSButtonProps> = ({ messageId, text }) => {
       {state === 'loading' ? (
         <CircularProgress size={14} sx={{ color: theme.text.muted }} />
       ) : (
-        <VolumeUpIcon sx={{ fontSize: 14 }} />
+        <Volume2 size={14} />
       )}
     </IconButton>
   );

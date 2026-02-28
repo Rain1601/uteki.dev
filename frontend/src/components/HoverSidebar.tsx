@@ -13,18 +13,18 @@ import {
   SwipeableDrawer,
 } from '@mui/material';
 import {
-  Menu as MenuIcon,
-  TrendingUp as TrendingUpIcon,
-  Assessment as AssessmentIcon,
-  SmartToy as SmartToyIcon,
-  Brightness4 as DarkModeIcon,
-  Brightness7 as LightModeIcon,
-  Close as CloseIcon,
-  Article as ArticleIcon,
-  Event as EventIcon,
-  ShowChart as IndexIcon,
-  Dashboard as DashboardIcon,
-} from '@mui/icons-material';
+  Menu,
+  TrendingUp,
+  BarChart3,
+  Bot,
+  Moon,
+  Sun,
+  X,
+  FileText,
+  Calendar,
+  LineChart,
+  LayoutDashboard,
+} from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -49,18 +49,18 @@ const menuItems: MenuCategory[] = [
   {
     category: 'MAIN',
     items: [
-      { text: 'AI Agent', icon: <SmartToyIcon />, path: '/agent' },
-      { text: '新闻时间线', icon: <ArticleIcon />, path: '/news-timeline' },
+      { text: 'AI Agent', icon: <Bot size={20} />, path: '/agent' },
+      { text: '新闻时间线', icon: <FileText size={20} />, path: '/news-timeline' },
     ],
   },
   {
     category: 'TRADING',
     items: [
-      { text: '宏观仪表盘', icon: <DashboardIcon />, path: '/macro/market-dashboard' },
-      { text: '经济日历', icon: <EventIcon />, path: '/macro/fomc-calendar' },
-      { text: '雪盈证券', icon: <TrendingUpIcon />, path: '/trading/snb' },
-      { text: '指数投资', icon: <IndexIcon />, path: '/index-agent' },
-      { text: '数据分析', icon: <AssessmentIcon />, path: '/analytics', disabled: true },
+      { text: '宏观仪表盘', icon: <LayoutDashboard size={20} />, path: '/macro/market-dashboard' },
+      { text: '经济日历', icon: <Calendar size={20} />, path: '/macro/fomc-calendar' },
+      { text: '雪盈证券', icon: <TrendingUp size={20} />, path: '/trading/snb' },
+      { text: '指数投资', icon: <LineChart size={20} />, path: '/index-agent' },
+      { text: '数据分析', icon: <BarChart3 size={20} />, path: '/analytics', disabled: true },
     ],
   },
 ];
@@ -99,7 +99,7 @@ export default function HoverSidebar() {
             right: 0,
             height: 56,
             zIndex: 1200,
-            bgcolor: theme.background.deepest,
+            bgcolor: theme.background.primary,
             borderBottom: `1px solid ${theme.border.subtle}`,
             display: 'flex',
             alignItems: 'center',
@@ -115,7 +115,7 @@ export default function HoverSidebar() {
               minHeight: 48,
             }}
           >
-            <MenuIcon />
+            <Menu size={24} />
           </IconButton>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
             <Box
@@ -151,7 +151,7 @@ export default function HoverSidebar() {
           sx={{
             '& .MuiDrawer-paper': {
               width: SIDEBAR_EXPANDED_WIDTH,
-              background: theme.background.deepest,
+              background: theme.background.secondary,
               borderRight: `1px solid ${theme.border.default}`,
             },
           }}
@@ -190,7 +190,7 @@ export default function HoverSidebar() {
               onClick={handleDrawerClose}
               sx={{ color: theme.text.secondary, minWidth: 44, minHeight: 44 }}
             >
-              <CloseIcon />
+              <X size={24} />
             </IconButton>
           </Box>
 
@@ -270,7 +270,7 @@ export default function HoverSidebar() {
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
               <Box sx={{ color: theme.text.secondary }}>
-                {isDark ? <DarkModeIcon /> : <LightModeIcon />}
+                {isDark ? <Moon size={20} /> : <Sun size={20} />}
               </Box>
               <Typography sx={{ flex: 1, fontSize: '0.9rem', color: theme.text.secondary }}>
                 {isDark ? '深色模式' : '浅色模式'}
@@ -406,7 +406,6 @@ export default function HoverSidebar() {
                       sx={{
                         minWidth: 40,
                         color: isActive ? theme.brand.primary : theme.text.secondary,
-                        '& .MuiSvgIcon-root': { fontSize: '1.3rem' },
                       }}
                     >
                       {item.icon}
@@ -448,7 +447,7 @@ export default function HoverSidebar() {
               '&:hover': { color: theme.brand.primary },
             }}
           >
-            {isDark ? <DarkModeIcon fontSize="small" /> : <LightModeIcon fontSize="small" />}
+            {isDark ? <Moon size={18} /> : <Sun size={18} />}
           </IconButton>
           <Typography noWrap sx={{ flex: 1, fontSize: '0.9rem', color: theme.text.secondary }}>
             {isDark ? '深色模式' : '浅色模式'}
@@ -503,7 +502,7 @@ export default function HoverSidebar() {
           pt: '18px',
         }}
       >
-        <MenuIcon sx={{ fontSize: 24, color: theme.text.muted }} />
+        <Menu size={24} style={{ color: theme.text.muted }} />
 
         {/* Sidebar 面板 */}
         <Box
@@ -514,7 +513,7 @@ export default function HoverSidebar() {
             left: 0,
             width: SIDEBAR_EXPANDED_WIDTH,
             height: '100%',
-            background: theme.background.deepest,
+            background: theme.background.secondary,
             borderRight: `1px solid ${theme.border.default}`,
             display: 'flex',
             flexDirection: 'column',

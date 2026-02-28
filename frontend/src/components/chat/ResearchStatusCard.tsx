@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Card, CardContent, Typography, LinearProgress, Chip } from '@mui/material';
-import { Search, Article } from '@mui/icons-material';
+import { Search, FileText } from 'lucide-react';
 
 interface ResearchStatusCardProps {
   status: string;
@@ -31,7 +31,7 @@ const ResearchStatusCard: React.FC<ResearchStatusCardProps> = ({
     >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
-          <Search sx={{ mr: 1, color: '#4FC3F7', fontSize: 20 }} />
+          <Search size={20} style={{ marginRight: 8, color: '#4FC3F7' }} />
           <Typography
             variant="subtitle2"
             sx={{
@@ -71,7 +71,7 @@ const ResearchStatusCard: React.FC<ResearchStatusCardProps> = ({
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {sourcesCount !== undefined && (
             <Chip
-              icon={<Article sx={{ fontSize: 16 }} />}
+              icon={<FileText size={16} />}
               label={`${sourcesCount} sources found`}
               size="small"
               sx={{

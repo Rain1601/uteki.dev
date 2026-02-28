@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Typography, Button, TextField, IconButton } from '@mui/material';
 import {
-  Refresh as RefreshIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
-  Save as SaveIcon,
-  Close as CloseIcon,
-} from '@mui/icons-material';
+  RefreshCw,
+  Plus,
+  Trash2,
+  Pencil,
+  Save,
+  X,
+} from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import LoadingDots from '../LoadingDots';
-import { useToast } from '../Toast';
-import KlineChart from './KlineChart';
+import { toast } from 'sonner';
+import TradingViewChart from './TradingViewChart';
 import {
   WatchlistItem,
   fetchWatchlist,
@@ -24,7 +24,6 @@ import {
 
 export default function WatchlistPanel() {
   const { theme, isDark } = useTheme();
-  const { showToast } = useToast();
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newSymbol, setNewSymbol] = useState('');
@@ -76,12 +75,12 @@ export default function WatchlistPanel() {
             const totalRecords = synced.reduce((sum: number, s: any) => sum + (s.records || 0), 0);
             setSyncResult(`Synced ${symbols} (+${totalRecords} records)`);
             if (totalRecords > 0) {
-              showToast(`Data synced: ${symbols} (+${totalRecords} records)`, 'success');
+              toast.success(`Data synced: ${symbols} (+${totalRecords} records)`);
             }
             load(); // Reload watchlist to reflect fresh data
           }
           if (failed.length > 0) {
-            showToast(`Sync failed for: ${failed.map((f: any) => f.symbol).join(', ')}`, 'error');
+            toast.error(`Sync failed for: ${failed.map((f: any) => f.symbol).join(', ')}`);
           }
         }
       } catch {
@@ -104,15 +103,15 @@ export default function WatchlistPanel() {
     try {
       const res = await addToWatchlist(sym);
       if (res.success) {
-        showToast(`Added ${sym}`, 'success');
+        toast.success(`Added ${sym}`);
         setNewSymbol('');
         setSelectedSymbol(sym);
         load();
       } else {
-        showToast(res.error || 'Failed to add', 'error');
+        toast.error(res.error || 'Failed to add');
       }
     } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
+      toast.error(e.message || 'Failed');
     }
   };
 
@@ -120,13 +119,13 @@ export default function WatchlistPanel() {
     e.stopPropagation();
     try {
       await removeFromWatchlist(symbol);
-      showToast(`Removed ${symbol}`, 'success');
+      toast.success(`Removed ${symbol}`);
       if (selectedSymbol === symbol) {
         setSelectedSymbol(null);
       }
       load();
     } catch {
-      showToast('Failed to remove', 'error');
+      toast.error('Failed to remove');
     }
   };
 
@@ -134,9 +133,9 @@ export default function WatchlistPanel() {
     setRefreshing(true);
     try {
       await refreshData();
-      showToast('Data refresh triggered', 'success');
+      toast.success('Data refresh triggered');
     } catch {
-      showToast('Refresh failed', 'error');
+      toast.error('Refresh failed');
     } finally {
       setRefreshing(false);
     }
@@ -158,12 +157,12 @@ export default function WatchlistPanel() {
           prev.map((it) => (it.symbol === selectedSymbol ? { ...it, notes: res.data!.notes } : it))
         );
         setEditing(false);
-        showToast('Notes saved', 'success');
+        toast.success('Notes saved');
       } else {
-        showToast('Failed to save', 'error');
+        toast.error('Failed to save');
       }
     } catch {
-      showToast('Failed to save', 'error');
+      toast.error('Failed to save');
     } finally {
       setSaving(false);
     }
@@ -205,14 +204,14 @@ export default function WatchlistPanel() {
             disabled={!newSymbol.trim()}
             sx={{ bgcolor: theme.brand.primary, color: '#fff', borderRadius: 1, '&:hover': { bgcolor: theme.brand.hover }, '&.Mui-disabled': { bgcolor: theme.border.subtle } }}
           >
-            <AddIcon fontSize="small" />
+            <Plus size={18} />
           </IconButton>
         </Box>
 
         {/* Refresh / Sync status */}
         <Button
           size="small"
-          startIcon={refreshing || syncing ? undefined : <RefreshIcon />}
+          startIcon={refreshing || syncing ? undefined : <RefreshCw size={18} />}
           onClick={handleRefresh}
           disabled={refreshing || syncing}
           sx={{ color: theme.brand.primary, textTransform: 'none', fontSize: 12, mb: syncing || syncResult ? 0.5 : 2, justifyContent: 'flex-start' }}
@@ -275,7 +274,7 @@ export default function WatchlistPanel() {
                   onClick={(e) => handleRemove(item.symbol, e)}
                   sx={{ color: theme.text.muted, opacity: 0.5, '&:hover': { color: '#f44336', opacity: 1 } }}
                 >
-                  <DeleteIcon sx={{ fontSize: 16 }} />
+                  <Trash2 size={16} />
                 </IconButton>
               </Box>
             ))
@@ -285,7 +284,7 @@ export default function WatchlistPanel() {
 
       {/* Center: K-Line Chart */}
       <Box sx={{ flex: 1, minWidth: 0, position: 'relative' }}>
-        <KlineChart symbol={selectedSymbol} onError={(msg) => showToast(msg, 'error')} />
+        <TradingViewChart symbol={selectedSymbol} />
       </Box>
 
       {/* Right: Notes Panel */}
@@ -317,7 +316,7 @@ export default function WatchlistPanel() {
               </Box>
               {!editing ? (
                 <IconButton size="small" onClick={handleEditStart} sx={{ color: theme.text.muted }}>
-                  <EditIcon sx={{ fontSize: 16 }} />
+                  <Pencil size={16} />
                 </IconButton>
               ) : (
                 <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -327,10 +326,10 @@ export default function WatchlistPanel() {
                     disabled={saving}
                     sx={{ color: theme.brand.primary }}
                   >
-                    <SaveIcon sx={{ fontSize: 16 }} />
+                    <Save size={16} />
                   </IconButton>
                   <IconButton size="small" onClick={handleCancel} sx={{ color: theme.text.muted }}>
-                    <CloseIcon sx={{ fontSize: 16 }} />
+                    <X size={16} />
                   </IconButton>
                 </Box>
               )}

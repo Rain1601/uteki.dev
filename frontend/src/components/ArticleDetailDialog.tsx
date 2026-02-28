@@ -11,16 +11,16 @@ import {
   FormControlLabel,
 } from '@mui/material';
 import {
-  Close as CloseIcon,
-  OpenInNew as OpenIcon,
-  AccessTime as TimeIcon,
-  Person as PersonIcon,
-  TrendingUp as TrendingUpIcon,
-  TrendingDown as TrendingDownIcon,
-  TrendingFlat as TrendingFlatIcon,
-  Warning as WarningIcon,
-  CheckCircle as CheckIcon,
-} from '@mui/icons-material';
+  X,
+  ExternalLink,
+  Clock,
+  User,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertTriangle,
+  CheckCircle,
+} from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import LoadingDots from './LoadingDots';
 import { getArticleDetail, NewsSource } from '../api/news';
@@ -151,9 +151,9 @@ export default function ArticleDetailDialog({
   };
 
   const getImpactDirectionIcon = (direction?: string) => {
-    if (direction === 'bullish') return <TrendingUpIcon />;
-    if (direction === 'bearish') return <TrendingDownIcon />;
-    return <TrendingFlatIcon />;
+    if (direction === 'bullish') return <TrendingUp size={24} />;
+    if (direction === 'bearish') return <TrendingDown size={24} />;
+    return <Minus size={24} />;
   };
 
   const getImpactDirectionText = (direction?: string) => {
@@ -184,7 +184,7 @@ export default function ArticleDetailDialog({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, color: theme.brand.primary, fontWeight: 600 }}>
-          <CheckIcon />
+          <CheckCircle size={24} />
           Key Elements
         </Box>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -256,7 +256,7 @@ export default function ArticleDetailDialog({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, color: theme.brand.primary, fontWeight: 600 }}>
-          <TrendingUpIcon />
+          <TrendingUp size={24} />
           Market Impact Analysis
         </Box>
 
@@ -352,7 +352,7 @@ export default function ArticleDetailDialog({
           {impact.risk_alerts && impact.risk_alerts.length > 0 && (
             <Box sx={{ bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)', p: 1.5, borderRadius: 1, border: `1px solid ${theme.border.subtle}` }}>
               <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5, fontWeight: 500, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <WarningIcon sx={{ fontSize: 14 }} />
+                <AlertTriangle size={14} />
                 Risk Alerts
               </Typography>
               <Box>
@@ -444,13 +444,13 @@ export default function ArticleDetailDialog({
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 1 }}>
                 {article.author && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: 13, color: theme.text.muted }}>
-                    <PersonIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+                    <User size={16} style={{ color: theme.text.muted }} />
                     <span>{article.author}</span>
                   </Box>
                 )}
                 {(article.published_at || article.publish_time) && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: 13, color: theme.text.muted }}>
-                    <TimeIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+                    <Clock size={16} style={{ color: theme.text.muted }} />
                     <span>{formatDate(article.published_at || article.publish_time)}</span>
                   </Box>
                 )}
@@ -475,7 +475,7 @@ export default function ArticleDetailDialog({
                 },
               }}
             >
-              <CloseIcon />
+              <X size={24} />
             </IconButton>
           </DialogTitle>
 
@@ -614,7 +614,7 @@ export default function ArticleDetailDialog({
                         Author
                       </Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        <PersonIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+                        <User size={16} style={{ color: theme.text.muted }} />
                         <Typography sx={{ fontSize: 14, color: theme.text.secondary }}>{article.author}</Typography>
                       </Box>
                     </Box>
@@ -626,7 +626,7 @@ export default function ArticleDetailDialog({
                         Published
                       </Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        <TimeIcon sx={{ fontSize: 16, color: theme.text.muted }} />
+                        <Clock size={16} style={{ color: theme.text.muted }} />
                         <Typography sx={{ fontSize: 14, color: theme.text.secondary }}>
                           {formatDate(article.published_at || article.publish_time)}
                         </Typography>
@@ -707,7 +707,7 @@ export default function ArticleDetailDialog({
                         },
                       }}
                     >
-                      <OpenIcon sx={{ fontSize: 16 }} />
+                      <ExternalLink size={16} />
                       View Original
                     </Box>
                   )}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Box, Typography, Tooltip } from '@mui/material';
-import { ErrorOutline as ErrorIcon } from '@mui/icons-material';
+import { AlertCircle } from 'lucide-react';
 import { ModelIOSummary } from '../../api/index';
 import { ModelLogo } from './ModelLogos';
 
@@ -137,7 +137,7 @@ export default function AllocationBarChart({
                   bgcolor: isDark ? 'rgba(244,67,54,0.08)' : 'rgba(244,67,54,0.05)',
                   border: '1px solid rgba(244,67,54,0.2)',
                 }}>
-                  <ErrorIcon sx={{ fontSize: 12, color: '#f44336' }} />
+                  <AlertCircle size={12} style={{ color: '#f44336' }} />
                   <Typography sx={{ fontSize: 10, color: '#f44336' }}>
                     {model.status === 'timeout' ? 'timeout' : 'error'}
                   </Typography>

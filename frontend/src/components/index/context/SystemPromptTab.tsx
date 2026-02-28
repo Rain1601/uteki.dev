@@ -3,10 +3,11 @@ import {
   Box, Typography, Button, TextField, Chip, IconButton, Tooltip,
 } from '@mui/material';
 import {
-  Save as SaveIcon,
-  Refresh as RefreshIcon,
-  Delete as DeleteIcon,
-} from '@mui/icons-material';
+  Save,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import LoadingDots from '../../LoadingDots';
 import {
   PromptVersion,
@@ -20,11 +21,10 @@ import {
 interface Props {
   theme: any;
   isDark: boolean;
-  showToast: any;
   promptType?: string;
 }
 
-export default function SystemPromptTab({ theme, isDark, showToast, promptType = 'system' }: Props) {
+export default function SystemPromptTab({ theme, isDark, promptType = 'system' }: Props) {
   const [current, setCurrent] = useState<PromptVersion | null>(null);
   const [history, setHistory] = useState<PromptVersion[]>([]);
   const [content, setContent] = useState('');
@@ -55,14 +55,14 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
     try {
       const res = await updatePrompt(content, description, promptType);
       if (res.success && res.data) {
-        showToast('Prompt updated', 'success');
+        toast.success('Prompt updated');
         setDescription('');
         await reload();
       } else {
-        showToast(res.error || 'Update failed', 'error');
+        toast.error(res.error || 'Update failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Update failed', 'error');
+      toast.error(e.message || 'Update failed');
     } finally {
       setSaving(false);
     }
@@ -72,13 +72,13 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
     try {
       const res = await activatePromptVersion(versionId);
       if (res.success) {
-        showToast('Version activated', 'success');
+        toast.success('Version activated');
         await reload();
       } else {
-        showToast('Activate failed', 'error');
+        toast.error('Activate failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Activate failed', 'error');
+      toast.error(e.message || 'Activate failed');
     }
   };
 
@@ -86,13 +86,13 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
     try {
       const res = await deletePromptVersion(versionId);
       if (res.success) {
-        showToast('Version deleted', 'success');
+        toast.success('Version deleted');
         await reload();
       } else {
-        showToast('Delete failed', 'error');
+        toast.error('Delete failed');
       }
     } catch (e: any) {
-      showToast(e?.response?.data?.detail || e.message || 'Delete failed', 'error');
+      toast.error(e?.response?.data?.detail || e.message || 'Delete failed');
     }
   };
 
@@ -129,7 +129,7 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
           sx={{ flex: 1 }}
         />
         <Button
-          startIcon={saving ? undefined : <SaveIcon />}
+          startIcon={saving ? undefined : <Save size={18} />}
           onClick={handleSave}
           disabled={saving || !content.trim() || !description.trim()}
           sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, fontSize: 13, borderRadius: 2, px: 3, '&:hover': { bgcolor: theme.brand.hover } }}
@@ -180,7 +180,7 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
                       onClick={(e) => { e.stopPropagation(); handleActivate(v.id); }}
                       sx={{ color: theme.brand.primary, p: 0.5 }}
                     >
-                      <RefreshIcon sx={{ fontSize: 16 }} />
+                      <RefreshCw size={16} />
                     </IconButton>
                   </Tooltip>
                   <Tooltip title="Delete version">
@@ -189,7 +189,7 @@ export default function SystemPromptTab({ theme, isDark, showToast, promptType =
                       onClick={(e) => { e.stopPropagation(); handleDelete(v.id); }}
                       sx={{ color: '#f44336', p: 0.5 }}
                     >
-                      <DeleteIcon sx={{ fontSize: 16 }} />
+                      <Trash2 size={16} />
                     </IconButton>
                   </Tooltip>
                 </>

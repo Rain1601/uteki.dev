@@ -4,7 +4,7 @@ import {
   Button, IconButton,
   Table, TableHead, TableBody, TableRow, TableCell,
 } from '@mui/material';
-import { Refresh as RefreshIcon } from '@mui/icons-material';
+import { RefreshCw } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, RadarChart, Radar,
   PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -288,7 +288,7 @@ export default function EvaluationPanel({ onNavigate }: { onNavigate?: (tabIndex
         )}
         <MuiTooltip title="Refresh all data" arrow>
           <IconButton size="small" onClick={reloadAll} sx={{ color: theme.text.muted, mt: 0.5 }}>
-            <RefreshIcon fontSize="small" />
+            <RefreshCw size={18} />
           </IconButton>
         </MuiTooltip>
       </Box>

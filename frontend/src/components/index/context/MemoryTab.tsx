@@ -4,9 +4,10 @@ import {
   MenuItem,
 } from '@mui/material';
 import {
-  Delete as DeleteIcon,
-  Add as AddIcon,
-} from '@mui/icons-material';
+  Trash2,
+  Plus,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import LoadingDots from '../../LoadingDots';
 import {
   MemoryItem,
@@ -18,7 +19,6 @@ import {
 interface Props {
   theme: any;
   isDark: boolean;
-  showToast: any;
 }
 
 const CATEGORIES = [
@@ -33,7 +33,7 @@ const CATEGORIES = [
 
 const PAGE_SIZE = 20;
 
-export default function MemoryTab({ theme, isDark, showToast }: Props) {
+export default function MemoryTab({ theme, isDark }: Props) {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -76,13 +76,13 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
     try {
       const res = await deleteMemory(id);
       if (res.success) {
-        showToast('Memory deleted', 'success');
+        toast.success('Memory deleted');
         setMemories((prev) => prev.filter((m) => m.id !== id));
       } else {
-        showToast('Delete failed', 'error');
+        toast.error('Delete failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Delete failed', 'error');
+      toast.error(e.message || 'Delete failed');
     }
   };
 
@@ -92,15 +92,15 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
     try {
       const res = await writeMemory(newCategory, newContent);
       if (res.success) {
-        showToast('Memory created', 'success');
+        toast.success('Memory created');
         setNewContent('');
         setShowForm(false);
         await load();
       } else {
-        showToast(res.error || 'Failed', 'error');
+        toast.error(res.error || 'Failed');
       }
     } catch (e: any) {
-      showToast(e.message || 'Failed', 'error');
+      toast.error(e.message || 'Failed');
     } finally {
       setSaving(false);
     }
@@ -139,7 +139,7 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
         <Box sx={{ flex: 1 }} />
         <Button
           size="small"
-          startIcon={<AddIcon />}
+          startIcon={<Plus size={18} />}
           onClick={() => setShowForm(!showForm)}
           sx={{
             textTransform: 'none', fontSize: 12, fontWeight: 600,
@@ -254,7 +254,7 @@ export default function MemoryTab({ theme, isDark, showToast }: Props) {
                       onClick={(e) => { e.stopPropagation(); handleDelete(m.id); }}
                       sx={{ color: theme.text.muted, p: 0.5, '&:hover': { color: '#f44336' } }}
                     >
-                      <DeleteIcon sx={{ fontSize: 14 }} />
+                      <Trash2 size={14} />
                     </IconButton>
                   </Tooltip>
                 </Box>

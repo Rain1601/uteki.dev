@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   Box, Typography, Button, TextField, Chip, MenuItem,
 } from '@mui/material';
-import { PlayArrow as RunIcon } from '@mui/icons-material';
+import { Play } from 'lucide-react';
 import LoadingDots from '../../LoadingDots';
 import {
   ToolDefinition,
@@ -13,7 +13,6 @@ import {
 interface Props {
   theme: any;
   isDark: boolean;
-  showToast: any;
 }
 
 export default function ToolsTab({ theme, isDark }: Props) {
@@ -152,7 +151,7 @@ export default function ToolsTab({ theme, isDark }: Props) {
               })}
               <Button
                 size="small"
-                startIcon={running[tool.name] ? undefined : <RunIcon />}
+                startIcon={running[tool.name] ? undefined : <Play size={18} />}
                 onClick={() => handleRun(tool.name)}
                 disabled={running[tool.name]}
                 sx={{

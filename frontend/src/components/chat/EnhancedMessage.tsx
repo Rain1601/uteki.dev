@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Typography, IconButton, Tooltip } from '@mui/material';
-import { ContentCopy, SmartToy } from '@mui/icons-material';
+import { Copy, Bot } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -97,7 +97,7 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message, modelIcon })
             {modelIcon ? (
               <img src={modelIcon} alt="" style={{ width: 18, height: 18 }} />
             ) : (
-              <SmartToy sx={{ fontSize: 16, color: theme.text.muted }} />
+              <Bot size={16} style={{ color: theme.text.muted }} />
             )}
           </Box>
         )}
@@ -140,7 +140,7 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message, modelIcon })
                           },
                         }}
                       >
-                        <ContentCopy sx={{ fontSize: 16 }} />
+                        <Copy size={16} />
                       </IconButton>
                     </Tooltip>
                     <SyntaxHighlighter
