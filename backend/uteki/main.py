@@ -72,6 +72,11 @@ async def initialize_databases():
         await db_manager.initialize()
         logger.info("Database initialization completed")
         db_init_error = None
+
+        # Initialize CacheService after db_manager (uses Redis if available)
+        from uteki.common.cache import init_cache_service
+        redis_client = db_manager.redis_client if db_manager.redis_available else None
+        init_cache_service(redis_client=redis_client)
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         db_init_error = str(e)

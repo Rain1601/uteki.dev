@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
+    redis_url_override: Optional[str] = None  # 直接指定完整 URL (e.g. rediss://...upstash.io)
 
     # ClickHouse配置
     clickhouse_host: str = "localhost"
@@ -176,7 +177,9 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        """Redis连接URL"""
+        """Redis连接URL — 优先使用 REDIS_URL_OVERRIDE（支持 Upstash 等远程 TLS 连接）"""
+        if self.redis_url_override:
+            return self.redis_url_override
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
 
