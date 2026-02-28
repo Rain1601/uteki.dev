@@ -5,6 +5,7 @@ import { useResponsive } from '../hooks/useResponsive';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { TTSButton } from './chat';
 
 interface Message {
   id: string;
@@ -175,22 +176,32 @@ export default function ChatMessage({ message, modelIcon }: ChatMessageProps) {
           </ReactMarkdown>
         </Box>
 
-        {/* 时间戳 */}
-        <Typography
-          variant="caption"
+        {/* 时间戳 + TTS */}
+        <Box
           sx={{
-            color: theme.text.muted,
-            display: 'block',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: isUser ? 'flex-end' : 'flex-start',
+            gap: 0.5,
             mt: 0.5,
-            fontSize: '0.7rem',
-            textAlign: isUser ? 'right' : 'left',
           }}
         >
-          {message.timestamp.toLocaleTimeString('zh-CN', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </Typography>
+          <Typography
+            variant="caption"
+            sx={{
+              color: theme.text.muted,
+              fontSize: '0.7rem',
+            }}
+          >
+            {message.timestamp.toLocaleTimeString('zh-CN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </Typography>
+          {!isUser && message.content && (
+            <TTSButton messageId={message.id} text={message.content} />
+          )}
+        </Box>
         </Box>
       </Box>
     </Box>

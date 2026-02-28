@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Box, Typography, IconButton } from '@mui/material';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
+
+const AssetsTreemap = lazy(() => import('../components/macro/AssetsTreemap'));
+const TradingViewHeatmap = lazy(() => import('../components/macro/TradingViewHeatmap'));
 import {
   ResponsiveContainer,
   XAxis,
@@ -42,6 +45,12 @@ const CAT_META: Record<string, { label: string; question: string; hero: string }
   flow:      { label: 'Money Flow', question: 'Where is money flowing?', hero: 'vix' },
 };
 const CAT_ORDER = ['valuation', 'liquidity', 'flow'];
+
+const HEATMAP_SOURCES = [
+  { key: 'SPX500', label: 'S&P 500' },
+  { key: 'NASDAQ100', label: 'NASDAQ 100' },
+  { key: 'CRYPTO', label: 'Crypto' },
+];
 
 /* ─── helpers ─── */
 function fmtVal(v: number | null | undefined, unit?: string): string {
@@ -391,6 +400,8 @@ export default function MarketDashboardPage() {
   const [selected, setSelected] = useState<string>('valuation');
   const [detailData, setDetailData] = useState<Record<string, Indicator[]>>({});
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
+  const [activeView, setActiveView] = useState<'charts' | 'treemap' | 'heatmap'>('charts');
+  const [heatmapSource, setHeatmapSource] = useState('SPX500');
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -410,6 +421,7 @@ export default function MarketDashboardPage() {
   // Auto-fetch detail when selecting a category
   const selectCategory = useCallback(async (cat: string) => {
     setSelected(cat);
+    setActiveView('charts');
     if (cat === 'flow' || detailData[cat]) return;
     setDetailLoading(p => ({ ...p, [cat]: true }));
     try {
@@ -515,11 +527,27 @@ export default function MarketDashboardPage() {
         <Box sx={{
           width: LEFT_W, flexShrink: 0,
           borderRight: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
-          overflowY: 'auto', py: 1,
+          overflowY: 'auto', py: 0.5,
           '&::-webkit-scrollbar': { width: 3 },
           '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', borderRadius: 2 },
         }}>
-          {sortedCats.map(cat => (
+          {/* ── Charts nav ── */}
+          <Box
+            onClick={() => setActiveView('charts')}
+            sx={{
+              display: 'flex', alignItems: 'center',
+              p: '8px 12px', cursor: 'pointer',
+              borderLeft: activeView === 'charts' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
+              bgcolor: activeView === 'charts' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
+              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
+              transition: 'all 0.15s',
+            }}
+          >
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'charts' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Charts
+            </Typography>
+          </Box>
+          {activeView === 'charts' && sortedCats.map(cat => (
             <LeftCategoryGroup
               key={cat.category}
               cat={cat}
@@ -529,20 +557,84 @@ export default function MarketDashboardPage() {
               onSelect={() => selectCategory(cat.category)}
             />
           ))}
+
+          {/* ── Treemap nav ── */}
+          <Box
+            onClick={() => setActiveView('treemap')}
+            sx={{
+              display: 'flex', alignItems: 'center',
+              p: '8px 12px', cursor: 'pointer',
+              borderLeft: activeView === 'treemap' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
+              bgcolor: activeView === 'treemap' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
+              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
+              transition: 'all 0.15s',
+            }}
+          >
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'treemap' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Treemap
+            </Typography>
+          </Box>
+
+          {/* ── Heatmap nav ── */}
+          <Box
+            onClick={() => setActiveView('heatmap')}
+            sx={{
+              display: 'flex', alignItems: 'center',
+              p: '8px 12px', cursor: 'pointer',
+              borderLeft: activeView === 'heatmap' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
+              bgcolor: activeView === 'heatmap' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
+              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
+              transition: 'all 0.15s',
+            }}
+          >
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'heatmap' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Heatmap
+            </Typography>
+          </Box>
+          {activeView === 'heatmap' && HEATMAP_SOURCES.map(s => (
+            <Box
+              key={s.key}
+              onClick={() => setHeatmapSource(s.key)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 0.75,
+                p: '6px 12px 6px 24px', cursor: 'pointer',
+                bgcolor: heatmapSource === s.key ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' },
+                transition: 'background 0.15s',
+              }}
+            >
+              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: heatmapSource === s.key ? (isDark ? '#60a5fa' : '#3b82f6') : theme.text.muted, flexShrink: 0, opacity: heatmapSource === s.key ? 1 : 0.5 }} />
+              <Typography sx={{ fontSize: 11, fontWeight: heatmapSource === s.key ? 600 : 400, color: heatmapSource === s.key ? theme.text.primary : theme.text.muted }}>
+                {s.label}
+              </Typography>
+            </Box>
+          ))}
         </Box>
 
         {/* RIGHT PANEL */}
         <Box sx={{ flex: 1, minWidth: 0, p: 2, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {selected === 'flow' && selectedCat ? (
-            <FlowPanel flowData={flowData} cat={selectedCat} theme={theme} isDark={isDark} />
-          ) : (
-            <DetailChartsPanel
-              category={selected}
-              indicators={detailData[selected] || []}
-              theme={theme}
-              isDark={isDark}
-              loading={detailLoading[selected] || false}
-            />
+          {activeView === 'charts' && (
+            selected === 'flow' && selectedCat ? (
+              <FlowPanel flowData={flowData} cat={selectedCat} theme={theme} isDark={isDark} />
+            ) : (
+              <DetailChartsPanel
+                category={selected}
+                indicators={detailData[selected] || []}
+                theme={theme}
+                isDark={isDark}
+                loading={detailLoading[selected] || false}
+              />
+            )
+          )}
+          {activeView === 'treemap' && (
+            <Suspense fallback={<LoadingDots text="Loading" fontSize={12} />}>
+              <AssetsTreemap theme={theme} isDark={isDark} />
+            </Suspense>
+          )}
+          {activeView === 'heatmap' && (
+            <Suspense fallback={<LoadingDots text="Loading" fontSize={12} />}>
+              <TradingViewHeatmap theme={theme} isDark={isDark} source={heatmapSource} />
+            </Suspense>
           )}
         </Box>
       </Box>

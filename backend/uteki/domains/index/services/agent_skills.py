@@ -447,6 +447,7 @@ class AgentSkillRunner:
             "google": LLMProvider.GOOGLE,
             "qwen": LLMProvider.QWEN,
             "minimax": LLMProvider.MINIMAX,
+            "doubao": LLMProvider.DOUBAO,
         }
         provider = provider_map.get(provider_name)
         if not provider:

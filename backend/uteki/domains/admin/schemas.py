@@ -187,7 +187,7 @@ class PaginatedResponse(BaseModel):
 
 class PaginatedAPIKeysResponse(PaginatedResponse):
     """分页API密钥响应"""
-    items: list[APIKeyResponse]
+    items: list[APIKeyDetailResponse]
 
 
 class PaginatedUsersResponse(PaginatedResponse):
@@ -221,10 +221,25 @@ class LLMProviderCreate(LLMProviderBase):
     is_active: bool = Field(default=True, description="是否启用")
 
 
+class LLMProviderCreateWithKey(BaseModel):
+    """创建LLM提供商 + 自动管理API Key"""
+    provider: str = Field(..., description="提供商 (openai, anthropic, etc.)")
+    model: str = Field(..., description="模型名称")
+    display_name: str = Field(..., description="显示名称")
+    api_key: str = Field(..., description="API密钥（会被加密存储）")
+    base_url: Optional[str] = Field(None, description="自定义 Base URL")
+    temperature: Optional[float] = Field(0, description="温度")
+    max_tokens: Optional[int] = Field(4096, description="最大 tokens")
+    is_default: bool = Field(default=False, description="是否为默认")
+    is_active: bool = Field(default=True, description="是否启用")
+    priority: int = Field(default=0, description="优先级")
+
+
 class LLMProviderUpdate(BaseModel):
     """更新LLM提供商"""
     display_name: Optional[str] = None
     model: Optional[str] = None
+    api_key: Optional[str] = Field(None, description="新的 API Key（会重新加密）")
     config: Optional[Dict[str, Any]] = None
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None

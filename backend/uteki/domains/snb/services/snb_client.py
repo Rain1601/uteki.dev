@@ -220,17 +220,24 @@ class SnbClient:
 
 # Singleton
 _snb_client: Optional[SnbClient] = None
+_snb_source: Optional[str] = None  # "admin_db" or "env"
+
+
+def reset_snb_client() -> None:
+    """重置SNB客户端单例，下次请求时重新初始化"""
+    global _snb_client, _snb_source
+    _snb_client = None
+    _snb_source = None
+    logger.info("SNB客户端缓存已清除")
 
 
 def get_snb_client() -> Optional[SnbClient]:
-    """获取SNB客户端单例，从Settings读取配置"""
-    global _snb_client
-
+    """获取SNB客户端单例 (env-only fallback，优先用 get_snb_client_async)"""
+    global _snb_client, _snb_source
     if _snb_client is not None:
         return _snb_client
 
     from uteki.common.config import settings
-
     if not settings.snb_account or not settings.snb_api_key:
         return None
 
@@ -239,4 +246,42 @@ def get_snb_client() -> Optional[SnbClient]:
         key=settings.snb_api_key,
         env=settings.snb_env,
     )
+    _snb_source = "env"
+    logger.info("SNB config loaded from environment variables")
     return _snb_client
+
+
+async def get_snb_client_async() -> Optional[SnbClient]:
+    """获取SNB客户端单例：Admin DB 优先 → env fallback"""
+    global _snb_client, _snb_source
+
+    # If already loaded from Admin DB, reuse
+    if _snb_client is not None and _snb_source == "admin_db":
+        return _snb_client
+
+    # 1. 尝试从 Admin DB 读取 (provider=snb)
+    try:
+        from uteki.domains.admin.repository import APIKeyRepository
+        from uteki.domains.admin.service import get_encryption_service
+
+        row = await APIKeyRepository.get_by_provider("snb", "production")
+        if row and row.get("is_active") and row.get("api_key"):
+            enc = get_encryption_service()
+            api_key = enc.decrypt(row["api_key"])
+            extra = row.get("extra_config") or {}
+            account = extra.get("account")
+            if account and api_key:
+                _snb_client = SnbClient(account=account, key=api_key, env="prod")
+                _snb_source = "admin_db"
+                logger.info(f"SNB config loaded from Admin DB (account={account[:4]}...)")
+                return _snb_client
+            else:
+                logger.warning(f"SNB Admin DB row found but missing fields — "
+                               f"has_account={bool(account)}, has_api_key={bool(api_key)}")
+    except Exception as e:
+        logger.warning(f"Failed to load SNB config from Admin DB: {e}")
+
+    # 2. Fallback: env vars (only if no cached client yet)
+    if _snb_client is not None:
+        return _snb_client
+    return get_snb_client()

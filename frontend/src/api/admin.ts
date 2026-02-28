@@ -2,8 +2,10 @@ import { get, post, patch, del } from './client';
 import type {
   APIKey,
   CreateAPIKeyRequest,
+  UpdateAPIKeyRequest,
   LLMProvider,
-  CreateLLMProviderRequest,
+  CreateLLMProviderWithKeyRequest,
+  UpdateLLMProviderRequest,
   ExchangeConfig,
   CreateExchangeConfigRequest,
   DataSourceConfig,
@@ -13,19 +15,18 @@ import type {
   MessageResponse,
 } from '../types/admin';
 
-// ==================== API Keys ====================
 export const adminApi = {
   // API Keys
   apiKeys: {
-    list: (page = 1, pageSize = 10) =>
+    list: (skip = 0, limit = 100) =>
       get<PaginatedResponse<APIKey>>('/api/admin/api-keys', {
-        params: { page, page_size: pageSize },
+        params: { skip, limit },
       }),
 
     create: (data: CreateAPIKeyRequest) =>
       post<APIKey>('/api/admin/api-keys', data),
 
-    update: (id: string, data: Partial<CreateAPIKeyRequest>) =>
+    update: (id: string, data: UpdateAPIKeyRequest) =>
       patch<APIKey>(`/api/admin/api-keys/${id}`, data),
 
     delete: (id: string) =>
@@ -34,18 +35,21 @@ export const adminApi = {
 
   // LLM Providers
   llmProviders: {
-    list: (page = 1, pageSize = 10) =>
+    list: (skip = 0, limit = 100) =>
       get<PaginatedResponse<LLMProvider>>('/api/admin/llm-providers', {
-        params: { page, page_size: pageSize },
+        params: { skip, limit },
       }),
+
+    active: () =>
+      get<LLMProvider[]>('/api/admin/llm-providers/active'),
 
     getDefault: () =>
       get<LLMProvider>('/api/admin/llm-providers/default'),
 
-    create: (data: CreateLLMProviderRequest) =>
-      post<LLMProvider>('/api/admin/llm-providers', data),
+    createWithKey: (data: CreateLLMProviderWithKeyRequest) =>
+      post<LLMProvider>('/api/admin/llm-providers/create-with-key', data),
 
-    update: (id: string, data: Partial<CreateLLMProviderRequest>) =>
+    update: (id: string, data: UpdateLLMProviderRequest) =>
       patch<LLMProvider>(`/api/admin/llm-providers/${id}`, data),
 
     delete: (id: string) =>
@@ -54,13 +58,13 @@ export const adminApi = {
 
   // Exchange Configs
   exchanges: {
-    list: (page = 1, pageSize = 10) =>
+    list: (skip = 0, limit = 100) =>
       get<PaginatedResponse<ExchangeConfig>>('/api/admin/exchanges', {
-        params: { page, page_size: pageSize },
+        params: { skip, limit },
       }),
 
-    getByExchange: (exchangeName: string) =>
-      get<ExchangeConfig[]>(`/api/admin/exchanges/by-exchange/${exchangeName}`),
+    active: () =>
+      get<ExchangeConfig[]>('/api/admin/exchanges/active'),
 
     create: (data: CreateExchangeConfigRequest) =>
       post<ExchangeConfig>('/api/admin/exchanges', data),
@@ -74,13 +78,10 @@ export const adminApi = {
 
   // Data Sources
   dataSources: {
-    list: (page = 1, pageSize = 10) =>
+    list: (skip = 0, limit = 100) =>
       get<PaginatedResponse<DataSourceConfig>>('/api/admin/data-sources', {
-        params: { page, page_size: pageSize },
+        params: { skip, limit },
       }),
-
-    getByType: (dataType: string) =>
-      get<DataSourceConfig[]>(`/api/admin/data-sources/by-type/${dataType}`),
 
     create: (data: CreateDataSourceConfigRequest) =>
       post<DataSourceConfig>('/api/admin/data-sources', data),
@@ -92,7 +93,7 @@ export const adminApi = {
       del<MessageResponse>(`/api/admin/data-sources/${id}`),
   },
 
-  // System Health
+  // System
   system: {
     health: () =>
       get<SystemHealth>('/api/admin/system/health'),

@@ -66,3 +66,35 @@ export interface FlowResponse {
   success: boolean;
   data: FlowData;
 }
+
+/* ─── Market Cap (Treemap) ─── */
+
+export interface MarketCapAsset {
+  rank: number;
+  name: string;
+  symbol: string | null;
+  asset_type: 'company' | 'precious_metal' | 'cryptocurrency' | 'etf';
+  market_cap: number;
+  price: number | null;
+  change_today: number | null;
+  change_30d: number | null;
+  country: string | null;
+  data_date: string;
+}
+
+export interface MarketCapListResponse {
+  success: boolean;
+  data: MarketCapAsset[];
+  total: number;
+}
+
+export interface MarketCapSummary {
+  by_type: Record<string, { count: number; total_market_cap: number }>;
+  total_assets: number;
+  data_date: string | null;
+}
+
+export interface MarketCapSummaryResponse {
+  success: boolean;
+  data: MarketCapSummary;
+}

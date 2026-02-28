@@ -31,6 +31,9 @@ const LOGO_MAP: Record<string, { dark: string; light?: string }> = {
   minimax: {
     dark: `${LOBEHUB_CDN}/dark/minimax-color.png`,
   },
+  doubao: {
+    dark: `${LOBEHUB_CDN}/dark/doubao-color.png`,
+  },
 };
 
 /** Provider 品牌色（与 AgentChatPage 一致） */
@@ -42,6 +45,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   qwen: '#A855F7',
   dashscope: '#A855F7',
   minimax: '#FFB74D',
+  doubao: '#00D6C2',
 };
 
 export function getProviderColor(provider: string): string {
@@ -115,6 +119,7 @@ export function getProviderDisplayName(provider: string): string {
     qwen: 'Qwen',
     dashscope: 'Qwen',
     minimax: 'MiniMax',
+    doubao: '豆包',
   };
   return map[provider.toLowerCase()] || provider;
 }

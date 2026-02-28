@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { getAuthHeaders } from '../hooks/useAuth';
 
 // API Base URL - uses environment variable in production, localhost in development
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8888';
@@ -12,7 +13,6 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
-  CircularProgress,
   Tooltip,
   SwipeableDrawer,
 } from '@mui/material';
@@ -81,6 +81,8 @@ export default function AgentChatPage() {
   const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4-20250514'); // 默认选择Claude
   const [modelSelectorHovered, setModelSelectorHovered] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
 
   // Deep Research state
   const [researchMode, setResearchMode] = useState(false);
@@ -91,9 +93,18 @@ export default function AgentChatPage() {
   const [researchInProgress, setResearchInProgress] = useState(false);
   const [currentSourceReading, setCurrentSourceReading] = useState('');
 
-  // 滚动到底部
+  // 智能滚动：只有用户在底部附近时才自动滚动
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const threshold = 100;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
   };
 
   useEffect(() => {
@@ -110,7 +121,7 @@ export default function AgentChatPage() {
   const loadAvailableModels = async () => {
     try {
       console.log('🔄 Loading available models...');
-      const response = await fetch(`${API_BASE_URL}/api/agent/models/available`);
+      const response = await fetch(`${API_BASE_URL}/api/agent/models/available`, { headers: getAuthHeaders(), credentials: 'include' });
       console.log('📡 API Response status:', response.status);
       const data = await response.json();
       console.log('📦 Models data:', data);
@@ -129,7 +140,7 @@ export default function AgentChatPage() {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/conversations`);
+      const response = await fetch(`${API_BASE_URL}/api/agent/conversations`, { headers: getAuthHeaders(), credentials: 'include' });
       const data = await response.json();
       setConversations(data.items || []);
     } catch (error) {
@@ -179,8 +190,10 @@ export default function AgentChatPage() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/agent/research/stream`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           query: userMessage.content,
@@ -363,8 +376,10 @@ export default function AgentChatPage() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/agent/chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           conversation_id: currentConversationId,
@@ -441,7 +456,8 @@ export default function AgentChatPage() {
   const loadConversation = async (conversationId: string) => {
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/agent/conversations/${conversationId}`
+        `${API_BASE_URL}/api/agent/conversations/${conversationId}`,
+        { headers: getAuthHeaders(), credentials: 'include' }
       );
       const data = await response.json();
 
@@ -638,7 +654,6 @@ export default function AgentChatPage() {
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder={`Message ${modelOptions.find(m => m.id === selectedModelId)?.name || 'AI'}...`}
-                disabled={isStreaming}
                 sx={{
                   '& .MuiOutlinedInput-root': {
                     bgcolor: theme.background.secondary,
@@ -680,13 +695,13 @@ export default function AgentChatPage() {
                       onClick={handleSendMessage}
                       disabled={!message.trim() || isStreaming}
                       sx={{
-                        color: message.trim() ? theme.brand.primary : theme.text.disabled,
+                        color: message.trim() && !isStreaming ? theme.brand.primary : theme.text.disabled,
                         '&:hover': {
                           bgcolor: 'rgba(100, 149, 237, 0.1)',
                         },
                       }}
                     >
-                      {isStreaming ? <CircularProgress size={24} /> : <SendIcon />}
+                      <SendIcon />
                     </IconButton>
                   ),
                 }}
@@ -820,6 +835,8 @@ export default function AgentChatPage() {
         ) : (
           /* 对话状态 - 消息列表 */
           <Box
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
             sx={{
               flex: 1,
               width: '100%',
@@ -859,6 +876,11 @@ export default function AgentChatPage() {
                 )}
                 <TypingIndicator />
               </>
+            )}
+
+            {/* Regular chat streaming indicator */}
+            {isStreaming && !researchInProgress && (
+              <TypingIndicator />
             )}
 
             <div ref={messagesEndRef} />
@@ -1016,7 +1038,6 @@ export default function AgentChatPage() {
               onChange={(e) => setMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="继续对话..."
-              disabled={isStreaming}
               sx={{
                 '& .MuiOutlinedInput-root': {
                   bgcolor: theme.background.secondary,
@@ -1038,10 +1059,10 @@ export default function AgentChatPage() {
                     onClick={handleSendMessage}
                     disabled={!message.trim() || isStreaming}
                     sx={{
-                      color: message.trim() ? theme.brand.primary : theme.text.disabled,
+                      color: message.trim() && !isStreaming ? theme.brand.primary : theme.text.disabled,
                     }}
                   >
-                    {isStreaming ? <CircularProgress size={24} /> : <SendIcon />}
+                    <SendIcon />
                   </IconButton>
                 ),
               }}

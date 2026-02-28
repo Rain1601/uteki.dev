@@ -2,9 +2,12 @@
 Admin domain service - 业务逻辑层
 """
 
+import logging
 from typing import List, Optional, Tuple
 from cryptography.fernet import Fernet
 import os
+
+logger = logging.getLogger(__name__)
 
 from uteki.domains.admin.repository import (
     APIKeyRepository,
@@ -22,8 +25,10 @@ class EncryptionService:
     """加密服务 - 用于敏感数据加密"""
 
     def __init__(self):
-        key = os.getenv("ENCRYPTION_KEY")
+        from uteki.common.config import settings
+        key = settings.encryption_key
         if not key:
+            logger.warning("ENCRYPTION_KEY 未设置，生成临时密钥。加密数据将在重启后失效！")
             key = Fernet.generate_key()
         elif isinstance(key, str):
             key = key.encode()
@@ -56,6 +61,7 @@ class APIKeyService:
         )
 
         api_key_data = {
+            "user_id": "default",
             "provider": data.provider,
             "display_name": data.display_name,
             "api_key": encrypted_key,
@@ -90,23 +96,32 @@ class APIKeyService:
 
     async def list_api_keys(
         self, skip: int = 0, limit: int = 100
-    ) -> Tuple[List[schemas.APIKeyResponse], int]:
+    ) -> Tuple[List[schemas.APIKeyDetailResponse], int]:
         items, total = await APIKeyRepository.list_all(skip, limit)
 
-        response_items = [
-            schemas.APIKeyResponse(
-                id=item["id"],
-                provider=item["provider"],
-                display_name=item["display_name"],
-                environment=item["environment"],
-                description=item.get("description"),
-                is_active=item["is_active"],
-                has_secret=item.get("api_secret") is not None,
-                created_at=item["created_at"],
-                updated_at=item["updated_at"],
+        response_items = []
+        for item in items:
+            # Decrypt to get masked version
+            try:
+                decrypted_key = self.encryption.decrypt(item["api_key"])
+                masked = self.encryption.mask_api_key(decrypted_key)
+            except Exception:
+                masked = "****"
+            response_items.append(
+                schemas.APIKeyDetailResponse(
+                    id=item["id"],
+                    provider=item["provider"],
+                    display_name=item["display_name"],
+                    environment=item["environment"],
+                    description=item.get("description"),
+                    is_active=item["is_active"],
+                    has_secret=item.get("api_secret") is not None,
+                    api_key_masked=masked,
+                    extra_config=item.get("extra_config"),
+                    created_at=item["created_at"],
+                    updated_at=item["updated_at"],
+                )
             )
-            for item in items
-        ]
 
         return response_items, total
 
@@ -254,6 +269,7 @@ class LLMProviderService:
 
     async def create_provider(self, data: schemas.LLMProviderCreate) -> dict:
         provider_data = {
+            "user_id": "default",
             "provider": data.provider,
             "model": data.model,
             "api_key_id": data.api_key_id,
@@ -289,12 +305,107 @@ class LLMProviderService:
     async def delete_provider(self, provider_id: str) -> bool:
         return await LLMProviderRepository.delete(provider_id)
 
+    async def create_provider_with_key(
+        self,
+        provider: str,
+        model: str,
+        api_key: str,
+        display_name: str,
+        config: Optional[dict] = None,
+        is_default: bool = False,
+        is_active: bool = True,
+        priority: int = 0,
+        base_url: Optional[str] = None,
+        encryption_service: Optional["EncryptionService"] = None,
+    ) -> dict:
+        """两步创建：先查找或新建 API Key，再创建 LLM Provider"""
+        enc = encryption_service or EncryptionService()
+
+        # Step 1: Find existing active API key for this provider, or create new
+        existing_key = await APIKeyRepository.get_by_provider(provider, "production")
+        if existing_key:
+            api_key_id = existing_key["id"]
+            # Update the API key if a new one is provided
+            if api_key:
+                encrypted = enc.encrypt(api_key)
+                await APIKeyRepository.update(api_key_id, api_key=encrypted)
+        else:
+            encrypted = enc.encrypt(api_key)
+            key_data = {
+                "user_id": "default",
+                "provider": provider,
+                "display_name": f"{provider} API Key",
+                "api_key": encrypted,
+                "environment": "production",
+                "is_active": True,
+            }
+            new_key = await APIKeyRepository.create(key_data)
+            api_key_id = new_key["id"]
+
+        # Step 2: Create LLM provider linked to the API key
+        provider_config = config or {}
+        if base_url:
+            provider_config["base_url"] = base_url
+
+        provider_data = {
+            "user_id": "default",
+            "provider": provider,
+            "model": model,
+            "api_key_id": api_key_id,
+            "display_name": display_name,
+            "config": provider_config,
+            "is_default": is_default,
+            "is_active": is_active,
+            "priority": priority,
+        }
+        return await LLMProviderRepository.create(provider_data)
+
+    async def get_active_models_for_runtime(
+        self,
+        encryption_service: Optional["EncryptionService"] = None,
+    ) -> list:
+        """获取运行时可用模型列表（解密 API Key）"""
+        enc = encryption_service or EncryptionService()
+        providers = await LLMProviderRepository.list_active_providers()
+        if not providers:
+            return []
+
+        models = []
+        for p in providers:
+            api_key_id = p.get("api_key_id")
+            if not api_key_id:
+                continue
+
+            key_row = await APIKeyRepository.get_by_id(api_key_id)
+            if not key_row or not key_row.get("is_active", True):
+                continue
+
+            try:
+                decrypted_key = enc.decrypt(key_row["api_key"])
+            except Exception as e:
+                logger.warning(f"Failed to decrypt API key for provider {p['provider']}/{p['model']}: {type(e).__name__}: {e}")
+                continue
+
+            config = p.get("config") or {}
+            models.append({
+                "provider": p["provider"],
+                "model": p["model"],
+                "api_key": decrypted_key,
+                "base_url": config.get("base_url"),
+                "temperature": config.get("temperature", 0),
+                "max_tokens": config.get("max_tokens", 4096),
+                "enabled": True,
+            })
+
+        return models
+
 
 class ExchangeConfigService:
     """交易所配置服务"""
 
     async def create_exchange(self, data: schemas.ExchangeConfigCreate) -> dict:
         exchange_data = {
+            "user_id": "default",
             "exchange": data.exchange,
             "api_key_id": data.api_key_id,
             "display_name": data.display_name,

@@ -778,20 +778,311 @@ function PipelineSteps({
             </Box>
           </Box>
           <Collapse in={expandedSkill === step.skill}>
-            <Box sx={{ px: 0.5, py: 0.5, ml: 2 }}>
+            <Box sx={{ px: 0.5, py: 0.5, ml: 1 }}>
               {step.error ? (
                 <Typography sx={{ fontSize: 10, color: '#f44336', fontFamily: 'monospace' }}>
                   {step.error}
                 </Typography>
               ) : step.output_summary ? (
-                <Box sx={{ fontSize: 10, fontFamily: 'monospace', color: theme.text.secondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {tryFormatJson(step.output_summary)}
-                </Box>
+                <PipelineStepCard skill={step.skill} output={step.output_summary} theme={theme} />
               ) : null}
             </Box>
           </Collapse>
         </Box>
       ))}
+    </Box>
+  );
+}
+
+/** Parse JSON string, return object or null */
+function tryParseJson(text: string): any | null {
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === 'object' ? parsed : null;
+  } catch { return null; }
+}
+
+/** Dispatch to the right semantic card based on skill name */
+function PipelineStepCard({ skill, output, theme }: { skill: string; output: string; theme: any }) {
+  const data = tryParseJson(output);
+  if (!data) {
+    // Fallback to monospace
+    return (
+      <Box sx={{ fontSize: 10, fontFamily: 'monospace', color: theme.text.secondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {output}
+      </Box>
+    );
+  }
+
+  switch (skill) {
+    case 'analyze_market': return <MarketAnalysisCard data={data} theme={theme} />;
+    case 'analyze_macro': return <MacroAnalysisCard data={data} theme={theme} />;
+    case 'recall_memory': return <MemoryRecallCard data={data} theme={theme} />;
+    case 'make_decision': return <DecisionCard data={data} theme={theme} />;
+    default:
+      return (
+        <Box sx={{ fontSize: 10, fontFamily: 'monospace', color: theme.text.secondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {JSON.stringify(data, null, 2)}
+        </Box>
+      );
+  }
+}
+
+const TREND_COLORS: Record<string, string> = {
+  bullish: '#4caf50', bearish: '#f44336', neutral: '#ff9800',
+  上涨: '#4caf50', 下跌: '#f44336', 震荡: '#ff9800',
+};
+
+const REGIME_COLORS: Record<string, string> = {
+  expansionary: '#4caf50', contractionary: '#f44336', neutral: '#ff9800',
+  扩张: '#4caf50', 收缩: '#f44336', 中性: '#ff9800',
+};
+
+const BIAS_COLORS: Record<string, string> = {
+  bullish: '#4caf50', bearish: '#f44336', neutral: '#ff9800',
+  偏多: '#4caf50', 偏空: '#f44336', 中性: '#ff9800',
+};
+
+function _chipColor(value: string | undefined, map: Record<string, string>): string {
+  if (!value) return '#9e9e9e';
+  const lower = value.toLowerCase();
+  return map[lower] || '#9e9e9e';
+}
+
+/* ── analyze_market card ── */
+function MarketAnalysisCard({ data, theme }: { data: any; theme: any }) {
+  const trend = data.trend || data.market_trend;
+  const confidence = data.confidence ?? data.trend_confidence;
+  const keyLevels = data.key_levels || [];
+  const summary = data.summary || data.market_summary;
+
+  return (
+    <Box sx={{ p: 0.8, borderRadius: 1, bgcolor: 'rgba(128,128,128,0.04)', border: '1px solid rgba(128,128,128,0.08)' }}>
+      {/* Header: trend + confidence */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+        {trend && (
+          <Chip
+            label={trend}
+            size="small"
+            sx={{ fontSize: 10, height: 20, fontWeight: 600, bgcolor: `${_chipColor(trend, TREND_COLORS)}18`, color: _chipColor(trend, TREND_COLORS) }}
+          />
+        )}
+        {confidence != null && (
+          <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+            confidence: {typeof confidence === 'number' && confidence <= 1 ? `${(confidence * 100).toFixed(0)}%` : confidence}
+          </Typography>
+        )}
+      </Box>
+
+      {/* Key levels table */}
+      {keyLevels.length > 0 && (
+        <Box sx={{ mb: 0.8 }}>
+          <Typography sx={{ fontSize: 9, color: theme.text.muted, fontWeight: 600, mb: 0.3 }}>Key Levels</Typography>
+          {keyLevels.map((level: any, i: number) => (
+            <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.15 }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 600, color: theme.text.primary, minWidth: 40 }}>
+                {level.symbol || level.etf || '—'}
+              </Typography>
+              {level.support != null && (
+                <Typography sx={{ fontSize: 10, color: '#4caf50' }}>
+                  S: ${level.support}
+                </Typography>
+              )}
+              {level.resistance != null && (
+                <Typography sx={{ fontSize: 10, color: '#f44336' }}>
+                  R: ${level.resistance}
+                </Typography>
+              )}
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {/* Summary */}
+      {summary && (
+        <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5 }}>
+          {summary}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/* ── analyze_macro card ── */
+function MacroAnalysisCard({ data, theme }: { data: any; theme: any }) {
+  const regime = data.macro_regime || data.regime;
+  const inflation = data.inflation_outlook || data.inflation;
+  const tailwinds = data.macro_tailwinds || data.tailwinds || [];
+  const headwinds = data.macro_headwinds || data.headwinds || [];
+  const summary = data.summary || data.macro_summary;
+
+  return (
+    <Box sx={{ p: 0.8, borderRadius: 1, bgcolor: 'rgba(128,128,128,0.04)', border: '1px solid rgba(128,128,128,0.08)' }}>
+      {/* Header: regime + inflation */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+        {regime && (
+          <Chip
+            label={regime}
+            size="small"
+            sx={{ fontSize: 10, height: 20, fontWeight: 600, bgcolor: `${_chipColor(regime, REGIME_COLORS)}18`, color: _chipColor(regime, REGIME_COLORS) }}
+          />
+        )}
+        {inflation && (
+          <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+            inflation: {inflation}
+          </Typography>
+        )}
+      </Box>
+
+      {/* Tailwinds */}
+      {tailwinds.length > 0 && (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: '#4caf50', fontWeight: 600, mb: 0.2 }}>Tailwinds</Typography>
+          {tailwinds.map((t: string, i: number) => (
+            <Typography key={i} sx={{ fontSize: 10, color: theme.text.secondary, pl: 0.5 }}>
+              + {t}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
+      {/* Headwinds */}
+      {headwinds.length > 0 && (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: '#f44336', fontWeight: 600, mb: 0.2 }}>Headwinds</Typography>
+          {headwinds.map((h: string, i: number) => (
+            <Typography key={i} sx={{ fontSize: 10, color: theme.text.secondary, pl: 0.5 }}>
+              - {h}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
+      {/* Summary */}
+      {summary && (
+        <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5, mt: 0.3 }}>
+          {summary}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/* ── recall_memory card ── */
+function MemoryRecallCard({ data, theme }: { data: any; theme: any }) {
+  const bias = data.memory_informed_bias || data.bias;
+  const lessons = data.relevant_lessons || data.lessons || [];
+  const reasoning = data.reasoning || data.memory_reasoning;
+
+  return (
+    <Box sx={{ p: 0.8, borderRadius: 1, bgcolor: 'rgba(128,128,128,0.04)', border: '1px solid rgba(128,128,128,0.08)' }}>
+      {/* Header: bias */}
+      {bias && (
+        <Box sx={{ mb: 0.8 }}>
+          <Chip
+            label={bias}
+            size="small"
+            sx={{ fontSize: 10, height: 20, fontWeight: 600, bgcolor: `${_chipColor(bias, BIAS_COLORS)}18`, color: _chipColor(bias, BIAS_COLORS) }}
+          />
+        </Box>
+      )}
+
+      {/* Lessons */}
+      {lessons.length > 0 ? (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: theme.text.muted, fontWeight: 600, mb: 0.2 }}>Lessons</Typography>
+          {lessons.map((l: any, i: number) => (
+            <Typography key={i} sx={{ fontSize: 10, color: theme.text.secondary, pl: 0.5, lineHeight: 1.5 }}>
+              {typeof l === 'string' ? l : l.lesson || l.content || JSON.stringify(l)}
+            </Typography>
+          ))}
+        </Box>
+      ) : (
+        <Typography sx={{ fontSize: 10, color: theme.text.muted, mb: 0.5 }}>No prior lessons</Typography>
+      )}
+
+      {/* Reasoning */}
+      {reasoning && (
+        <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5, mt: 0.3 }}>
+          {reasoning}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/* ── make_decision card (思考过程 + 风险评估, 分配已在 ModelCard 展示) ── */
+function DecisionCard({ data, theme }: { data: any; theme: any }) {
+  const chainOfThought = data.chain_of_thought || data.thinking || data['思考过程'];
+  const riskAssessment = data.risk_assessment || data.risk || data['风险评估'];
+  const invalidation = data.invalidation || data['失效条件'];
+  const reasoning = data.reasoning || data['决策理由'];
+  const action = data.action || data['操作'];
+  const confidence = data.confidence ?? data['信心度'];
+
+  return (
+    <Box sx={{ p: 0.8, borderRadius: 1, bgcolor: 'rgba(128,128,128,0.04)', border: '1px solid rgba(128,128,128,0.08)' }}>
+      {/* Action + confidence header */}
+      {(action || confidence != null) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+          {action && (
+            <Chip
+              label={action}
+              size="small"
+              sx={{
+                fontSize: 10, height: 20, fontWeight: 600,
+                bgcolor: (action.toUpperCase().includes('BUY') || action.includes('买')) ? 'rgba(76,175,80,0.15)' : action.toUpperCase().includes('SELL') || action.includes('卖') ? 'rgba(244,67,54,0.15)' : 'rgba(255,152,0,0.15)',
+                color: (action.toUpperCase().includes('BUY') || action.includes('买')) ? '#4caf50' : action.toUpperCase().includes('SELL') || action.includes('卖') ? '#f44336' : '#ff9800',
+              }}
+            />
+          )}
+          {confidence != null && (
+            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+              confidence: {typeof confidence === 'number' && confidence <= 1 ? `${(confidence * 100).toFixed(0)}%` : confidence}
+            </Typography>
+          )}
+        </Box>
+      )}
+
+      {/* Chain of thought */}
+      {chainOfThought && (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: theme.text.muted, fontWeight: 600, mb: 0.2 }}>Chain of Thought</Typography>
+          <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5 }}>
+            {chainOfThought}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Reasoning */}
+      {reasoning && !chainOfThought && (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: theme.text.muted, fontWeight: 600, mb: 0.2 }}>Reasoning</Typography>
+          <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5 }}>
+            {reasoning}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Risk assessment */}
+      {riskAssessment && (
+        <Box sx={{ mb: 0.5 }}>
+          <Typography sx={{ fontSize: 9, color: '#ff9800', fontWeight: 600, mb: 0.2 }}>Risk Assessment</Typography>
+          <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5 }}>
+            {riskAssessment}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Invalidation */}
+      {invalidation && (
+        <Box>
+          <Typography sx={{ fontSize: 9, color: '#f44336', fontWeight: 600, mb: 0.2 }}>Invalidation</Typography>
+          <Typography sx={{ fontSize: 10, color: theme.text.secondary, lineHeight: 1.5 }}>
+            {invalidation}
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -866,17 +1157,6 @@ function JsonView({ data, theme, collapsed = false }: { data: any; theme: any; c
   }
 
   return <span>{String(data)}</span>;
-}
-
-/** Try to parse and pretty-format JSON strings, return original if not JSON */
-function tryFormatJson(text: string): string {
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed === 'object') {
-      return JSON.stringify(parsed, null, 2);
-    }
-  } catch { /* not JSON */ }
-  return text;
 }
 
 /* ── Structured Output Card ── */

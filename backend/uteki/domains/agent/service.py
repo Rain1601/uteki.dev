@@ -52,6 +52,9 @@ def parse_model_info(model_id: str) -> Tuple[str, str]:
         # Gemini models
         "gemini-2.0-flash-exp": ("google", "gemini-2.0-flash-exp"),
         "gemini-pro": ("google", "gemini-pro"),
+
+        # Doubao models
+        "doubao-seed-2-0-pro-260215": ("doubao", "doubao-seed-2-0-pro-260215"),
     }
 
     if model_id in model_mapping:
@@ -70,6 +73,8 @@ def parse_model_info(model_id: str) -> Tuple[str, str]:
         return ("minimax", model_id)
     elif "gemini" in model_id:
         return ("google", model_id)
+    elif "doubao" in model_id:
+        return ("doubao", model_id)
 
     # 默认：让 SimpleLLMService 从 DB 自动选择
     return ("", model_id)
@@ -161,6 +166,7 @@ class SimpleLLMService:
             "qwen": LLMProvider.QWEN,
             "minimax": LLMProvider.MINIMAX,
             "google": LLMProvider.GOOGLE,
+            "doubao": LLMProvider.DOUBAO,
         }
 
         provider_enum = provider_mapping.get(self.provider)
@@ -313,7 +319,8 @@ class ChatService:
             conversation = await self.create_conversation(
                 schemas.ChatConversationCreate(
                     title=data.message[:50] if len(data.message) > 50 else data.message,
-                    mode=data.mode
+                    mode=data.mode,
+                    user_id="default",
                 )
             )
 

@@ -14,7 +14,7 @@ from uteki.domains.auth.deps import get_current_user
 from uteki.domains.snb.schemas import (
     PlaceOrderRequest, CancelOrderRequest, TransactionNoteRequest, SnbResponse,
 )
-from uteki.domains.snb.services.snb_client import get_snb_client
+from uteki.domains.snb.services.snb_client import get_snb_client_async, reset_snb_client
 from uteki.domains.snb.services.snb_service import SnbService, get_snb_service
 from uteki.domains.snb.services.totp_service import TotpService, get_totp_service
 
@@ -28,13 +28,13 @@ async def get_db_session():
         yield session
 
 
-def _require_client():
+async def _require_client():
     """获取SNB客户端，未配置时抛出503"""
-    client = get_snb_client()
+    client = await get_snb_client_async()
     if client is None:
         raise HTTPException(
             status_code=503,
-            detail="SNB未配置。此功能仅在本地部署时可用，请设置环境变量 SNB_ACCOUNT 和 SNB_API_KEY。"
+            detail="SNB未配置。请在 Admin > Exchanges 中配置雪盈证券 API Key 和 Account。"
         )
     return client
 
@@ -86,7 +86,17 @@ async def setup_totp(
 async def get_status(
     user: dict = Depends(get_current_user),
 ):
-    client = _require_client()
+    client = await _require_client()
+    result = await client.get_token_status()
+    return result
+
+
+@router.post("/reconnect", summary="重新连接SNB（清除缓存并重新加载凭证）")
+async def reconnect(
+    user: dict = Depends(get_current_user),
+):
+    reset_snb_client()
+    client = await _require_client()
     result = await client.get_token_status()
     return result
 
@@ -100,7 +110,7 @@ async def get_status(
 async def get_balance(
     user: dict = Depends(get_current_user),
 ):
-    client = _require_client()
+    client = await _require_client()
     result = await client.get_balance()
     return result
 
@@ -109,7 +119,7 @@ async def get_balance(
 async def get_positions(
     user: dict = Depends(get_current_user),
 ):
-    client = _require_client()
+    client = await _require_client()
     result = await client.get_positions()
     return result
 
@@ -120,7 +130,7 @@ async def get_orders(
     limit: int = Query(100, ge=1, le=500, description="返回数量"),
     user: dict = Depends(get_current_user),
 ):
-    client = _require_client()
+    client = await _require_client()
     result = await client.get_orders(status=status, limit=limit)
     return result
 
@@ -142,7 +152,7 @@ async def place_order(
 
     await _verify_totp_for_user(user, request.totp_code, session, totp_service)
 
-    client = _require_client()
+    client = await _require_client()
     result = await client.place_order(
         symbol=request.symbol,
         side=request.side,
@@ -165,7 +175,7 @@ async def cancel_order(
 ):
     await _verify_totp_for_user(user, request.totp_code, session, totp_service)
 
-    client = _require_client()
+    client = await _require_client()
     result = await client.cancel_order(order_id)
     logger.info(f"[AUDIT] Order cancelled by {user['user_id']}: {order_id}")
     return result
@@ -184,7 +194,7 @@ async def get_transactions(
     snb_service: SnbService = Depends(get_snb_service),
     user: dict = Depends(get_current_user),
 ):
-    client = _require_client()
+    client = await _require_client()
 
     # 1. 从SNB API实时获取交易记录
     api_result = await client.get_transaction_list(symbol=symbol, limit=limit)

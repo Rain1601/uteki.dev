@@ -6,6 +6,7 @@
 - OpenAI - 支持 function calling
 - DeepSeek - OpenAI 兼容
 - Qwen (DashScope) - 阿里云通义千问
+- Doubao (火山引擎 Ark) - 字节跳动豆包
 
 设计理念：
 1. 统一的接口，屏蔽各 provider 的差异
@@ -29,6 +30,7 @@ class LLMProvider(str, Enum):
     DASHSCOPE = "dashscope"  # Qwen 的别名
     MINIMAX = "minimax"
     GOOGLE = "google"  # Gemini
+    DOUBAO = "doubao"
 
 
 @dataclass
@@ -338,6 +340,18 @@ class MiniMaxAdapter(OpenAIAdapter):
 # ============================================================================
 
 
+class DoubaoAdapter(OpenAIAdapter):
+    """Doubao (火山引擎 Ark) Adapter — OpenAI 兼容接口"""
+
+    def __init__(self, api_key: str, model: str, config: Optional[LLMConfig] = None):
+        super().__init__(api_key, model, config)
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+        )
+
+
 class GeminiAdapter(OpenAIAdapter):
     """Google Gemini Adapter — 使用 OpenAI 兼容接口，支持自定义 base_url 代理"""
 
@@ -398,6 +412,8 @@ class LLMAdapterFactory:
             return QwenAdapter(api_key, model, config)
         elif provider == LLMProvider.MINIMAX:
             return MiniMaxAdapter(api_key, model, config)
+        elif provider == LLMProvider.DOUBAO:
+            return DoubaoAdapter(api_key, model, config)
         elif provider == LLMProvider.GOOGLE:
             return GeminiAdapter(api_key, model, config, base_url=base_url)
         else:

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Callable
 from uuid import uuid4
 
+from sqlalchemy import select, func
+
 from uteki.common.config import settings
 from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.models.model_io import ModelIO
@@ -20,6 +22,7 @@ from uteki.domains.index.models.decision_harness import DecisionHarness
 from uteki.domains.index.models.decision_log import DecisionLog
 from uteki.domains.index.models.arena_vote import ArenaVote
 from uteki.domains.index.models.model_score import ModelScore
+from uteki.domains.index.models.prompt_version import PromptVersion
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,7 @@ ARENA_MODELS = [
     {"provider": "google", "model": "gemini-2.5-pro-thinking", "api_key_attr": "google_api_key"},
     {"provider": "qwen", "model": "qwen-plus", "api_key_attr": "dashscope_api_key"},
     {"provider": "minimax", "model": "MiniMax-Text-01", "api_key_attr": "minimax_api_key"},
+    {"provider": "doubao", "model": "doubao-seed-2-0-pro-260215", "api_key_attr": "doubao_api_key"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -66,23 +70,51 @@ async def _backup_rows(table: str, rows: list, model_class=None):
 
 
 def load_models_from_db() -> List[Dict[str, Any]]:
-    """从 DB 加载 model_config，返回 enabled 的模型列表。
+    """从 admin 配置加载模型列表，fallback 到 agent_memory。
 
-    Returns empty list if no config found or no enabled models.
+    优先级：admin.llm_providers (解密) → agent_memory (legacy) → 空列表
     Shared by Arena, Agent Chat, Reflection, Backtest services.
     """
-    repo = SupabaseRepository("agent_memory")
-    row = repo.select_one(eq={"category": "model_config", "agent_key": "system"})
-    if not row:
-        return []
-
+    # Priority 1: Admin LLM Providers (encrypted, via Supabase)
     try:
-        models = json.loads(row.get("content") or "[]")
-    except (json.JSONDecodeError, TypeError):
-        return []
+        from uteki.domains.admin.service import get_llm_provider_service, get_encryption_service
+        import asyncio
 
-    # Filter enabled models with valid api_key
-    return [m for m in models if m.get("enabled", True) and m.get("api_key")]
+        llm_svc = get_llm_provider_service()
+        enc = get_encryption_service()
+
+        # Run async method synchronously (called from sync context)
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're inside an async context, use a thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                models = pool.submit(
+                    lambda: asyncio.run(llm_svc.get_active_models_for_runtime(encryption_service=enc))
+                ).result(timeout=10)
+        else:
+            models = asyncio.run(llm_svc.get_active_models_for_runtime(encryption_service=enc))
+
+        if models:
+            logger.info(f"Loaded {len(models)} models from admin config")
+            return models
+    except Exception as e:
+        logger.warning(f"Failed to load models from admin config: {e}")
+
+    # Priority 2: Legacy agent_memory (for backward compat)
+    try:
+        repo = SupabaseRepository("agent_memory")
+        row = repo.select_one(eq={"category": "model_config", "agent_key": "system"})
+        if row:
+            models = json.loads(row.get("content") or "[]")
+            result = [m for m in models if m.get("enabled", True) and m.get("api_key")]
+            if result:
+                logger.info(f"Loaded {len(result)} models from agent_memory (legacy)")
+                return result
+    except Exception as e:
+        logger.warning(f"Failed to load models from agent_memory: {e}")
+
+    return []
 
 
 class ArenaService:
@@ -443,6 +475,7 @@ class ArenaService:
                 "google": LLMProvider.GOOGLE,
                 "qwen": LLMProvider.QWEN,
                 "minimax": LLMProvider.MINIMAX,
+                "doubao": LLMProvider.DOUBAO,
             }
             provider = provider_map.get(provider_name)
             if not provider:
@@ -635,6 +668,7 @@ class ArenaService:
             "google": LLMProvider.GOOGLE,
             "qwen": LLMProvider.QWEN,
             "minimax": LLMProvider.MINIMAX,
+            "doubao": LLMProvider.DOUBAO,
         }
         provider = provider_map.get(voter_provider)
         if not provider:
@@ -1482,6 +1516,7 @@ class ArenaService:
             "google": {"input": 0.075, "output": 0.30},
             "qwen": {"input": 0.8, "output": 2.0},
             "minimax": {"input": 1.0, "output": 3.0},
+            "doubao": {"input": 0.8, "output": 2.0},
         }
         rate = rates.get(provider, {"input": 1.0, "output": 5.0})
         return round(
@@ -1509,6 +1544,9 @@ class ArenaService:
 
     async def get_arena_timeline(self, limit: int = 50) -> List[Dict[str, Any]]:
         """获取 Arena 时间线图表数据（按时间正序）"""
+        if not db_manager.supabase_available:
+            return await self._get_arena_timeline_from_postgres(limit)
+
         harness_repo = SupabaseRepository("decision_harness")
         io_repo = SupabaseRepository("model_io")
         log_repo = SupabaseRepository("decision_log")
@@ -1580,6 +1618,74 @@ class ArenaService:
                 break
 
         return timeline
+
+    async def _get_arena_timeline_from_postgres(self, limit: int) -> List[Dict[str, Any]]:
+        """PostgreSQL fallback for get_arena_timeline when Supabase is unavailable."""
+        async with db_manager.get_postgres_session() as session:
+            # Harnesses with model_io count
+            io_count_sub = (
+                select(ModelIO.harness_id, func.count(ModelIO.id).label("cnt"))
+                .group_by(ModelIO.harness_id)
+                .subquery()
+            )
+            stmt = (
+                select(DecisionHarness, io_count_sub.c.cnt)
+                .join(io_count_sub, DecisionHarness.id == io_count_sub.c.harness_id)
+                .order_by(DecisionHarness.created_at.asc())
+                .limit(limit)
+            )
+            harness_rows = (await session.execute(stmt)).all()
+            if not harness_rows:
+                return []
+
+            harness_ids = [h.id for h, _ in harness_rows]
+
+            # Decision logs → adopted io map
+            log_stmt = (
+                select(DecisionLog.harness_id, DecisionLog.adopted_model_io_id)
+                .where(DecisionLog.harness_id.in_(harness_ids))
+                .where(DecisionLog.adopted_model_io_id.isnot(None))
+            )
+            log_rows = (await session.execute(log_stmt)).all()
+            log_map = {r.harness_id: r.adopted_model_io_id for r in log_rows}
+
+            # Adopted model_io output_structured
+            adopted_io_ids = list(set(log_map.values()))
+            adopted_ios = {}
+            if adopted_io_ids:
+                io_stmt = select(ModelIO.id, ModelIO.output_structured).where(ModelIO.id.in_(adopted_io_ids))
+                adopted_rows = (await session.execute(io_stmt)).all()
+                adopted_ios = {r.id: r.output_structured for r in adopted_rows}
+
+            # Prompt versions
+            prompt_ids = list(set(h.prompt_version_id for h, _ in harness_rows if h.prompt_version_id))
+            prompt_map = {}
+            if prompt_ids:
+                p_stmt = select(PromptVersion.id, PromptVersion.version).where(PromptVersion.id.in_(prompt_ids))
+                p_rows = (await session.execute(p_stmt)).all()
+                prompt_map = {r.id: r.version for r in p_rows}
+
+            # Assemble
+            timeline = []
+            for h, model_count in harness_rows:
+                account = h.account_state or {}
+                adopted_io_id = log_map.get(h.id)
+                adopted_structured = adopted_ios.get(adopted_io_id) if adopted_io_id else None
+                action = None
+                if adopted_structured and isinstance(adopted_structured, dict):
+                    action = adopted_structured.get("action")
+
+                timeline.append({
+                    "harness_id": h.id,
+                    "created_at": h.created_at.isoformat() if h.created_at else None,
+                    "account_total": account.get("total"),
+                    "action": action,
+                    "harness_type": h.harness_type,
+                    "model_count": model_count,
+                    "prompt_version": prompt_map.get(h.prompt_version_id),
+                    "budget": (h.task or {}).get("budget"),
+                })
+            return timeline
 
     async def get_arena_history(self, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         """获取 Arena 运行历史列表"""

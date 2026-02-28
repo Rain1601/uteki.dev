@@ -366,65 +366,6 @@ export default function SnbTradingPage() {
     );
   }
 
-  // TOTP not configured — show setup screen
-  if (totpConfigured === false) {
-    return (
-      <Box
-        sx={{
-          m: -3, height: 'calc(100vh - 48px)', width: 'calc(100% + 48px)',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          bgcolor: theme.background.primary, color: theme.text.primary, p: 3,
-        }}
-      >
-        <QrCodeIcon sx={{ fontSize: 48, color: theme.brand.primary, mb: 2 }} />
-        <Typography sx={{ fontSize: 20, fontWeight: 600, mb: 1 }}>设置二次验证 (Google Authenticator)</Typography>
-        <Typography sx={{ fontSize: 14, color: theme.text.muted, textAlign: 'center', maxWidth: 520, lineHeight: 1.8, mb: 3 }}>
-          下单和撤单操作需要 Google Authenticator 验证码保护。
-          请生成密钥并用 Google Authenticator 扫描 QR 码完成设置。
-        </Typography>
-
-        {!totpSetup ? (
-          <Button
-            onClick={handleTotpSetup}
-            disabled={totpSetupLoading}
-            sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, px: 4, py: 1.2, borderRadius: 2, '&:hover': { bgcolor: theme.brand.hover } }}
-          >
-            {totpSetupLoading ? <LoadingDots text="生成中" fontSize={13} color="#fff" /> : '生成 TOTP 密钥'}
-          </Button>
-        ) : (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2.5, maxWidth: 400 }}>
-            {/* QR Code */}
-            <Box sx={{ p: 2, bgcolor: '#fff', borderRadius: 2 }}>
-              <img src={totpSetup.qr_code_base64} alt="TOTP QR Code" style={{ width: 200, height: 200, display: 'block' }} />
-            </Box>
-
-            {/* Secret key */}
-            <Box sx={{ p: 2, bgcolor: cardBg, borderRadius: 2, border: cardBorder, width: '100%', textAlign: 'center' }}>
-              <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5 }}>或手动输入密钥:</Typography>
-              <Typography sx={{ fontSize: 16, fontFamily: 'monospace', fontWeight: 600, color: theme.text.primary, letterSpacing: 2 }}>
-                {totpSetup.secret}
-              </Typography>
-            </Box>
-
-            {/* Success hint */}
-            <Box sx={{ p: 2, bgcolor: isDark ? 'rgba(76,175,80,0.08)' : 'rgba(76,175,80,0.05)', borderRadius: 2, border: `1px solid ${isDark ? 'rgba(76,175,80,0.3)' : 'rgba(76,175,80,0.2)'}`, width: '100%' }}>
-              <Typography sx={{ fontSize: 13, color: theme.text.secondary, lineHeight: 1.6 }}>
-                密钥已自动保存。请用 Google Authenticator 扫描上方二维码，然后点击下方按钮开始交易。
-              </Typography>
-            </Box>
-
-            <Button
-              onClick={() => { setTotpSetup(null); refreshAll(); }}
-              sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, px: 4, borderRadius: 2, '&:hover': { bgcolor: theme.brand.hover } }}
-            >
-              已扫描，开始交易
-            </Button>
-          </Box>
-        )}
-      </Box>
-    );
-  }
-
   return (
     <Box
       sx={{
@@ -759,27 +700,36 @@ export default function SnbTradingPage() {
             <MenuItem value="DAY">当日 (DAY)</MenuItem>
             <MenuItem value="GTC">撤销前有效 (GTC)</MenuItem>
           </TextField>
-          {/* TOTP Code */}
-          <Box>
-            <TextField
-              label="验证码 (Google Authenticator)"
-              size="small"
-              fullWidth
-              value={orderForm.totp_code}
-              onChange={(e) => setOrderForm({ ...orderForm, totp_code: e.target.value.replace(/\D/g, '').slice(0, 6) })}
-              placeholder="000000"
-              {...totpInputProps}
+          {/* TOTP Code or Setup */}
+          {totpConfigured === false ? (
+            <TotpSetupInline
+              theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder}
+              totpSetup={totpSetup} totpSetupLoading={totpSetupLoading}
+              onSetup={handleTotpSetup}
+              onDone={() => { setTotpSetup(null); setTotpConfigured(true); }}
             />
-            <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, lineHeight: 1.5 }}>
-              打开手机 Google Authenticator App，输入当前显示的 6 位数字验证码
-            </Typography>
-          </Box>
+          ) : (
+            <Box>
+              <TextField
+                label="验证码 (Google Authenticator)"
+                size="small"
+                fullWidth
+                value={orderForm.totp_code}
+                onChange={(e) => setOrderForm({ ...orderForm, totp_code: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                placeholder="000000"
+                {...totpInputProps}
+              />
+              <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, lineHeight: 1.5 }}>
+                打开手机 Google Authenticator App，输入当前显示的 6 位数字验证码
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setOrderDialogOpen(false)} sx={{ color: theme.text.muted, textTransform: 'none' }}>取消</Button>
           <Button
             onClick={handlePlaceOrder}
-            disabled={orderSubmitting || !orderForm.symbol || !orderForm.quantity || orderForm.totp_code.length !== 6}
+            disabled={orderSubmitting || !orderForm.symbol || !orderForm.quantity || orderForm.totp_code.length !== 6 || totpConfigured === false}
             sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, '&:hover': { bgcolor: theme.brand.hover } }}
           >
             {orderSubmitting ? <LoadingDots text="提交中" fontSize={13} color="#fff" /> : '确认下单'}
@@ -795,27 +745,36 @@ export default function SnbTradingPage() {
           <Typography sx={{ color: theme.text.secondary, fontSize: 14 }}>
             确定要撤销订单 {cancelOrderId} 吗？
           </Typography>
-          {/* TOTP Code */}
-          <Box>
-            <TextField
-              label="验证码 (Google Authenticator)"
-              size="small"
-              fullWidth
-              value={cancelTotpCode}
-              onChange={(e) => setCancelTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="000000"
-              {...totpInputProps}
+          {/* TOTP Code or Setup */}
+          {totpConfigured === false ? (
+            <TotpSetupInline
+              theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder}
+              totpSetup={totpSetup} totpSetupLoading={totpSetupLoading}
+              onSetup={handleTotpSetup}
+              onDone={() => { setTotpSetup(null); setTotpConfigured(true); }}
             />
-            <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, lineHeight: 1.5 }}>
-              打开手机 Google Authenticator App，输入当前显示的 6 位数字验证码
-            </Typography>
-          </Box>
+          ) : (
+            <Box>
+              <TextField
+                label="验证码 (Google Authenticator)"
+                size="small"
+                fullWidth
+                value={cancelTotpCode}
+                onChange={(e) => setCancelTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="000000"
+                {...totpInputProps}
+              />
+              <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, lineHeight: 1.5 }}>
+                打开手机 Google Authenticator App，输入当前显示的 6 位数字验证码
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCancelDialogOpen(false)} sx={{ color: theme.text.muted, textTransform: 'none' }}>取消</Button>
           <Button
             onClick={handleCancelOrder}
-            disabled={cancelSubmitting || cancelTotpCode.length !== 6}
+            disabled={cancelSubmitting || cancelTotpCode.length !== 6 || totpConfigured === false}
             sx={{ bgcolor: '#f44336', color: '#fff', textTransform: 'none', fontWeight: 600, '&:hover': { bgcolor: '#d32f2f' } }}
           >
             {cancelSubmitting ? <LoadingDots text="撤销中" fontSize={13} color="#fff" /> : '确认撤单'}
@@ -878,6 +837,50 @@ export default function SnbTradingPage() {
           </Button>
         </DialogActions>
       </Dialog>
+    </Box>
+  );
+}
+
+/* ─── Inline TOTP Setup (shown inside order/cancel dialogs) ─── */
+
+function TotpSetupInline({ theme, isDark, cardBg, cardBorder, totpSetup, totpSetupLoading, onSetup, onDone }: {
+  theme: any; isDark: boolean; cardBg: string; cardBorder: string;
+  totpSetup: TotpSetupResult | null; totpSetupLoading: boolean;
+  onSetup: () => void; onDone: () => void;
+}) {
+  if (totpSetup) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 1 }}>
+        <Box sx={{ p: 1.5, bgcolor: '#fff', borderRadius: 2 }}>
+          <img src={totpSetup.qr_code_base64} alt="TOTP QR Code" style={{ width: 160, height: 160, display: 'block' }} />
+        </Box>
+        <Box sx={{ p: 1.5, bgcolor: cardBg, borderRadius: 1.5, border: cardBorder, width: '100%', textAlign: 'center' }}>
+          <Typography sx={{ fontSize: 11, color: theme.text.muted, mb: 0.5 }}>或手动输入密钥:</Typography>
+          <Typography sx={{ fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: theme.text.primary, letterSpacing: 1.5 }}>
+            {totpSetup.secret}
+          </Typography>
+        </Box>
+        <Button onClick={onDone} size="small"
+          sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: theme.brand.hover } }}>
+          已扫描，继续下单
+        </Button>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: 2, bgcolor: isDark ? 'rgba(255,193,7,0.06)' : 'rgba(255,193,7,0.04)', borderRadius: 2, border: `1px solid ${isDark ? 'rgba(255,193,7,0.2)' : 'rgba(255,193,7,0.15)'}`, textAlign: 'center' }}>
+      <QrCodeIcon sx={{ fontSize: 32, color: theme.brand.primary, mb: 1 }} />
+      <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary, mb: 0.5 }}>
+        需要设置二次验证
+      </Typography>
+      <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 1.5, lineHeight: 1.6 }}>
+        下单和撤单需要 Google Authenticator 验证码保护，请先完成设置。
+      </Typography>
+      <Button onClick={onSetup} disabled={totpSetupLoading} size="small"
+        sx={{ bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none', fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: theme.brand.hover } }}>
+        {totpSetupLoading ? <LoadingDots text="生成中" fontSize={12} color="#fff" /> : '生成 TOTP 密钥'}
+      </Button>
     </Box>
   );
 }

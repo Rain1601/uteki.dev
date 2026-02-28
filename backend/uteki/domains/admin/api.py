@@ -16,9 +16,21 @@ from uteki.domains.admin.service import (
     get_llm_provider_service,
     get_exchange_config_service,
     get_data_source_config_service,
+    get_encryption_service,
 )
 
 router = APIRouter()
+
+
+def _maybe_reset_snb_client(provider: str) -> None:
+    """Reset SNB client singleton when SNB credentials change."""
+    if provider == "snb":
+        try:
+            from uteki.domains.snb.services.snb_client import reset_snb_client
+            reset_snb_client()
+        except Exception:
+            pass
+
 
 # Module-level service instances (no longer need session injection)
 api_key_svc = get_api_key_service()
@@ -51,6 +63,7 @@ async def create_api_key(data: schemas.APIKeyCreate):
     - **environment**: 环境 (production, sandbox, testnet)
     """
     api_key = await api_key_svc.create_api_key(data)
+    _maybe_reset_snb_client(data.provider)
 
     await audit_svc.log_action(
         action="api_key.create",
@@ -118,6 +131,7 @@ async def update_api_key(api_key_id: str, data: schemas.APIKeyUpdate):
     api_key = await api_key_svc.update_api_key(api_key_id, data)
     if not api_key:
         raise HTTPException(status_code=404, detail="API key not found")
+    _maybe_reset_snb_client(api_key["provider"])
 
     await audit_svc.log_action(
         action="api_key.update",
@@ -142,9 +156,13 @@ async def update_api_key(api_key_id: str, data: schemas.APIKeyUpdate):
 @router.delete("/api-keys/{api_key_id}", response_model=schemas.MessageResponse, summary="删除API密钥")
 async def delete_api_key(api_key_id: str):
     """删除API密钥"""
+    # Get provider before deletion so we can reset relevant singletons
+    existing = await api_key_svc.get_api_key(api_key_id, decrypt=False)
     success = await api_key_svc.delete_api_key(api_key_id)
     if not success:
         raise HTTPException(status_code=404, detail="API key not found")
+    if existing:
+        _maybe_reset_snb_client(existing["provider"])
 
     await audit_svc.log_action(
         action="api_key.delete",
@@ -361,6 +379,60 @@ async def get_default_llm_provider():
     return provider
 
 
+@router.post(
+    "/llm-providers/create-with-key",
+    response_model=schemas.LLMProviderResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建LLM提供商（自动管理API Key）",
+)
+async def create_llm_provider_with_key(data: schemas.LLMProviderCreateWithKey):
+    """
+    两步创建：自动查找或新建 API Key，然后创建 LLM Provider。
+    前端使用此端点简化配置流程。
+    """
+    enc = get_encryption_service()
+    config = {}
+    if data.base_url:
+        config["base_url"] = data.base_url
+    if data.temperature is not None:
+        config["temperature"] = data.temperature
+    if data.max_tokens is not None:
+        config["max_tokens"] = data.max_tokens
+
+    provider = await llm_svc.create_provider_with_key(
+        provider=data.provider,
+        model=data.model,
+        api_key=data.api_key,
+        display_name=data.display_name,
+        config=config,
+        is_default=data.is_default,
+        is_active=data.is_active,
+        priority=data.priority,
+        encryption_service=enc,
+    )
+
+    await audit_svc.log_action(
+        action="llm_provider.create_with_key",
+        resource_type="llm_provider",
+        resource_id=provider["id"],
+        status="success",
+        details={"provider": data.provider, "model": data.model},
+    )
+
+    return provider
+
+
+@router.get(
+    "/llm-providers/runtime",
+    summary="获取运行时模型列表（内部使用）",
+)
+async def get_runtime_models():
+    """返回所有 active 的 LLM Provider + 解密的 API Key，供 Arena/Agent 运行时使用"""
+    enc = get_encryption_service()
+    models = await llm_svc.get_active_models_for_runtime(encryption_service=enc)
+    return {"models": models, "count": len(models)}
+
+
 @router.get(
     "/llm-providers/{provider_id}",
     response_model=schemas.LLMProviderResponse,
@@ -380,8 +452,26 @@ async def get_llm_provider(provider_id: str):
     summary="更新LLM提供商",
 )
 async def update_llm_provider(provider_id: str, data: schemas.LLMProviderUpdate):
-    """更新LLM提供商配置"""
-    provider = await llm_svc.update_provider(provider_id, data)
+    """更新LLM提供商配置。如果提供了 api_key，会更新关联的 API Key 记录。"""
+    # If api_key is provided, update the associated API key record
+    if data.api_key:
+        existing = await llm_svc.get_provider(provider_id)
+        if existing and existing.get("api_key_id"):
+            enc = get_encryption_service()
+            encrypted = enc.encrypt(data.api_key)
+            from uteki.domains.admin.repository import APIKeyRepository
+            await APIKeyRepository.update(existing["api_key_id"], api_key=encrypted)
+
+    # Remove api_key from the update data (it's not a field on llm_providers table)
+    update_dict = data.dict(exclude_unset=True)
+    update_dict.pop("api_key", None)
+
+    if update_dict:
+        from uteki.domains.admin import schemas as s
+        provider = await llm_svc.update_provider(provider_id, s.LLMProviderUpdate(**update_dict))
+    else:
+        provider = await llm_svc.get_provider(provider_id)
+
     if not provider:
         raise HTTPException(status_code=404, detail="LLM provider not found")
 

@@ -3,10 +3,14 @@ Agent domain API routes - FastAPI路由
 """
 
 from fastapi import APIRouter, HTTPException, status, Query
-from fastapi.responses import StreamingResponse
-from typing import List
+from fastapi.responses import StreamingResponse, Response
+from typing import List, Optional
+from pydantic import BaseModel
 import json
 import logging
+import uuid
+import base64
+import httpx
 
 from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
@@ -18,7 +22,7 @@ from uteki.domains.agent.llm_adapter import (
     LLMConfig,
 )
 from uteki.common.config import settings
-from uteki.domains.auth.deps import get_current_user
+from uteki.domains.auth.deps import get_current_user_optional
 from fastapi import Depends
 
 router = APIRouter()
@@ -41,7 +45,7 @@ chat_svc = get_chat_service()
 )
 async def create_conversation(
     data: schemas.ChatConversationCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
 ):
     """
     创建新的聊天会话
@@ -49,7 +53,7 @@ async def create_conversation(
     - **title**: 会话标题
     - **mode**: 会话模式 (chat, analysis, trading)
     """
-    data.user_id = current_user["user_id"]
+    data.user_id = current_user["user_id"] if current_user else "default"
     conversation = await chat_svc.create_conversation(data)
 
     return schemas.ChatConversationResponse(
@@ -72,10 +76,10 @@ async def list_conversations(
     include_archived: bool = Query(False, description="是否包含归档会话"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
 ):
     """列出当前用户的聊天会话"""
-    user_id = current_user["user_id"]
+    user_id = current_user["user_id"] if current_user else "default"
     items, total = await chat_svc.list_conversations(
         user_id=user_id, skip=skip, limit=limit, include_archived=include_archived
     )
@@ -292,10 +296,11 @@ async def get_available_models():
         "google": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
         "qwen": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
         "minimax": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
+        "doubao": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/doubao-color.png",
     }
     PROVIDER_DISPLAY = {
         "anthropic": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",
-        "google": "Google", "qwen": "Qwen", "minimax": "MiniMax",
+        "google": "Google", "qwen": "Qwen", "minimax": "MiniMax", "doubao": "豆包",
     }
 
     db_models = load_models_from_db()
@@ -372,6 +377,7 @@ async def research_stream(request: ResearchRequest):
                 "google": LLMProvider.GOOGLE,
                 "qwen": LLMProvider.QWEN,
                 "minimax": LLMProvider.MINIMAX,
+                "doubao": LLMProvider.DOUBAO,
             }
 
             db_models = load_models_from_db()
@@ -468,3 +474,88 @@ async def research_health():
         "google_engine_id_present": bool(settings.google_search_engine_id),
         "dependencies": dependencies,
     }
+
+
+# ============================================================================
+# TTS Routes (火山引擎语音合成)
+# ============================================================================
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_type: Optional[str] = None
+
+
+@router.post(
+    "/tts",
+    summary="文字转语音（火山引擎 TTS）",
+)
+async def text_to_speech(data: TTSRequest):
+    """
+    将文字转换为语音，返回 mp3 音频流。
+    使用火山引擎 openspeech TTS HTTP API。
+    """
+    if not settings.volc_tts_app_id or not settings.volc_tts_access_token:
+        raise HTTPException(
+            status_code=500,
+            detail="TTS 未配置：请设置 VOLC_TTS_APP_ID 和 VOLC_TTS_ACCESS_TOKEN",
+        )
+
+    if not data.text.strip():
+        raise HTTPException(status_code=400, detail="text 不能为空")
+
+    voice_type = data.voice_type or settings.volc_tts_voice_type
+
+    payload = {
+        "app": {
+            "appid": settings.volc_tts_app_id,
+            "token": settings.volc_tts_access_token,
+            "cluster": settings.volc_tts_cluster,
+        },
+        "user": {
+            "uid": "uteki_user",
+        },
+        "audio": {
+            "voice_type": voice_type,
+            "encoding": "mp3",
+            "speed_ratio": 1.0,
+            "volume_ratio": 1.0,
+            "pitch_ratio": 1.0,
+        },
+        "request": {
+            "reqid": str(uuid.uuid4()),
+            "text": data.text,
+            "text_type": "plain",
+            "operation": "query",
+        },
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer;{settings.volc_tts_access_token}",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://openspeech.bytedance.com/api/v1/tts",
+                json=payload,
+                headers=headers,
+            )
+
+        if resp.status_code != 200:
+            logger.error(f"TTS API error: status={resp.status_code}, body={resp.text[:500]}")
+            raise HTTPException(status_code=502, detail="TTS 服务请求失败")
+
+        result = resp.json()
+
+        if "data" not in result:
+            logger.error(f"TTS API unexpected response: {json.dumps(result)[:500]}")
+            raise HTTPException(status_code=502, detail="TTS 服务返回格式异常")
+
+        audio_bytes = base64.b64decode(result["data"])
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+
+    except httpx.RequestError as e:
+        logger.error(f"TTS request error: {e}")
+        raise HTTPException(status_code=502, detail="TTS 服务连接失败")

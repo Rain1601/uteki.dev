@@ -425,9 +425,13 @@ async def get_agent_config(
     user: dict = Depends(get_current_user),
 ):
     """从 Memory 读取 agent_config 配置"""
-    memories = await memory_service.read(
-        _get_user_id(user), category="agent_config", limit=1, agent_key="system"
-    )
+    try:
+        memories = await memory_service.read(
+            _get_user_id(user), category="agent_config", limit=1, agent_key="system"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to read agent config: {e}")
+        return {"success": True, "data": {}}
     if memories:
         try:
             config = json.loads(memories[0].get("content", "{}"))
@@ -486,9 +490,13 @@ async def get_model_config(
     user: dict = Depends(get_current_user),
 ):
     """从 Memory 读取 model_config 配置列表"""
-    memories = await memory_service.read(
-        _get_user_id(user), category="model_config", limit=1, agent_key="system"
-    )
+    try:
+        memories = await memory_service.read(
+            _get_user_id(user), category="model_config", limit=1, agent_key="system"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to read model config: {e}")
+        memories = []
     if memories:
         try:
             models = json.loads(memories[0].get("content", "[]"))
@@ -666,7 +674,11 @@ async def get_arena_timeline(
     limit: int = Query(50, ge=1, le=200),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    timeline = await arena_service.get_arena_timeline(limit=limit)
+    try:
+        timeline = await arena_service.get_arena_timeline(limit=limit)
+    except Exception as e:
+        logger.warning(f"Failed to get arena timeline: {e}")
+        return {"success": True, "data": []}
     return {"success": True, "data": timeline}
 
 

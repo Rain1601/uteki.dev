@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, createContext, useContext, ReactNode 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8888';
 
 // Token storage key
-const TOKEN_KEY = 'uteki_auth_token';
+const TOKEN_KEY = 'auth_token';
 
 // User interface
 export interface User {

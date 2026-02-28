@@ -1,9 +1,11 @@
-"""Agent 记忆服务 — Supabase REST API 版"""
+"""Agent 记忆服务 — Supabase REST API 版（含 PostgreSQL fallback）"""
 
 import logging
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from uuid import uuid4
+
+from sqlalchemy import select
 
 from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.index.models.agent_memory import AgentMemory
@@ -81,6 +83,9 @@ class MemoryService:
         Args:
             agent_key: None=不过滤, "shared"=仅共享, 具体key=仅该agent
         """
+        if not db_manager.supabase_available:
+            return await self._read_from_postgres(user_id, category, limit, offset, agent_key)
+
         filters: Dict[str, Any] = {"user_id": user_id}
         if category:
             filters["category"] = category
@@ -90,6 +95,25 @@ class MemoryService:
         return self.repo.select_data(
             eq=filters, order="created_at.desc", limit=limit, offset=offset,
         )
+
+    async def _read_from_postgres(
+        self,
+        user_id: str,
+        category: Optional[str],
+        limit: int,
+        offset: int,
+        agent_key: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """PostgreSQL fallback for read when Supabase is unavailable."""
+        async with db_manager.get_postgres_session() as session:
+            stmt = select(AgentMemory).where(AgentMemory.user_id == user_id)
+            if category:
+                stmt = stmt.where(AgentMemory.category == category)
+            if agent_key is not None:
+                stmt = stmt.where(AgentMemory.agent_key == agent_key)
+            stmt = stmt.order_by(AgentMemory.created_at.desc()).offset(offset).limit(limit)
+            result = await session.execute(stmt)
+            return [row.to_dict() for row in result.scalars()]
 
     async def get_summary(
         self,

@@ -2,16 +2,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '../api/admin';
 import type {
   CreateAPIKeyRequest,
-  CreateLLMProviderRequest,
+  UpdateAPIKeyRequest,
+  CreateLLMProviderWithKeyRequest,
+  UpdateLLMProviderRequest,
   CreateExchangeConfigRequest,
   CreateDataSourceConfigRequest,
 } from '../types/admin';
 
 // ==================== API Keys ====================
-export const useAPIKeys = (page = 1, pageSize = 10) => {
+export const useAPIKeys = () => {
   return useQuery({
-    queryKey: ['apiKeys', page, pageSize],
-    queryFn: () => adminApi.apiKeys.list(page, pageSize),
+    queryKey: ['apiKeys'],
+    queryFn: () => adminApi.apiKeys.list(),
   });
 };
 
@@ -28,7 +30,7 @@ export const useCreateAPIKey = () => {
 export const useUpdateAPIKey = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<CreateAPIKeyRequest> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateAPIKeyRequest }) =>
       adminApi.apiKeys.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
@@ -47,28 +49,21 @@ export const useDeleteAPIKey = () => {
 };
 
 // ==================== LLM Providers ====================
-export const useLLMProviders = (page = 1, pageSize = 10) => {
+export const useLLMProviders = () => {
   return useQuery({
-    queryKey: ['llmProviders', page, pageSize],
-    queryFn: () => adminApi.llmProviders.list(page, pageSize),
+    queryKey: ['llmProviders'],
+    queryFn: () => adminApi.llmProviders.list(),
   });
 };
 
-export const useDefaultLLMProvider = () => {
-  return useQuery({
-    queryKey: ['defaultLLMProvider'],
-    queryFn: () => adminApi.llmProviders.getDefault(),
-  });
-};
-
-export const useCreateLLMProvider = () => {
+export const useCreateLLMProviderWithKey = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: CreateLLMProviderRequest) =>
-      adminApi.llmProviders.create(data),
+    mutationFn: (data: CreateLLMProviderWithKeyRequest) =>
+      adminApi.llmProviders.createWithKey(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llmProviders'] });
-      queryClient.invalidateQueries({ queryKey: ['defaultLLMProvider'] });
+      queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
     },
   });
 };
@@ -76,11 +71,11 @@ export const useCreateLLMProvider = () => {
 export const useUpdateLLMProvider = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<CreateLLMProviderRequest> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateLLMProviderRequest }) =>
       adminApi.llmProviders.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llmProviders'] });
-      queryClient.invalidateQueries({ queryKey: ['defaultLLMProvider'] });
+      queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
     },
   });
 };
@@ -96,10 +91,10 @@ export const useDeleteLLMProvider = () => {
 };
 
 // ==================== Exchange Configs ====================
-export const useExchangeConfigs = (page = 1, pageSize = 10) => {
+export const useExchangeConfigs = () => {
   return useQuery({
-    queryKey: ['exchangeConfigs', page, pageSize],
-    queryFn: () => adminApi.exchanges.list(page, pageSize),
+    queryKey: ['exchangeConfigs'],
+    queryFn: () => adminApi.exchanges.list(),
   });
 };
 
@@ -136,10 +131,10 @@ export const useDeleteExchangeConfig = () => {
 };
 
 // ==================== Data Source Configs ====================
-export const useDataSourceConfigs = (page = 1, pageSize = 10) => {
+export const useDataSourceConfigs = () => {
   return useQuery({
-    queryKey: ['dataSourceConfigs', page, pageSize],
-    queryFn: () => adminApi.dataSources.list(page, pageSize),
+    queryKey: ['dataSourceConfigs'],
+    queryFn: () => adminApi.dataSources.list(),
   });
 };
 
@@ -154,32 +149,11 @@ export const useCreateDataSourceConfig = () => {
   });
 };
 
-export const useUpdateDataSourceConfig = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<CreateDataSourceConfigRequest> }) =>
-      adminApi.dataSources.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dataSourceConfigs'] });
-    },
-  });
-};
-
-export const useDeleteDataSourceConfig = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => adminApi.dataSources.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dataSourceConfigs'] });
-    },
-  });
-};
-
 // ==================== System Health ====================
 export const useSystemHealth = () => {
   return useQuery({
     queryKey: ['systemHealth'],
     queryFn: () => adminApi.system.health(),
-    refetchInterval: 30000, // 每30秒刷新一次
+    refetchInterval: 30000,
   });
 };

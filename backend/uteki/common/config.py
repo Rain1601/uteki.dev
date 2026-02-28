@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     minimax_group_id: Optional[str] = None
     google_api_key: Optional[str] = None  # Gemini
     google_api_base_url: Optional[str] = None  # Gemini proxy, e.g. https://your-proxy.com/v1beta/openai
+    doubao_api_key: Optional[str] = None  # 豆包 (火山引擎 Ark)
+
+    # 火山引擎 TTS (语音合成)
+    volc_tts_app_id: Optional[str] = None
+    volc_tts_access_token: Optional[str] = None
+    volc_tts_cluster: str = "volcano_tts"
+    volc_tts_voice_type: str = "BV700_streaming"  # 默认灿灿
 
     # Google Search API (for Research mode)
     google_search_api_key: Optional[str] = None

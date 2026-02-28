@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ThoughtProcessCard from './ThoughtProcessCard';
 import SourcesList from './SourcesList';
+import TTSButton from './TTSButton';
 
 interface Message {
   id: string;
@@ -213,6 +214,22 @@ const EnhancedMessage: React.FC<EnhancedMessageProps> = ({ message, modelIcon })
           >
             {message.content}
           </ReactMarkdown>
+
+          {/* TTS for assistant messages */}
+          {!isUser && message.content && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ color: theme.text.muted, fontSize: '0.7rem' }}
+              >
+                {(message.timestamp ?? (message.created_at ? new Date(message.created_at) : new Date())).toLocaleTimeString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Typography>
+              <TTSButton messageId={message.id} text={message.content} />
+            </Box>
+          )}
         </Box>
 
         {/* No user avatar */}

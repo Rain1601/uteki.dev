@@ -1,5 +1,6 @@
 """Decision Harness 构建器 — Supabase REST API 版"""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -104,30 +105,8 @@ class HarnessBuilder:
                 "equity_risk_premium": None,  # TODO: earnings_yield - 10Y treasury yield
             }
 
-        # 宏观经济数据（数据源待接入，先预留 null）
-        macro = {
-            "fed_funds_rate": None,
-            "fed_rate_direction": None,
-            "cpi_yoy": None,
-            "core_pce_yoy": None,
-            "gdp_growth_qoq": None,
-            "unemployment_rate": None,
-            "ism_manufacturing_pmi": None,
-            "ism_services_pmi": None,
-            "yield_curve_2y10y": None,
-            "vix": None,
-            "dxy": None,
-        }
-
-        # 情绪数据（数据源待接入，先预留 null）
-        sentiment = {
-            "fear_greed_index": None,
-            "aaii_bull_ratio": None,
-            "aaii_bear_ratio": None,
-            "put_call_ratio": None,
-            "news_sentiment_score": None,
-            "news_key_events": [],
-        }
+        # 宏观经济 + 情绪数据（从 FRED / FMP 实时获取）
+        macro, sentiment = await self._fetch_macro_data()
 
         market_snapshot = {
             "quotes": quotes,
@@ -220,18 +199,7 @@ class HarnessBuilder:
                 "equity_risk_premium": None,
             }
 
-        macro = {
-            "fed_funds_rate": None, "fed_rate_direction": None,
-            "cpi_yoy": None, "core_pce_yoy": None,
-            "gdp_growth_qoq": None, "unemployment_rate": None,
-            "ism_manufacturing_pmi": None, "ism_services_pmi": None,
-            "yield_curve_2y10y": None, "vix": None, "dxy": None,
-        }
-        sentiment = {
-            "fear_greed_index": None, "aaii_bull_ratio": None,
-            "aaii_bear_ratio": None, "put_call_ratio": None,
-            "news_sentiment_score": None, "news_key_events": [],
-        }
+        macro, sentiment = await self._fetch_macro_data()
 
         account_state = await self._get_account_state()
         memory_summary = await self.memory_service.get_summary(user_id)
@@ -269,6 +237,83 @@ class HarnessBuilder:
             "memory_summary": memory_summary,
             "task": task,
         }
+
+    async def _fetch_macro_data(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """从 FRED / FMP 获取宏观经济数据和情绪/事件数据。
+
+        返回 (macro_dict, sentiment_dict)，任何外部调用失败均 fallback 为 None，不阻断流程。
+        """
+        macro = {
+            "fed_funds_rate": None,
+            "fed_rate_direction": None,
+            "cpi_yoy": None,
+            "core_pce_yoy": None,
+            "gdp_growth_qoq": None,
+            "unemployment_rate": None,
+            "ism_manufacturing_pmi": None,
+            "ism_services_pmi": None,
+            "yield_curve_2y10y": None,
+            "vix": None,
+            "dxy": None,
+        }
+        sentiment = {
+            "fear_greed_index": None,
+            "aaii_bull_ratio": None,
+            "aaii_bear_ratio": None,
+            "put_call_ratio": None,
+            "news_sentiment_score": None,
+            "news_key_events": [],
+        }
+
+        # ── FRED macro indicators ──
+        try:
+            from uteki.domains.macro.services.market_dashboard_service import get_market_dashboard_service
+            dashboard = get_market_dashboard_service()
+
+            fed_rate, vix, yield_curve, dxy = await asyncio.gather(
+                dashboard._get_fed_funds_rate(),
+                dashboard._get_vix(),
+                dashboard._get_yield_curve(),
+                dashboard._get_dxy(),
+                return_exceptions=True,
+            )
+
+            if not isinstance(fed_rate, Exception) and fed_rate.get("value") is not None:
+                macro["fed_funds_rate"] = fed_rate["value"]
+            if not isinstance(vix, Exception) and vix.get("value") is not None:
+                macro["vix"] = vix["value"]
+            if not isinstance(yield_curve, Exception) and yield_curve.get("value") is not None:
+                macro["yield_curve_2y10y"] = yield_curve["value"]
+            if not isinstance(dxy, Exception) and dxy.get("value") is not None:
+                macro["dxy"] = dxy["value"]
+        except Exception as e:
+            logger.warning(f"Failed to fetch FRED macro data: {e}")
+
+        # ── FMP Calendar events → sentiment.news_key_events ──
+        try:
+            from uteki.domains.macro.services.fmp_calendar_service import get_fmp_calendar_service
+            fmp_svc = get_fmp_calendar_service()
+            now = datetime.now(timezone.utc)
+            events_result = await fmp_svc.get_monthly_events_enriched(now.year, now.month)
+            if events_result.get("success"):
+                recent_events = []
+                for _date_key, evts in events_result.get("data", {}).items():
+                    for evt in evts:
+                        if evt.get("importance") in ("high", "critical"):
+                            recent_events.append({
+                                "title": evt.get("title"),
+                                "date": evt.get("start_date", "")[:10],
+                                "actual": evt.get("actual_value"),
+                                "expected": evt.get("expected_value"),
+                                "previous": evt.get("previous_value"),
+                            })
+                # 按日期排序，取最近 10 条
+                recent_events.sort(key=lambda x: x.get("date", ""), reverse=True)
+                sentiment["news_key_events"] = recent_events[:10]
+        except Exception as e:
+            logger.warning(f"Failed to fetch FMP calendar events: {e}")
+
+        return macro, sentiment
 
     async def _get_account_state(self) -> Dict[str, Any]:
         """从 SNB 获取账户状态"""
