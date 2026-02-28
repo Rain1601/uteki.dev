@@ -4,6 +4,7 @@ SNB (雪盈证券) API路由
 下单/撤单需要 Google Authenticator TOTP 验证码（每用户独立密钥）
 """
 
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -14,6 +15,7 @@ from uteki.domains.auth.deps import get_current_user
 from uteki.domains.snb.schemas import (
     PlaceOrderRequest, CancelOrderRequest, TransactionNoteRequest, SnbResponse,
 )
+from uteki.common.cache import get_cache_service
 from uteki.domains.snb.services.snb_client import get_snb_client_async, reset_snb_client
 from uteki.domains.snb.services.snb_service import SnbService, get_snb_service
 from uteki.domains.snb.services.totp_service import TotpService, get_totp_service
@@ -21,6 +23,12 @@ from uteki.domains.snb.services.totp_service import TotpService, get_totp_servic
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_TTL = 86400
+
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 async def get_db_session():
@@ -110,18 +118,26 @@ async def reconnect(
 async def get_balance(
     user: dict = Depends(get_current_user),
 ):
-    client = await _require_client()
-    result = await client.get_balance()
-    return result
+    cache = get_cache_service()
+    async def _fetch():
+        client = await _require_client()
+        return await client.get_balance()
+    return await cache.get_or_set(
+        f"uteki:snb:balance:{_today()}", _fetch, ttl=60,
+    )
 
 
 @router.get("/positions", summary="查询持仓")
 async def get_positions(
     user: dict = Depends(get_current_user),
 ):
-    client = await _require_client()
-    result = await client.get_positions()
-    return result
+    cache = get_cache_service()
+    async def _fetch():
+        client = await _require_client()
+        return await client.get_positions()
+    return await cache.get_or_set(
+        f"uteki:snb:positions:{_today()}", _fetch, ttl=60,
+    )
 
 
 @router.get("/orders", summary="查询订单")
@@ -130,9 +146,12 @@ async def get_orders(
     limit: int = Query(100, ge=1, le=500, description="返回数量"),
     user: dict = Depends(get_current_user),
 ):
-    client = await _require_client()
-    result = await client.get_orders(status=status, limit=limit)
-    return result
+    cache = get_cache_service()
+    cache_key = f"uteki:snb:orders:{_today()}:{status}:{limit}"
+    async def _fetch():
+        client = await _require_client()
+        return await client.get_orders(status=status, limit=limit)
+    return await cache.get_or_set(cache_key, _fetch, ttl=30)
 
 
 # ============================================================================
@@ -162,6 +181,7 @@ async def place_order(
         time_in_force=request.time_in_force,
     )
     logger.info(f"[AUDIT] Order placed by {user['user_id']}: {request.side} {request.quantity} {request.symbol}")
+    await get_cache_service().delete_pattern("uteki:snb:")
     return result
 
 
@@ -178,6 +198,7 @@ async def cancel_order(
     client = await _require_client()
     result = await client.cancel_order(order_id)
     logger.info(f"[AUDIT] Order cancelled by {user['user_id']}: {order_id}")
+    await get_cache_service().delete_pattern("uteki:snb:")
     return result
 
 

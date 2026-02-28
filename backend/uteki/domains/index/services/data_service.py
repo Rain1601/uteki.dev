@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 
+from uteki.common.cache import get_cache_service
 from uteki.common.config import settings
 from uteki.common.database import SupabaseRepository, db_manager
 
@@ -108,12 +109,21 @@ class DataService:
 
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """获取 ETF 实时报价，FMP 为主，AV 为备，最终 fallback 到 DB 缓存"""
+        cache = get_cache_service()
+        cache_key = f"uteki:index:quote:{symbol}"
+
+        cached = await cache.get(cache_key)
+        if cached:
+            return cached
+
         quote = await self._fetch_quote_fmp(symbol)
         if quote:
+            await cache.set(cache_key, quote, ttl=300)
             return quote
 
         quote = await self._fetch_quote_av(symbol)
         if quote:
+            await cache.set(cache_key, quote, ttl=300)
             return quote
 
         # Fallback: 从 DB 取最近一条价格

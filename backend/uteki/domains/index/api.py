@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
 
+from uteki.common.cache import get_cache_service
 from uteki.common.database import SupabaseRepository, db_manager
 from uteki.domains.auth.deps import get_current_user
 from uteki.domains.index.schemas import (
@@ -34,9 +36,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_TTL = 86400
+_SHORT_TTL = 300
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
 
 def _get_user_id(user: dict) -> str:
     return user["user_id"]
+
+
+async def _invalidate_decision_caches() -> None:
+    """Invalidate leaderboard, evaluation, and decision caches after decision actions."""
+    cache = get_cache_service()
+    await cache.delete_pattern("uteki:index:leaderboard:")
+    await cache.delete_pattern("uteki:index:eval:")
+    await cache.delete_pattern("uteki:index:decisions:")
 
 
 # ══════════════════════════════════════════
@@ -47,8 +64,15 @@ def _get_user_id(user: dict) -> str:
 async def get_watchlist(
     data_service: DataService = Depends(get_data_service),
 ):
-    items = data_service.get_watchlist()
-    return {"success": True, "data": items}
+    cache = get_cache_service()
+
+    async def _fetch():
+        items = data_service.get_watchlist()
+        return {"success": True, "data": items}
+
+    return await cache.get_or_set(
+        f"uteki:index:watchlist:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.post("/watchlist", summary="添加标的到观察池")
@@ -59,6 +83,9 @@ async def add_to_watchlist(
     item = await data_service.add_to_watchlist(
         request.symbol, name=request.name, etf_type=request.etf_type
     )
+    cache = get_cache_service()
+    await cache.delete_pattern("uteki:index:watchlist:")
+    await cache.delete_pattern("uteki:index:history:")
     return {"success": True, "data": item}
 
 
@@ -70,6 +97,9 @@ async def remove_from_watchlist(
     removed = await data_service.remove_from_watchlist(symbol)
     if not removed:
         raise HTTPException(404, f"Symbol {symbol} not found in watchlist")
+    cache = get_cache_service()
+    await cache.delete_pattern("uteki:index:watchlist:")
+    await cache.delete_pattern("uteki:index:history:")
     return {"success": True, "message": f"{symbol} removed from watchlist"}
 
 
@@ -88,6 +118,7 @@ async def update_watchlist_notes(
         eq={"id": item["id"]},
     )
     item["notes"] = request.get("notes", "")
+    await get_cache_service().delete_pattern("uteki:index:watchlist:")
     return {"success": True, "data": item}
 
 
@@ -107,8 +138,15 @@ async def get_history(
     end: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     data_service: DataService = Depends(get_data_service),
 ):
-    data = data_service.get_history(symbol, start=start, end=end)
-    return {"success": True, "data": data, "count": len(data)}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = data_service.get_history(symbol, start=start, end=end)
+        return {"success": True, "data": data, "count": len(data)}
+
+    return await cache.get_or_set(
+        f"uteki:index:history:{_today()}:{symbol}:{start}:{end}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.post("/data/refresh", summary="手动刷新所有观察池数据")
@@ -116,6 +154,7 @@ async def refresh_data(
     data_service: DataService = Depends(get_data_service),
 ):
     results = await data_service.update_all_watchlist()
+    await get_cache_service().delete_pattern("uteki:index:history:")
     return {"success": True, "data": results}
 
 
@@ -128,7 +167,7 @@ async def sync_data(
     适合进入 Watchlist 页面时自动调用。
     返回每个 symbol 的同步状态。
     """
-    from datetime import date, timedelta
+    from datetime import date as date_type, timedelta
     from uteki.domains.index.services.market_calendar import is_trading_day
 
     watchlist_rows = SupabaseRepository("watchlist").select_data(eq={"is_active": True})
@@ -136,7 +175,7 @@ async def sync_data(
     if not watchlist_rows:
         return {"success": True, "data": {"synced": [], "already_fresh": [], "failed": []}}
 
-    today = date.today()
+    today = date_type.today()
     synced = []
     already_fresh = []
     failed = []
@@ -158,7 +197,7 @@ async def sync_data(
                 continue
 
             last_date_str = str(last_rows[0]["date"])[:10]
-            last_date = date.fromisoformat(last_date_str)
+            last_date = date_type.fromisoformat(last_date_str)
 
             # Count missing trading days (excluding weekends and US market holidays)
             days_behind = 0
@@ -251,8 +290,15 @@ async def get_current_prompt(
     prompt_type: str = Query("system", description="system / user"),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    prompt = await prompt_service.get_current(prompt_type=prompt_type)
-    return {"success": True, "data": prompt}
+    cache = get_cache_service()
+
+    async def _fetch():
+        prompt = await prompt_service.get_current(prompt_type=prompt_type)
+        return {"success": True, "data": prompt}
+
+    return await cache.get_or_set(
+        f"uteki:index:prompt:current:{_today()}:{prompt_type}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.put("/prompt", summary="更新 Prompt（创建新版本）")
@@ -264,6 +310,7 @@ async def update_prompt(
     version = await prompt_service.update_prompt(
         request.content, request.description, prompt_type=prompt_type
     )
+    await get_cache_service().delete_pattern("uteki:index:prompt:")
     return {"success": True, "data": version}
 
 
@@ -272,8 +319,15 @@ async def get_prompt_history(
     prompt_type: str = Query("system", description="system / user"),
     prompt_service: PromptService = Depends(get_prompt_service),
 ):
-    history = await prompt_service.get_history(prompt_type=prompt_type)
-    return {"success": True, "data": history}
+    cache = get_cache_service()
+
+    async def _fetch():
+        history = await prompt_service.get_history(prompt_type=prompt_type)
+        return {"success": True, "data": history}
+
+    return await cache.get_or_set(
+        f"uteki:index:prompt:history:{_today()}:{prompt_type}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.put("/prompt/{version_id}/activate", summary="切换当前 Prompt 版本")
@@ -283,6 +337,7 @@ async def activate_prompt_version(
 ):
     try:
         version = await prompt_service.activate_version(version_id)
+        await get_cache_service().delete_pattern("uteki:index:prompt:")
         return {"success": True, "data": version}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -295,6 +350,7 @@ async def delete_prompt_version(
 ):
     try:
         await prompt_service.delete_version(version_id)
+        await get_cache_service().delete_pattern("uteki:index:prompt:")
         return {"success": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -326,10 +382,19 @@ async def get_memory(
     memory_service: MemoryService = Depends(get_memory_service),
     user: dict = Depends(get_current_user),
 ):
-    memories = await memory_service.read(
-        _get_user_id(user), category=category, limit=limit, offset=offset,
+    cache = get_cache_service()
+    uid = _get_user_id(user)
+
+    async def _fetch():
+        memories = await memory_service.read(
+            uid, category=category, limit=limit, offset=offset,
+        )
+        return {"success": True, "data": memories}
+
+    return await cache.get_or_set(
+        f"uteki:index:memory:{uid}:{_today()}:{category}:{limit}:{offset}",
+        _fetch, ttl=_SHORT_TTL,
     )
-    return {"success": True, "data": memories}
 
 
 @router.post("/memory", summary="写入 Agent 记忆")
@@ -338,10 +403,12 @@ async def write_memory(
     memory_service: MemoryService = Depends(get_memory_service),
     user: dict = Depends(get_current_user),
 ):
+    uid = _get_user_id(user)
     memory = await memory_service.write(
-        _get_user_id(user), request.category, request.content,
+        uid, request.category, request.content,
         metadata=request.metadata
     )
+    await get_cache_service().delete_pattern(f"uteki:index:memory:{uid}:")
     return {"success": True, "data": memory}
 
 
@@ -351,9 +418,11 @@ async def delete_memory(
     memory_service: MemoryService = Depends(get_memory_service),
     user: dict = Depends(get_current_user),
 ):
-    deleted = await memory_service.delete(memory_id, _get_user_id(user))
+    uid = _get_user_id(user)
+    deleted = await memory_service.delete(memory_id, uid)
     if not deleted:
         raise HTTPException(404, "Memory not found")
+    await get_cache_service().delete_pattern(f"uteki:index:memory:{uid}:")
     return {"success": True, "message": "Memory deleted"}
 
 
@@ -363,8 +432,15 @@ async def delete_memory(
 
 @router.get("/tools", summary="获取所有工具定义")
 async def get_tool_definitions():
-    from uteki.domains.index.services.agent_skills import TOOL_DEFINITIONS
-    return {"success": True, "data": TOOL_DEFINITIONS}
+    cache = get_cache_service()
+
+    async def _fetch():
+        from uteki.domains.index.services.agent_skills import TOOL_DEFINITIONS
+        return {"success": True, "data": TOOL_DEFINITIONS}
+
+    return await cache.get_or_set(
+        f"uteki:index:tools:{_today()}", _fetch, ttl=_TTL,
+    )
 
 
 @router.post("/tools/{tool_name}/test", summary="测试运行工具")
@@ -397,7 +473,7 @@ async def get_account_summary(
     """从 SNB 获取实时账户数据"""
     try:
         from uteki.domains.snb.api import _require_client
-        client = _require_client()
+        client = await _require_client()
         balance = await client.get_balance()
         positions = await client.get_positions()
 
@@ -425,21 +501,29 @@ async def get_agent_config(
     user: dict = Depends(get_current_user),
 ):
     """从 Memory 读取 agent_config 配置"""
-    try:
-        memories = await memory_service.read(
-            _get_user_id(user), category="agent_config", limit=1, agent_key="system"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to read agent config: {e}")
-        return {"success": True, "data": {}}
-    if memories:
+    cache = get_cache_service()
+    uid = _get_user_id(user)
+
+    async def _fetch():
         try:
-            config = json.loads(memories[0].get("content", "{}"))
-        except (json.JSONDecodeError, TypeError):
+            memories = await memory_service.read(
+                uid, category="agent_config", limit=1, agent_key="system"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to read agent config: {e}")
+            return {"success": True, "data": {}}
+        if memories:
+            try:
+                config = json.loads(memories[0].get("content", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+        else:
             config = {}
-    else:
-        config = {}
-    return {"success": True, "data": config}
+        return {"success": True, "data": config}
+
+    return await cache.get_or_set(
+        f"uteki:index:agent_config:{uid}:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.put("/agent-config", summary="保存 Agent 配置")
@@ -477,6 +561,7 @@ async def save_agent_config(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 
+    await get_cache_service().delete_pattern(f"uteki:index:agent_config:{user_id}:")
     return {"success": True, "data": request.config}
 
 
@@ -490,26 +575,34 @@ async def get_model_config(
     user: dict = Depends(get_current_user),
 ):
     """从 Memory 读取 model_config 配置列表"""
-    try:
-        memories = await memory_service.read(
-            _get_user_id(user), category="model_config", limit=1, agent_key="system"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to read model config: {e}")
-        memories = []
-    if memories:
-        try:
-            models = json.loads(memories[0].get("content", "[]"))
-        except (json.JSONDecodeError, TypeError):
-            models = []
-        if models:
-            return {"success": True, "data": models}
+    cache = get_cache_service()
+    uid = _get_user_id(user)
 
-    return {
-        "success": True,
-        "data": [],
-        "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key 后使用 Arena 分析。",
-    }
+    async def _fetch():
+        try:
+            memories = await memory_service.read(
+                uid, category="model_config", limit=1, agent_key="system"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to read model config: {e}")
+            memories = []
+        if memories:
+            try:
+                models = json.loads(memories[0].get("content", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                models = []
+            if models:
+                return {"success": True, "data": models}
+
+        return {
+            "success": True,
+            "data": [],
+            "hint": "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key 后使用 Arena 分析。",
+        }
+
+    return await cache.get_or_set(
+        f"uteki:index:model_config:{uid}:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.put("/model-config", summary="保存 Arena 模型配置")
@@ -546,6 +639,7 @@ async def save_model_config(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 
+    await get_cache_service().delete_pattern(f"uteki:index:model_config:{user_id}:")
     return {"success": True, "data": [m.model_dump() for m in request.models]}
 
 
@@ -575,7 +669,12 @@ async def run_arena(
     # 2. 运行 Arena (3-phase pipeline: 决策 → 投票 → 计分)
     arena_result = await arena_service.run(harness["id"])
 
-    # 3. 获取 prompt 版本号
+    # 3. Invalidate arena + decision caches
+    cache = get_cache_service()
+    await cache.delete_pattern("uteki:index:arena:")
+    await cache.delete_pattern("uteki:index:decisions:")
+
+    # 4. 获取 prompt 版本号
     prompt_ver = await prompt_service.get_by_id(harness["prompt_version_id"])
     prompt_version_str = prompt_ver["version"] if prompt_ver else None
 
@@ -627,6 +726,11 @@ async def run_arena_stream(
                 harness["id"], on_progress=emit_progress,
                 model_filter=model_filter,
             )
+            # Invalidate arena + decision caches
+            c = get_cache_service()
+            await c.delete_pattern("uteki:index:arena:")
+            await c.delete_pattern("uteki:index:decisions:")
+
             queue.put_nowait({
                 "type": "result",
                 "data": {
@@ -674,12 +778,19 @@ async def get_arena_timeline(
     limit: int = Query(50, ge=1, le=200),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    try:
-        timeline = await arena_service.get_arena_timeline(limit=limit)
-    except Exception as e:
-        logger.warning(f"Failed to get arena timeline: {e}")
-        return {"success": True, "data": []}
-    return {"success": True, "data": timeline}
+    cache = get_cache_service()
+
+    async def _fetch():
+        try:
+            timeline = await arena_service.get_arena_timeline(limit=limit)
+        except Exception as e:
+            logger.warning(f"Failed to get arena timeline: {e}")
+            return {"success": True, "data": []}
+        return {"success": True, "data": timeline}
+
+    return await cache.get_or_set(
+        f"uteki:index:arena:timeline:{_today()}:{limit}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/arena/backtest", summary="运行单 Agent 独立回测")
@@ -707,8 +818,15 @@ async def get_arena_history(
     offset: int = Query(0, ge=0),
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    history = await arena_service.get_arena_history(limit=limit, offset=offset)
-    return {"success": True, "data": history}
+    cache = get_cache_service()
+
+    async def _fetch():
+        history = await arena_service.get_arena_history(limit=limit, offset=offset)
+        return {"success": True, "data": history}
+
+    return await cache.get_or_set(
+        f"uteki:index:arena:history:{_today()}:{limit}:{offset}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/arena/{harness_id}", summary="获取 Arena 结果")
@@ -716,8 +834,14 @@ async def get_arena_results(
     harness_id: str,
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    results = arena_service.get_arena_results(harness_id)
-    return {"success": True, "data": results}
+    cache = get_cache_service()
+
+    async def _fetch():
+        return {"success": True, "data": arena_service.get_arena_results(harness_id)}
+
+    return await cache.get_or_set(
+        f"uteki:index:arena:result:{_today()}:{harness_id}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/arena/{harness_id}/votes", summary="获取 Arena 投票详情")
@@ -725,8 +849,14 @@ async def get_arena_votes(
     harness_id: str,
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    votes = arena_service.get_votes_for_harness(harness_id)
-    return {"success": True, "data": votes}
+    cache = get_cache_service()
+
+    async def _fetch():
+        return {"success": True, "data": arena_service.get_votes_for_harness(harness_id)}
+
+    return await cache.get_or_set(
+        f"uteki:index:arena:votes:{_today()}:{harness_id}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/arena/{harness_id}/model/{model_io_id}", summary="获取模型完整 I/O")
@@ -735,10 +865,17 @@ async def get_model_io_detail(
     model_io_id: str,
     arena_service: ArenaService = Depends(get_arena_service),
 ):
-    detail = arena_service.get_model_io_detail(model_io_id)
-    if not detail:
-        raise HTTPException(404, "Model I/O not found")
-    return {"success": True, "data": detail}
+    cache = get_cache_service()
+
+    async def _fetch():
+        detail = arena_service.get_model_io_detail(model_io_id)
+        if not detail:
+            raise HTTPException(404, "Model I/O not found")
+        return {"success": True, "data": detail}
+
+    return await cache.get_or_set(
+        f"uteki:index:arena:model_io:{_today()}:{model_io_id}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 # ══════════════════════════════════════════
@@ -755,12 +892,20 @@ async def get_decisions(
     end_date: Optional[str] = Query(None),
     decision_service: DecisionService = Depends(get_decision_service),
 ):
-    timeline = await decision_service.get_timeline(
-        limit=limit, offset=offset,
-        user_action=user_action, harness_type=harness_type,
-        start_date=start_date, end_date=end_date,
+    cache = get_cache_service()
+
+    async def _fetch():
+        timeline = await decision_service.get_timeline(
+            limit=limit, offset=offset,
+            user_action=user_action, harness_type=harness_type,
+            start_date=start_date, end_date=end_date,
+        )
+        return {"success": True, "data": timeline}
+
+    return await cache.get_or_set(
+        f"uteki:index:decisions:list:{_today()}:{limit}:{offset}:{user_action}:{harness_type}:{start_date}:{end_date}",
+        _fetch, ttl=_SHORT_TTL,
     )
-    return {"success": True, "data": timeline}
 
 
 @router.get("/decisions/{decision_id}", summary="获取决策详情")
@@ -768,10 +913,17 @@ async def get_decision_detail(
     decision_id: str,
     decision_service: DecisionService = Depends(get_decision_service),
 ):
-    detail = await decision_service.get_by_id(decision_id)
-    if not detail:
-        raise HTTPException(404, "Decision not found")
-    return {"success": True, "data": detail}
+    cache = get_cache_service()
+
+    async def _fetch():
+        detail = await decision_service.get_by_id(decision_id)
+        if not detail:
+            raise HTTPException(404, "Decision not found")
+        return {"success": True, "data": detail}
+
+    return await cache.get_or_set(
+        f"uteki:index:decisions:get:{_today()}:{decision_id}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.post("/decisions/{harness_id}/approve", summary="批准决策（需 TOTP）")
@@ -800,7 +952,7 @@ async def approve_decision(
         # 检查持仓限制（最多 3 个 ETF）
         try:
             from uteki.domains.snb.api import _require_client
-            client = _require_client()
+            client = await _require_client()
             positions = await client.get_positions()
             current_symbols = {p.get("symbol") for p in (positions or [])}
             new_symbols = {a.get("etf", a.get("symbol", "")) for a in allocations}
@@ -846,6 +998,7 @@ async def approve_decision(
         execution_results=execution_results,
         user_notes=request.notes,
     )
+    await _invalidate_decision_caches()
     return {"success": True, "data": log}
 
 
@@ -860,6 +1013,7 @@ async def skip_decision(
         user_action="skipped",
         user_notes=request.notes,
     )
+    await _invalidate_decision_caches()
     return {"success": True, "data": log}
 
 
@@ -874,6 +1028,7 @@ async def reject_decision(
         user_action="rejected",
         user_notes=request.notes,
     )
+    await _invalidate_decision_caches()
     return {"success": True, "data": log}
 
 
@@ -882,8 +1037,16 @@ async def get_counterfactuals(
     decision_id: str,
     decision_service: DecisionService = Depends(get_decision_service),
 ):
-    data = await decision_service.get_counterfactuals(decision_id)
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await decision_service.get_counterfactuals(decision_id)
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:decisions:counterfactuals:{_today()}:{decision_id}",
+        _fetch, ttl=_SHORT_TTL,
+    )
 
 
 # ══════════════════════════════════════════
@@ -895,8 +1058,15 @@ async def get_leaderboard(
     prompt_version_id: Optional[str] = Query(None),
     score_service: ScoreService = Depends(get_score_service),
 ):
-    leaderboard = await score_service.get_leaderboard(prompt_version_id=prompt_version_id)
-    return {"success": True, "data": leaderboard}
+    cache = get_cache_service()
+
+    async def _fetch():
+        lb = await score_service.get_leaderboard(prompt_version_id=prompt_version_id)
+        return {"success": True, "data": lb}
+
+    return await cache.get_or_set(
+        f"uteki:index:leaderboard:{_today()}:{prompt_version_id}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 # ══════════════════════════════════════════
@@ -907,8 +1077,15 @@ async def get_leaderboard(
 async def get_evaluation_overview(
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_overview()
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await eval_service.get_overview()
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:eval:overview:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/evaluation/voting-matrix", summary="投票热力图矩阵")
@@ -916,8 +1093,15 @@ async def get_evaluation_voting_matrix(
     limit: int = Query(20, ge=1, le=100),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_voting_matrix(limit=limit)
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await eval_service.get_voting_matrix(limit=limit)
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:eval:voting_matrix:{_today()}:{limit}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/evaluation/performance-trend", summary="模型性能趋势")
@@ -925,24 +1109,45 @@ async def get_evaluation_performance_trend(
     days: int = Query(30, ge=1, le=365),
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_performance_trend(days=days)
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await eval_service.get_performance_trend(days=days)
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:eval:perf_trend:{_today()}:{days}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/evaluation/cost-analysis", summary="模型成本分析")
 async def get_evaluation_cost_analysis(
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_cost_analysis()
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await eval_service.get_cost_analysis()
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:eval:cost_analysis:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.get("/evaluation/counterfactual-summary", summary="反事实对比概览")
 async def get_evaluation_counterfactual_summary(
     eval_service: EvaluationService = Depends(get_evaluation_service),
 ):
-    data = await eval_service.get_counterfactual_summary()
-    return {"success": True, "data": data}
+    cache = get_cache_service()
+
+    async def _fetch():
+        data = await eval_service.get_counterfactual_summary()
+        return {"success": True, "data": data}
+
+    return await cache.get_or_set(
+        f"uteki:index:eval:counterfactual:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 # ══════════════════════════════════════════
@@ -953,8 +1158,15 @@ async def get_evaluation_counterfactual_summary(
 async def get_schedules(
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
-    tasks = await scheduler_service.list_tasks()
-    return {"success": True, "data": tasks}
+    cache = get_cache_service()
+
+    async def _fetch():
+        tasks = await scheduler_service.list_tasks()
+        return {"success": True, "data": tasks}
+
+    return await cache.get_or_set(
+        f"uteki:index:schedules:{_today()}", _fetch, ttl=_SHORT_TTL,
+    )
 
 
 @router.post("/schedules", summary="创建调度任务")
@@ -966,6 +1178,7 @@ async def create_schedule(
         request.name, request.cron_expression, request.task_type,
         config=request.config,
     )
+    await get_cache_service().delete_pattern("uteki:index:schedules:")
     return {"success": True, "data": task}
 
 
@@ -983,6 +1196,7 @@ async def update_schedule(
     )
     if not task:
         raise HTTPException(404, "Schedule task not found")
+    await get_cache_service().delete_pattern("uteki:index:schedules:")
     return {"success": True, "data": task}
 
 
@@ -994,6 +1208,7 @@ async def delete_schedule(
     deleted = await scheduler_service.delete_task(task_id)
     if not deleted:
         raise HTTPException(404, "Schedule task not found")
+    await get_cache_service().delete_pattern("uteki:index:schedules:")
     return {"success": True, "message": "Schedule task deleted"}
 
 
@@ -1023,6 +1238,11 @@ async def trigger_schedule(
             budget=config.get("budget"),
         )
         arena_result = await arena_service.run(harness["id"])
+
+        # Invalidate arena + decision caches
+        c = get_cache_service()
+        await c.delete_pattern("uteki:index:arena:")
+        await c.delete_pattern("uteki:index:decisions:")
 
         await scheduler_service.update_run_status(task_id, "pending_user_action")
         return {
@@ -1144,7 +1364,6 @@ async def adopt_model(
         mio["model_provider"], mio["model_name"],
         harness_row.get("prompt_version_id"),
     )
+    await _invalidate_decision_caches()
 
     return {"success": True, "data": card}
-
-
