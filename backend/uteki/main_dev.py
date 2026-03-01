@@ -123,6 +123,7 @@ from uteki.domains.macro.dashboard_api import router as dashboard_router
 from uteki.domains.macro.marketcap_api import router as marketcap_router
 from uteki.domains.snb.api import router as snb_router
 from uteki.domains.index.api import router as index_router
+from uteki.domains.data.api import router as data_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
@@ -136,8 +137,9 @@ app.include_router(dashboard_router, prefix="/api/macro/dashboard", tags=["marke
 app.include_router(marketcap_router, prefix="/api/macro/marketcap", tags=["marketcap"])
 app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
 app.include_router(index_router, prefix="/api/index", tags=["index"])
+app.include_router(data_router, prefix="/api/data", tags=["market-data"])
 
-logger.info("✅ All domain routers registered (auth, admin, agent, news, snb, index)")
+logger.info("✅ All domain routers registered (auth, admin, agent, news, snb, index, data)")
 
 
 if __name__ == "__main__":

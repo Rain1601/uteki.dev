@@ -135,6 +135,7 @@ class Settings(BaseSettings):
     alpha_vantage_api_key: Optional[str] = None
     coingecko_api_key: Optional[str] = None
     fred_api_key: Optional[str] = None
+    finnhub_api_key: Optional[str] = None
 
     # 安全配置
     encryption_key: Optional[str] = None

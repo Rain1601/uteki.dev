@@ -53,6 +53,11 @@ trafilatura = "^1.12.0"
 apify-client = "^1.8.0"
 # Task scheduling
 apscheduler = "^3.10.4"
+# Market data providers
+yfinance = "^0.2.30"
+akshare = "^1.12.0"
+python-binance = "^1.0.17"
+websockets = "^12.0"
 # Supabase REST API
 supabase = "^2.0.0"
 # Monitoring

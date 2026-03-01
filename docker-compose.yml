@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  # PostgreSQL - Primary database for transactional data
+  # PostgreSQL + TimescaleDB - Primary database for transactional + time-series data
   postgres:
-    image: postgres:17-alpine
+    image: timescale/timescaledb:latest-pg17
     container_name: uteki-postgres
     environment:
       POSTGRES_USER: uteki

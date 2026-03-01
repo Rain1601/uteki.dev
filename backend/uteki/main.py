@@ -47,6 +47,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to start index scheduler: {e}")
 
+    # Start data scheduler (multi-market K-line ingestion)
+    if settings.environment != "test":
+        try:
+            from uteki.schedulers import get_data_scheduler
+            data_scheduler = get_data_scheduler()
+            data_scheduler.start()
+            logger.info("Data scheduler started")
+        except Exception as e:
+            logger.warning(f"Failed to start data scheduler: {e}")
+
     yield
 
     # Shutdown schedulers
@@ -61,6 +71,12 @@ async def lifespan(app: FastAPI):
         from uteki.schedulers import get_index_scheduler
         index_scheduler = get_index_scheduler()
         index_scheduler.stop()
+    except Exception:
+        pass
+    try:
+        from uteki.schedulers import get_data_scheduler
+        data_scheduler = get_data_scheduler()
+        data_scheduler.stop()
     except Exception:
         pass
 
@@ -226,8 +242,8 @@ from uteki.domains.macro.dashboard_api import router as dashboard_router
 from uteki.domains.macro.marketcap_api import router as marketcap_router
 from uteki.domains.snb.api import router as snb_router
 from uteki.domains.index.api import router as index_router
+from uteki.domains.data.api import router as data_router
 # from uteki.domains.trading.api import router as trading_router  # 待实现
-# from uteki.domains.data.api import router as data_router  # 待实现
 # from uteki.domains.evaluation.api import router as evaluation_router  # 待实现
 # from uteki.domains.dashboard.api import router as dashboard_router  # 待实现
 
@@ -244,8 +260,8 @@ app.include_router(dashboard_router, prefix="/api/macro/dashboard", tags=["marke
 app.include_router(marketcap_router, prefix="/api/macro/marketcap", tags=["marketcap"])
 app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
 app.include_router(index_router, prefix="/api/index", tags=["index"])
+app.include_router(data_router, prefix="/api/data", tags=["market-data"])
 # app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
-# app.include_router(data_router, prefix="/api/data", tags=["data"])  # 待实现
 # app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])  # 待实现
 # app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])  # 待实现
 
