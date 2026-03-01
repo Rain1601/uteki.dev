@@ -64,12 +64,18 @@ async def init_database():
         if settings.database_type == "sqlite":
             await conn.execute(text("PRAGMA foreign_keys = ON"))
         else:
-            # For PostgreSQL, create schemas first
+            # For PostgreSQL, create all schemas that models reference
             logger.info("Creating PostgreSQL schemas...")
-            schemas = ["admin", "agent", "auth", "snb", "index", "market_data"]
-            for schema in schemas:
+            # Collect schemas from all registered tables
+            model_schemas = set()
+            for table in Base.metadata.tables.values():
+                if table.schema:
+                    model_schemas.add(table.schema)
+            # Also ensure known schemas exist
+            all_schemas = model_schemas | {"admin", "agent", "auth", "snb", "index", "market_data"}
+            for schema in sorted(all_schemas):
                 await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
-            logger.info(f"✓ Created schemas: {', '.join(schemas)}")
+            logger.info(f"✓ Created schemas: {', '.join(sorted(all_schemas))}")
 
         # Create all tables
         logger.info("Creating all tables...")

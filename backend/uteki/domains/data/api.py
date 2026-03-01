@@ -74,18 +74,16 @@ async def setup_market_data():
     from uteki.domains.data.models import Symbol, KlineDaily, DataQualityLog, IngestionRun
     from uteki.common.base import Base
 
+    tables = [Symbol.__table__, KlineDaily.__table__, DataQualityLog.__table__, IngestionRun.__table__]
     results = {"steps": []}
     try:
         async with db_manager.postgres_engine.begin() as conn:
-            # Create schema
             await conn.execute(text("CREATE SCHEMA IF NOT EXISTS market_data"))
             results["steps"].append("schema created")
 
-            # Create tables
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
             results["steps"].append("tables created")
 
-        # Verify
         async with db_manager.get_postgres_session() as session:
             r = await session.execute(text(
                 "SELECT table_name FROM information_schema.tables "
