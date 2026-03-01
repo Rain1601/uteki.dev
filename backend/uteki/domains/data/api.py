@@ -39,7 +39,7 @@ def _verify_cron_secret(x_cron_secret: Optional[str] = Header(None)):
 async def debug_data():
     """Debug: check market_data schema and tables."""
     from sqlalchemy import text
-    info = {"schema_exists": False, "tables": [], "error": None}
+    info = {"schema_exists": False, "tables": [], "error": None, "db_type": settings.database_type}
     try:
         async with db_manager.get_postgres_session() as session:
             # Check schema
@@ -55,9 +55,48 @@ async def debug_data():
                 "WHERE table_schema = 'market_data'"
             ))
             info["tables"] = [row[0] for row in r.fetchall()]
+
+            # List all schemas for reference
+            r = await session.execute(text(
+                "SELECT schema_name FROM information_schema.schemata "
+                "WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')"
+            ))
+            info["all_schemas"] = [row[0] for row in r.fetchall()]
     except Exception as e:
         info["error"] = str(e)
     return info
+
+
+@router.post("/setup")
+async def setup_market_data():
+    """Create market_data schema and tables if they don't exist."""
+    from sqlalchemy import text
+    from uteki.domains.data.models import Symbol, KlineDaily, DataQualityLog, IngestionRun
+    from uteki.common.base import Base
+
+    results = {"steps": []}
+    try:
+        async with db_manager.postgres_engine.begin() as conn:
+            # Create schema
+            await conn.execute(text("CREATE SCHEMA IF NOT EXISTS market_data"))
+            results["steps"].append("schema created")
+
+            # Create tables
+            await conn.run_sync(Base.metadata.create_all)
+            results["steps"].append("tables created")
+
+        # Verify
+        async with db_manager.get_postgres_session() as session:
+            r = await session.execute(text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'market_data'"
+            ))
+            results["tables"] = [row[0] for row in r.fetchall()]
+            results["status"] = "ok"
+    except Exception as e:
+        results["error"] = str(e)
+        results["status"] = "failed"
+    return results
 
 
 # ============================================================================
