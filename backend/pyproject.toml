@@ -57,7 +57,7 @@ apscheduler = "^3.10.4"
 yfinance = "^0.2.30"
 akshare = "^1.12.0"
 python-binance = "^1.0.17"
-websockets = "^12.0"
+websockets = "^14.0"
 # Supabase REST API
 supabase = "^2.0.0"
 # Monitoring
