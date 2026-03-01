@@ -123,6 +123,23 @@ async def setup_market_data(
     return results
 
 
+@router.post("/test-ingest/{symbol}")
+async def test_ingest_symbol(symbol: str):
+    """Test: ingest a single symbol synchronously and return results."""
+    svc = get_kline_service()
+    sym = await svc.get_symbol(symbol)
+    if not sym:
+        return {"error": f"Symbol {symbol} not found"}
+
+    ingest_svc = get_ingestion_service()
+    try:
+        result = await ingest_svc.ingest_symbol(sym)
+        return {"symbol": symbol, "result": result}
+    except Exception as e:
+        import traceback
+        return {"symbol": symbol, "error": str(e), "traceback": traceback.format_exc()}
+
+
 # ============================================================================
 # Symbol management
 # ============================================================================
