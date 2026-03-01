@@ -112,9 +112,20 @@ async def setup_market_data(
             results["steps"].append(f"seeded {len(added)} symbols")
             results["symbols"] = added
 
-        if ingest and background_tasks:
-            background_tasks.add_task(_run_ingestion_background, None, None)
-            results["steps"].append("ingestion triggered in background")
+        if ingest:
+            from datetime import timedelta
+            ingest_svc = get_ingestion_service()
+            ingest_result = await ingest_svc.ingest_all()
+            results["steps"].append(
+                f"ingested {ingest_result.get('inserted', 0)} rows "
+                f"for {ingest_result.get('total', 0)} symbols"
+            )
+            results["ingestion"] = {
+                "total": ingest_result.get("total"),
+                "inserted": ingest_result.get("inserted"),
+                "failed": ingest_result.get("failed"),
+                "status": ingest_result.get("status"),
+            }
 
         results["status"] = "ok"
     except Exception as e:
