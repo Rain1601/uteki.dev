@@ -35,6 +35,31 @@ def _verify_cron_secret(x_cron_secret: Optional[str] = Header(None)):
         raise HTTPException(status_code=403, detail="Invalid cron secret")
 
 
+@router.get("/debug")
+async def debug_data():
+    """Debug: check market_data schema and tables."""
+    from sqlalchemy import text
+    info = {"schema_exists": False, "tables": [], "error": None}
+    try:
+        async with db_manager.get_postgres_session() as session:
+            # Check schema
+            r = await session.execute(text(
+                "SELECT schema_name FROM information_schema.schemata "
+                "WHERE schema_name = 'market_data'"
+            ))
+            info["schema_exists"] = r.scalar() is not None
+
+            # Check tables
+            r = await session.execute(text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'market_data'"
+            ))
+            info["tables"] = [row[0] for row in r.fetchall()]
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
 # ============================================================================
 # Symbol management
 # ============================================================================
