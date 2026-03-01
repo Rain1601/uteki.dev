@@ -24,6 +24,9 @@ import {
   Calendar,
   LineChart,
   LayoutDashboard,
+  Building2,
+  Bitcoin,
+  Gauge,
 } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useResponsive } from '../hooks/useResponsive';
@@ -54,13 +57,21 @@ const menuItems: MenuCategory[] = [
     ],
   },
   {
+    category: 'AGENT',
+    items: [
+      { text: 'Agent 总览', icon: <Gauge size={20} />, path: '/agent-dashboard' },
+      { text: '指数投资', icon: <LineChart size={20} />, path: '/index-agent' },
+      { text: '公司投资', icon: <Building2 size={20} />, path: '/company-agent' },
+      { text: '加密投资', icon: <Bitcoin size={20} />, path: '/crypto-agent' },
+    ],
+  },
+  {
     category: 'TRADING',
     items: [
       { text: '宏观仪表盘', icon: <LayoutDashboard size={20} />, path: '/macro/market-dashboard' },
       { text: '经济日历', icon: <Calendar size={20} />, path: '/macro/fomc-calendar' },
       { text: '雪盈证券', icon: <TrendingUp size={20} />, path: '/trading/snb' },
-      { text: '指数投资', icon: <LineChart size={20} />, path: '/index-agent' },
-      { text: '数据分析', icon: <BarChart3 size={20} />, path: '/analytics', disabled: true },
+      { text: 'K线数据', icon: <BarChart3 size={20} />, path: '/market-data' },
     ],
   },
 ];
