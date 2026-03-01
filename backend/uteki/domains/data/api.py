@@ -68,8 +68,8 @@ async def debug_data():
 
 
 @router.post("/setup")
-async def setup_market_data():
-    """Create market_data schema and tables if they don't exist."""
+async def setup_market_data(seed: bool = Query(False, description="Also seed default symbols")):
+    """Create market_data schema/tables and optionally seed symbols."""
     from sqlalchemy import text
     from uteki.domains.data.models import Symbol, KlineDaily, DataQualityLog, IngestionRun
     from uteki.common.base import Base
@@ -90,7 +90,25 @@ async def setup_market_data():
                 "WHERE table_schema = 'market_data'"
             ))
             results["tables"] = [row[0] for row in r.fetchall()]
-            results["status"] = "ok"
+
+        if seed:
+            svc = get_kline_service()
+            added = []
+            for s in DEFAULT_SYMBOLS:
+                sym = await svc.add_symbol(
+                    symbol=s["symbol"],
+                    asset_type=s["asset_type"],
+                    name=s.get("name"),
+                    exchange=s.get("exchange"),
+                    currency=s.get("currency", "USD"),
+                    timezone=s.get("timezone", "America/New_York"),
+                    data_source=s.get("data_source"),
+                )
+                added.append(sym.get("symbol", s["symbol"]))
+            results["steps"].append(f"seeded {len(added)} symbols")
+            results["symbols"] = added
+
+        results["status"] = "ok"
     except Exception as e:
         results["error"] = str(e)
         results["status"] = "failed"
