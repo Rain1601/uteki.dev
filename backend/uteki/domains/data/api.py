@@ -124,20 +124,38 @@ async def setup_market_data(
 
 
 @router.post("/test-ingest/{symbol}")
-async def test_ingest_symbol(symbol: str):
+async def test_ingest_symbol(symbol: str, days: int = Query(30, description="Days of history")):
     """Test: ingest a single symbol synchronously and return results."""
-    svc = get_kline_service()
-    sym = await svc.get_symbol(symbol)
-    if not sym:
-        return {"error": f"Symbol {symbol} not found"}
-
-    ingest_svc = get_ingestion_service()
+    import traceback
+    from datetime import timedelta
+    steps = []
     try:
-        result = await ingest_svc.ingest_symbol(sym)
-        return {"symbol": symbol, "result": result}
+        steps.append("getting service")
+        svc = get_kline_service()
+        steps.append("looking up symbol")
+        sym = await svc.get_symbol(symbol)
+        if not sym:
+            return {"error": f"Symbol {symbol} not found", "steps": steps}
+
+        steps.append(f"creating provider for {sym['asset_type']}")
+        from uteki.domains.data.providers.base import AssetType, DataProviderFactory
+        provider = DataProviderFactory.get_provider(AssetType(sym["asset_type"]))
+        steps.append(f"provider: {provider.provider.value}")
+
+        steps.append("fetching klines from provider")
+        start = date.today() - timedelta(days=days)
+        rows = await provider.fetch_daily_klines(symbol, start=start)
+        steps.append(f"provider returned {len(rows)} rows")
+
+        if rows:
+            steps.append("upserting to database")
+            ingest_svc = get_ingestion_service()
+            result = await ingest_svc.ingest_symbol(sym, start=start)
+            return {"symbol": symbol, "result": result, "steps": steps}
+        else:
+            return {"symbol": symbol, "result": {"rows": 0}, "steps": steps}
     except Exception as e:
-        import traceback
-        return {"symbol": symbol, "error": str(e), "traceback": traceback.format_exc()}
+        return {"symbol": symbol, "error": str(e), "traceback": traceback.format_exc(), "steps": steps}
 
 
 # ============================================================================
