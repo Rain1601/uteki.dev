@@ -28,7 +28,7 @@ class DataProvider(str, Enum):
 PROVIDER_ROUTING: dict[AssetType, DataProvider] = {
     AssetType.US_STOCK: DataProvider.YFINANCE,
     AssetType.US_ETF: DataProvider.YFINANCE,
-    AssetType.CRYPTO: DataProvider.BINANCE,
+    AssetType.CRYPTO: DataProvider.YFINANCE,  # BTC-USD format; switch to BINANCE for BTCUSDT
     AssetType.FOREX: DataProvider.YFINANCE,
     AssetType.HK_STOCK: DataProvider.YFINANCE,
     AssetType.A_SHARE: DataProvider.AKSHARE,
