@@ -48,6 +48,12 @@ async def init_database():
         ModelScore,
         ScheduleTask,
     )
+    from uteki.domains.data.models import (
+        Symbol,
+        KlineDaily,
+        DataQualityLog,
+        IngestionRun,
+    )
 
     # Get engine
     from uteki.common.config import settings
@@ -60,7 +66,7 @@ async def init_database():
         else:
             # For PostgreSQL, create schemas first
             logger.info("Creating PostgreSQL schemas...")
-            schemas = ["admin", "agent", "auth", "snb", "index"]
+            schemas = ["admin", "agent", "auth", "snb", "index", "market_data"]
             for schema in schemas:
                 await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
             logger.info(f"✓ Created schemas: {', '.join(schemas)}")
