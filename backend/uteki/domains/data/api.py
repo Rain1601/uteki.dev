@@ -88,6 +88,13 @@ async def setup_market_data(
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
             results["steps"].append("tables created")
 
+            # Fix column widths if needed (migration for existing tables)
+            await conn.execute(text(
+                "ALTER TABLE market_data.ingestion_runs "
+                "ALTER COLUMN asset_type TYPE VARCHAR(200)"
+            ))
+            results["steps"].append("columns migrated")
+
         async with db_manager.get_postgres_session() as session:
             r = await session.execute(text(
                 "SELECT table_name FROM information_schema.tables "
