@@ -101,8 +101,8 @@ function LeftCategoryGroup({ cat, theme, isDark, selected, onSelect }: {
         </Box>
       </Box>
 
-      {/* Indicator rows */}
-      {cat.indicators.map(ind => {
+      {/* Indicator rows — only show when selected */}
+      {selected && cat.indicators.map(ind => {
         const is = SIG[ind.signal];
         return (
           <Box key={ind.id} sx={{
