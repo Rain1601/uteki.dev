@@ -68,8 +68,12 @@ async def debug_data():
 
 
 @router.post("/setup")
-async def setup_market_data(seed: bool = Query(False, description="Also seed default symbols")):
-    """Create market_data schema/tables and optionally seed symbols."""
+async def setup_market_data(
+    seed: bool = Query(False, description="Also seed default symbols"),
+    ingest: bool = Query(False, description="Also trigger initial data ingestion"),
+    background_tasks: BackgroundTasks = None,
+):
+    """Create market_data schema/tables, optionally seed symbols and trigger ingestion."""
     from sqlalchemy import text
     from uteki.domains.data.models import Symbol, KlineDaily, DataQualityLog, IngestionRun
     from uteki.common.base import Base
@@ -107,6 +111,10 @@ async def setup_market_data(seed: bool = Query(False, description="Also seed def
                 added.append(sym.get("symbol", s["symbol"]))
             results["steps"].append(f"seeded {len(added)} symbols")
             results["symbols"] = added
+
+        if ingest and background_tasks:
+            background_tasks.add_task(_run_ingestion_background, None, None)
+            results["steps"].append("ingestion triggered in background")
 
         results["status"] = "ok"
     except Exception as e:
