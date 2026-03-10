@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getAuthHeaders } from './useAuth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8888';
+// API calls use relative paths — vite proxy in dev, same origin in prod
 
 // Module-level: only one audio can play at a time
 let globalAudio: HTMLAudioElement | null = null;
@@ -69,7 +69,7 @@ export function useTTS(_messageId: string, text: string) {
     // Fetch audio from TTS API
     setState('loading');
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/agent/tts`, {
+      const resp = await fetch(`/api/agent/tts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

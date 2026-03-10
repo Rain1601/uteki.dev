@@ -1,9 +1,13 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 
 interface SidebarContextType {
+  /** Mobile drawer open state */
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
+  /** Desktop hover-expanded state (transient) */
+  expanded: boolean;
+  setExpanded: (v: boolean) => void;
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
@@ -21,7 +25,8 @@ interface SidebarProviderProps {
 }
 
 export const SidebarProvider = ({ children }: SidebarProviderProps) => {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -31,6 +36,8 @@ export const SidebarProvider = ({ children }: SidebarProviderProps) => {
     sidebarOpen,
     setSidebarOpen,
     toggleSidebar,
+    expanded,
+    setExpanded,
   };
 
   return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;

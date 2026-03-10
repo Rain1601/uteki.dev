@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Box, Typography } from '@mui/material';
-import { LineChart, Building2, Bitcoin, ArrowRight, Activity, Brain, TrendingUp } from 'lucide-react';
+import { LineChart, Building2, ArrowRight, Activity, Brain, TrendingUp } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 
 const agents = [
@@ -19,14 +19,6 @@ const agents = [
     path: '/company-agent',
     color: '#4CAF50',
     stats: { label: '公司投资', models: 'Fundamental Analysis' },
-  },
-  {
-    name: 'Crypto Investment Agent',
-    description: '加密货币市场分析与交易决策代理，覆盖链上数据、市场情绪与技术指标。',
-    icon: Bitcoin,
-    path: '/crypto-agent',
-    color: '#F7931A',
-    stats: { label: '加密投资', models: 'On-chain + Sentiment' },
   },
 ];
 
@@ -67,7 +59,6 @@ export default function AgentDashboardPage() {
               flex: '1 1 200px',
               p: 2,
               borderRadius: '12px',
-              border: `1px solid ${theme.border.subtle}`,
               bgcolor: theme.background.secondary,
               display: 'flex',
               alignItems: 'center',
@@ -96,7 +87,7 @@ export default function AgentDashboardPage() {
       </Box>
 
       {/* Agent Cards */}
-      <Box sx={{ px: 3, pb: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Box sx={{ px: 3, pb: 3, display: 'flex', flexDirection: 'column', gap: 0 }}>
         {agents.map((agent) => {
           const Icon = agent.icon;
           return (
@@ -109,18 +100,15 @@ export default function AgentDashboardPage() {
                 alignItems: 'center',
                 gap: 2.5,
                 p: 2.5,
-                borderRadius: '12px',
-                border: `1px solid ${theme.border.subtle}`,
-                bgcolor: theme.background.secondary,
+                borderBottom: `1px solid ${theme.border.divider}`,
                 textDecoration: 'none',
                 color: 'inherit',
-                transition: 'all 200ms ease',
+                transition: 'all 150ms ease',
                 '&:hover': {
-                  borderColor: agent.color,
-                  bgcolor: `${agent.color}08`,
-                  transform: 'translateY(-1px)',
-                  boxShadow: `0 4px 12px ${agent.color}15`,
+                  bgcolor: `${agent.color}0F`,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
                 },
+                '&:last-child': { borderBottom: 'none' },
               }}
             >
               <Box

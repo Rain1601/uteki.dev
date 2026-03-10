@@ -146,14 +146,9 @@ const darkThemeOptions: ThemeOptions = {
       styleOverrides: {
         root: {
           backgroundImage: 'none',
-          backgroundColor: darkColors.background.tertiary,   // #1a1a1a
+          backgroundColor: darkColors.background.tertiary,
           border: 'none',
-          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-          transition: 'all 0.3s ease',
-          '&:hover': {
-            boxShadow: '0 10px 15px rgba(0, 0, 0, 0.15)',
-            transform: 'translateY(-2px)',
-          },
+          boxShadow: 'none',
         },
       },
     },
@@ -383,14 +378,9 @@ const lightThemeOptions: ThemeOptions = {
       styleOverrides: {
         root: {
           backgroundImage: 'none',
-          backgroundColor: lightColors.background.tertiary,  // 使用 tertiary 更柔和
+          backgroundColor: lightColors.background.tertiary,
           border: 'none',
-          boxShadow: lightColors.effects.shadow.sm,
-          transition: 'all 0.3s ease',
-          '&:hover': {
-            boxShadow: lightColors.effects.shadow.md,
-            transform: 'translateY(-2px)',
-          },
+          boxShadow: 'none',
         },
       },
     },

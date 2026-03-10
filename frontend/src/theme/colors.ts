@@ -49,6 +49,7 @@ export interface ColorScheme {
     hover: string;
     active: string;
     subtle: string;
+    divider: string;
   };
   text: {
     primary: string;      // TXT1 - 主文字
@@ -149,6 +150,7 @@ export const darkTheme: ColorScheme = {
     hover: '#444444',
     active: '#555555',
     subtle: 'rgba(255, 255, 255, 0.12)',
+    divider: 'rgba(255, 255, 255, 0.06)',
   },
 
   text: {
@@ -316,6 +318,7 @@ export const lightTheme: ColorScheme = {
     hover: '#b8c4d3',
     active: '#9daab8',
     subtle: 'rgba(26, 35, 50, 0.08)',  // 带点蓝调的半透明
+    divider: 'rgba(0, 0, 0, 0.06)',
   },
 
   text: {

@@ -23,13 +23,15 @@ import {
   InputLabel,
   Slider,
 } from '@mui/material';
-import { RefreshCw as RefreshIcon, Copy as CopyIcon, Globe as PublicIcon, Plus as AddIcon, Trash2 as DeleteIcon, X as CloseIcon, Pencil as EditIcon, Save as SaveIcon, Eye as VisibilityIcon, EyeOff as VisibilityOffIcon, ChevronDown as ExpandMoreIcon, ChevronUp as ExpandLessIcon, Star as StarIcon } from 'lucide-react';
+import { RefreshCw as RefreshIcon, Copy as CopyIcon, Globe as PublicIcon, Plus as AddIcon, Trash2 as DeleteIcon, X as CloseIcon, Pencil as EditIcon, Save as SaveIcon, Eye as VisibilityIcon, EyeOff as VisibilityOffIcon, ChevronDown as ExpandMoreIcon, ChevronUp as ExpandLessIcon, Star as StarIcon, LogOut as LogOutIcon } from 'lucide-react';
 import LoadingDots from '../components/LoadingDots';
 import { useTheme } from '../theme/ThemeProvider';
 import { toast } from 'sonner';
 import { get } from '../api/client';
 import { adminApi } from '../api/admin';
 import { useSystemHealth } from '../hooks/useAdmin';
+import { useAuth } from '../hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
 import { ModelLogo, getProviderDisplayName } from '../components/index/ModelLogos';
 import type { APIKey, LLMProvider } from '../types/admin';
 
@@ -57,7 +59,16 @@ const PROVIDERS = Object.keys(PROVIDER_DEFAULTS);
 export default function AdminPage() {
   const { theme } = useTheme();
   const isDark = theme.mode === 'dark';
+  const { logout } = useAuth();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'overview' | 'exchanges' | 'models'>('overview');
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+
+  const handleLogoutConfirm = async () => {
+    await logout();
+    setLogoutDialogOpen(false);
+    navigate('/login');
+  };
 
   const cardBg = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)';
   const cardBorder = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
@@ -65,13 +76,26 @@ export default function AdminPage() {
   return (
     <Box sx={{ height: '100%', overflow: 'auto' }}>
       {/* Header */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 700, color: theme.text.primary, mb: 0.5 }}>
-          Admin
-        </Typography>
-        <Typography sx={{ fontSize: 13, color: theme.text.muted }}>
-          系统配置与管理
-        </Typography>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 700, color: theme.text.primary, mb: 0.5 }}>
+            Admin
+          </Typography>
+          <Typography sx={{ fontSize: 13, color: theme.text.muted }}>
+            系统配置与管理
+          </Typography>
+        </Box>
+        <Tooltip title="登出">
+          <IconButton
+            onClick={() => setLogoutDialogOpen(true)}
+            sx={{
+              color: theme.text.muted,
+              '&:hover': { color: theme.status.error, bgcolor: isDark ? 'rgba(244,67,54,0.1)' : 'rgba(244,67,54,0.06)' },
+            }}
+          >
+            <LogOutIcon size={20} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {/* Tabs */}
@@ -98,6 +122,18 @@ export default function AdminPage() {
       {tab === 'overview' && <OverviewTab theme={theme} isDark={isDark} />}
       {tab === 'exchanges' && <ExchangesTab theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder} />}
       {tab === 'models' && <ModelsTab theme={theme} isDark={isDark} cardBg={cardBg} cardBorder={cardBorder} />}
+
+      {/* Logout Confirmation */}
+      <Dialog open={logoutDialogOpen} onClose={() => setLogoutDialogOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { bgcolor: theme.background.secondary, color: theme.text.primary } }}>
+        <DialogTitle>确认登出</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: 14 }}>确定要退出登录吗？</Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setLogoutDialogOpen(false)} sx={{ color: theme.text.muted, textTransform: 'none' }}>取消</Button>
+          <Button onClick={handleLogoutConfirm} sx={{ bgcolor: '#f44336', color: '#fff', textTransform: 'none', fontWeight: 600, '&:hover': { bgcolor: '#d32f2f' } }}>登出</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

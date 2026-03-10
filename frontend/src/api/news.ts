@@ -10,7 +10,7 @@ import {
   NewsDataByDate,
 } from '../types/news';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8888';
+// fetch calls use relative paths — vite proxy in dev, same origin in prod
 
 export type NewsSource = 'jeff-cox' | 'bloomberg';
 
@@ -125,7 +125,7 @@ export function analyzeNewsStream(
   const fetchStream = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE_URL}/api/news-analysis/analyze-news-stream`, {
+      const response = await fetch(`/api/news-analysis/analyze-news-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -216,7 +216,7 @@ export function analyzeEventStream(
   const fetchStream = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE_URL}/api/news-analysis/analyze-event-stream`, {
+      const response = await fetch(`/api/news-analysis/analyze-event-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

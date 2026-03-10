@@ -870,16 +870,16 @@ export default function NewsTimelinePage() {
                     onClick={() => scrollToNews(news.id, news.dateStr)}
                     sx={{
                       p: 1.75,
-                      mb: 1.25,
-                      bgcolor: activeTitleId === news.id ? `${theme.brand.primary}15` : isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-                      border: `1px solid ${activeTitleId === news.id ? `${theme.brand.primary}40` : theme.border.subtle}`,
-                      borderRadius: 1.25,
+                      mb: 0.5,
+                      bgcolor: 'transparent',
+                      borderLeft: activeTitleId === news.id
+                        ? `3px solid ${theme.brand.primary}`
+                        : '3px solid transparent',
+                      borderRadius: 0,
                       cursor: 'pointer',
-                      transition: 'all 0.2s ease',
+                      transition: 'all 150ms ease',
                       '&:hover': {
-                        bgcolor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
-                        borderColor: `${theme.brand.primary}30`,
-                        transform: 'translateX(5px)',
+                        bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
                       },
                     }}
                   >
@@ -1008,19 +1008,17 @@ export default function NewsTimelinePage() {
                 size="small"
                 onClick={() => setActiveFilter(filter)}
                 sx={{
-                  bgcolor: activeFilter === filter
-                    ? `${theme.brand.primary}20`
-                    : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                  border: `1px solid ${activeFilter === filter ? theme.brand.primary : theme.border.subtle}`,
-                  color: activeFilter === filter ? theme.brand.primary : theme.text.secondary,
+                  bgcolor: activeFilter === filter ? `${theme.brand.primary}1F` : 'transparent',
+                  border: `1px solid ${activeFilter === filter ? `${theme.brand.primary}4D` : (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)')}`,
+                  color: activeFilter === filter ? theme.brand.primary : theme.text.muted,
                   fontWeight: activeFilter === filter ? 600 : 400,
                   fontSize: 12,
                   cursor: 'pointer',
-                  transition: 'all 0.2s ease',
+                  transition: 'all 0.15s ease',
                   '&:hover': {
                     bgcolor: activeFilter === filter
                       ? `${theme.brand.primary}25`
-                      : isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+                      : isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
                   },
                 }}
               />
@@ -1042,20 +1040,17 @@ export default function NewsTimelinePage() {
                 size="small"
                 onClick={() => setActiveFilter(filter.value)}
                 sx={{
-                  bgcolor: activeFilter === filter.value
-                    ? `${filter.color}20`
-                    : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                  border: `1px solid ${activeFilter === filter.value ? filter.color : theme.border.subtle}`,
-                  color: activeFilter === filter.value ? filter.color : theme.text.secondary,
+                  bgcolor: activeFilter === filter.value ? `${filter.color}1F` : 'transparent',
+                  border: `1px solid ${activeFilter === filter.value ? `${filter.color}4D` : (isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)')}`,
+                  color: activeFilter === filter.value ? filter.color : theme.text.muted,
                   fontWeight: activeFilter === filter.value ? 600 : 400,
                   fontSize: 12,
                   cursor: 'pointer',
-                  transition: 'all 0.2s ease',
+                  transition: 'all 0.15s ease',
                   '&:hover': {
                     bgcolor: activeFilter === filter.value
                       ? `${filter.color}25`
-                      : isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-                    borderColor: `${filter.color}50`,
+                      : isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
                   },
                 }}
               />
@@ -1097,29 +1092,26 @@ export default function NewsTimelinePage() {
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
+                      pt: 2,
                       pb: 1,
                       position: 'sticky',
                       top: 0,
                       bgcolor: theme.background.primary,
                       zIndex: 5,
+                      borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
                     }}
                   >
                     <Typography
                       sx={{
-                        background: `linear-gradient(135deg, ${theme.brand.primary}15 0%, ${theme.brand.primary}30 100%)`,
-                        border: `1px solid ${theme.brand.primary}30`,
-                        px: 2,
-                        py: 0.75,
-                        borderRadius: 2.5,
-                        fontSize: 13,
-                        color: theme.brand.primary,
-                        fontWeight: 500,
+                        fontSize: 14,
+                        color: theme.text.muted,
+                        fontWeight: 700,
                         whiteSpace: 'nowrap',
                       }}
                     >
                       {formatDateLabel(dateGroup.date)}
                     </Typography>
-                    <Box sx={{ flex: 1, height: 1, bgcolor: theme.border.subtle, ml: 2 }} />
+                    <Box sx={{ flex: 1, height: 1, bgcolor: theme.border.divider, ml: 2 }} />
                   </Box>
 
                   {dateGroup.news.map((newsItem) => (
@@ -1127,21 +1119,14 @@ export default function NewsTimelinePage() {
                       key={newsItem.id}
                       onClick={() => handleOpenArticle(newsItem.id)}
                       sx={{
-                        bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                        border: `1px solid ${theme.border.subtle}`,
-                        borderRadius: 2,
-                        p: 2.5,
-                        mb: 2,
-                        '&:last-child': { mb: 0 },
+                        borderBottom: `1px solid ${theme.border.divider}`,
+                        px: 1,
+                        py: 2,
+                        '&:last-child': { borderBottom: 'none' },
                         cursor: 'pointer',
-                        transition: 'all 0.2s ease',
+                        transition: 'background-color 150ms ease',
                         '&:hover': {
-                          bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                          borderColor: theme.border.hover,
-                          transform: 'translateY(-2px)',
-                          boxShadow: isDark
-                            ? '0 8px 24px rgba(0,0,0,0.4)'
-                            : '0 8px 24px rgba(0,0,0,0.1)',
+                          bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                         },
                       }}
                     >
@@ -1301,10 +1286,8 @@ export default function NewsTimelinePage() {
                           onClick={(e) => e.stopPropagation()}
                           sx={{
                             mt: 2,
-                            background: 'linear-gradient(135deg, rgba(138, 43, 226, 0.08) 0%, rgba(75, 0, 130, 0.08) 100%)',
-                            border: '1px solid rgba(138, 43, 226, 0.2)',
-                            borderRadius: 1.5,
-                            p: 2.5,
+                            borderLeft: '2px solid rgba(138, 43, 226, 0.4)',
+                            pl: 2,
                             animation: 'fadeIn 0.3s ease-in-out',
                             '@keyframes fadeIn': {
                               from: { opacity: 0, transform: 'translateY(-10px)' },
