@@ -56,6 +56,9 @@ export default function NewsTimelinePage() {
   const [error, setError] = useState<string | null>(null);
   const [activeTitleId, setActiveTitleId] = useState<string | null>(null);
   const [loadedMonths, setLoadedMonths] = useState<Set<string>>(new Set());
+  const loadedMonthsRef = useRef<Set<string>>(new Set());
+  const pendingRequestsRef = useRef<Set<string>>(new Set());
+  const isFirstRenderRef = useRef(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
@@ -115,7 +118,10 @@ export default function NewsTimelinePage() {
   // Load monthly news
   const loadMonthlyNews = useCallback(async (year: number, month: number, append = false, force = false) => {
     const monthKey = `${year}-${month}`;
-    if (!force && loadedMonths.has(monthKey)) return;
+    // Use refs to check loaded/pending state to avoid stale closures and dependency cycles
+    if (!force && (loadedMonthsRef.current.has(monthKey) || pendingRequestsRef.current.has(monthKey))) return;
+
+    pendingRequestsRef.current.add(monthKey);
 
     if (append) {
       setIsLoadingMore(true);
@@ -128,7 +134,8 @@ export default function NewsTimelinePage() {
       const response = await getMonthlyNews(year, month + 1, activeFilter, newsSource);
       if (response.success) {
         setNewsData((prev) => ({ ...prev, ...response.data }));
-        setLoadedMonths((prev) => new Set([...prev, monthKey]));
+        loadedMonthsRef.current = new Set([...loadedMonthsRef.current, monthKey]);
+        setLoadedMonths(new Set(loadedMonthsRef.current));
 
         // Load pre-existing AI analysis
         const newAnalysisResults: { [newsId: string]: AnalysisResult } = {};
@@ -156,16 +163,17 @@ export default function NewsTimelinePage() {
       setError('Network request failed');
       console.error('Load monthly news error:', err);
     } finally {
+      pendingRequestsRef.current.delete(monthKey);
       if (append) {
         setIsLoadingMore(false);
       } else {
         setIsLoading(false);
       }
     }
-  }, [activeFilter, loadedMonths, newsSource]);
+  }, [activeFilter, newsSource]);
 
   // Load adjacent month
-  const loadAdjacentMonth = useCallback((direction: 'prev' | 'next') => {
+  const loadAdjacentMonth = useCallback(async (direction: 'prev' | 'next') => {
     let targetYear = currentYear;
     let targetMonth = currentMonth;
 
@@ -185,30 +193,38 @@ export default function NewsTimelinePage() {
       }
     }
 
-    loadMonthlyNews(targetYear, targetMonth, true);
+    await loadMonthlyNews(targetYear, targetMonth, true);
   }, [currentYear, currentMonth, loadMonthlyNews]);
 
-  // Initialize
+  // Initialize on mount — load months sequentially to avoid overwhelming Supabase
   useEffect(() => {
-    if (loadedMonths.size === 0) {
-      loadMonthlyNews(currentYear, currentMonth, false);
-      setTimeout(() => {
-        loadAdjacentMonth('prev');
-        loadAdjacentMonth('next');
-      }, 500);
-    }
-  }, [currentYear, currentMonth]);
+    const init = async () => {
+      await loadMonthlyNews(currentYear, currentMonth, false);
+      await loadAdjacentMonth('prev');
+      await loadAdjacentMonth('next');
+    };
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Reload when filter or source changes
+  // Reload when filter or source changes (skip first render — mount effect handles it)
   useEffect(() => {
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
     setNewsData({});
+    loadedMonthsRef.current = new Set();
+    pendingRequestsRef.current.clear();
     setLoadedMonths(new Set());
     setAnalysisResults({});
-    loadMonthlyNews(currentYear, currentMonth, false, true);
-    setTimeout(() => {
-      loadAdjacentMonth('prev');
-      loadAdjacentMonth('next');
-    }, 500);
+    const reload = async () => {
+      await loadMonthlyNews(currentYear, currentMonth, false, true);
+      await loadAdjacentMonth('prev');
+      await loadAdjacentMonth('next');
+    };
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFilter, newsSource]);
 
   // Navigation functions
@@ -249,6 +265,7 @@ export default function NewsTimelinePage() {
     setCurrentYear(today.getFullYear());
     setCurrentMonth(today.getMonth());
     setSelectedDate(today);
+    loadMonthlyNews(today.getFullYear(), today.getMonth(), true);
   };
 
   const handleYearChange = (event: SelectChangeEvent<number>) => {
@@ -505,10 +522,8 @@ export default function NewsTimelinePage() {
           targetMonth = targetMonth + 1;
         }
 
-        const checkKey = `${targetYear}-${targetMonth}`;
-        if (!loadedMonths.has(checkKey)) {
-          loadMonthlyNews(targetYear, targetMonth, true);
-        }
+        // Use ref to avoid stale closure — loadMonthlyNews also checks refs internally
+        loadMonthlyNews(targetYear, targetMonth, true);
       }
     }
 
@@ -528,10 +543,8 @@ export default function NewsTimelinePage() {
           targetMonth = targetMonth - 1;
         }
 
-        const checkKey = `${targetYear}-${targetMonth}`;
-        if (!loadedMonths.has(checkKey)) {
-          loadMonthlyNews(targetYear, targetMonth, true);
-        }
+        // Use ref to avoid stale closure — loadMonthlyNews also checks refs internally
+        loadMonthlyNews(targetYear, targetMonth, true);
       }
     }
 
@@ -559,7 +572,7 @@ export default function NewsTimelinePage() {
         }
       }
     }
-  }, [isScrolling, selectedDate, newsData, loadedMonths, isLoadingMore, loadMonthlyNews, currentYear, currentMonth]);
+  }, [isScrolling, selectedDate, newsData, isLoadingMore, loadMonthlyNews, currentYear, currentMonth]);
 
   // Setup scroll listener
   useEffect(() => {

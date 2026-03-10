@@ -1,5 +1,6 @@
 """Bloomberg 新闻服务 - 整合 Apify 抓取和数据管理（Supabase REST API）"""
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime
@@ -214,7 +215,7 @@ class BloombergService:
             if lte:
                 kwargs["lte"] = lte
 
-            return repo.select_data(**kwargs)
+            return await asyncio.to_thread(repo.select_data, **kwargs)
 
         except Exception as e:
             logger.error(f"查询 Bloomberg 文章失败: {e}", exc_info=True)
@@ -263,7 +264,7 @@ class BloombergService:
         """根据 ID 获取单篇文章"""
         try:
             repo = get_news_repo()
-            return repo.select_one(eq={"id": article_id, "source": "bloomberg"})
+            return await asyncio.to_thread(repo.select_one, eq={"id": article_id, "source": "bloomberg"})
 
         except Exception as e:
             logger.error(f"获取 Bloomberg 文章详情失败 (ID: {article_id}): {e}", exc_info=True)

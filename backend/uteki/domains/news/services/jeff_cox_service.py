@@ -232,7 +232,7 @@ class JeffCoxService:
             if lte_filters:
                 kwargs["lte"] = lte_filters
 
-            return repo.select_data(**kwargs)
+            return await asyncio.to_thread(repo.select_data, **kwargs)
 
         except Exception as e:
             logger.error(f"查询文章失败: {e}", exc_info=True)
@@ -288,7 +288,7 @@ class JeffCoxService:
         """根据 ID 获取单篇文章"""
         try:
             repo = get_news_repo()
-            return repo.select_one(eq={"id": article_id, "source": "cnbc_jeff_cox"})
+            return await asyncio.to_thread(repo.select_one, eq={"id": article_id, "source": "cnbc_jeff_cox"})
 
         except Exception as e:
             logger.error(f"获取文章详情失败 (ID: {article_id}): {e}", exc_info=True)

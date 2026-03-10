@@ -124,6 +124,7 @@ class NewsAnalysisService:
                 "google": LLMProvider.GOOGLE,
                 "qwen": LLMProvider.QWEN,
                 "minimax": LLMProvider.MINIMAX,
+                "doubao": LLMProvider.DOUBAO,
             }
 
             db_models = load_models_from_db()

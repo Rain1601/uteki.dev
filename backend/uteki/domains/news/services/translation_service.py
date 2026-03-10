@@ -65,6 +65,7 @@ class TranslationService:
         "openai": LLMProvider.OPENAI,
         "google": LLMProvider.GOOGLE,
         "minimax": LLMProvider.MINIMAX,
+        "doubao": LLMProvider.DOUBAO,
     }
 
     def __init__(self, provider: str = "deepseek"):
