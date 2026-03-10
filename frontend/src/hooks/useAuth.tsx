@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
+import { API_BASE } from '../api/client';
 
-// API calls use relative paths to go through vite proxy (no CORS issues)
 // Login redirects need absolute URL since the browser navigates directly to the backend
-const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8888';
+const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Token storage key
 const TOKEN_KEY = 'auth_token';
@@ -63,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch('/api/auth/me', {
+      const response = await fetch(`${API_BASE}/api/auth/me`, {
         credentials: 'include',
         headers,
       });
@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      await fetch('/api/auth/logout', {
+      await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include',
         headers,

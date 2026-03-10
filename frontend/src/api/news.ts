@@ -2,7 +2,7 @@
  * News API module - Multi-source news and AI analysis
  */
 
-import { get, post } from './client';
+import { get, post, API_BASE } from './client';
 import {
   MonthlyNewsResponse,
   ArticleDetailResponse,
@@ -125,7 +125,7 @@ export function analyzeNewsStream(
   const fetchStream = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch(`/api/news-analysis/analyze-news-stream`, {
+      const response = await fetch(`${API_BASE}/api/news-analysis/analyze-news-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -216,7 +216,7 @@ export function analyzeEventStream(
   const fetchStream = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch(`/api/news-analysis/analyze-event-stream`, {
+      const response = await fetch(`${API_BASE}/api/news-analysis/analyze-event-stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

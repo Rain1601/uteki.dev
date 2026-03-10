@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { getAuthHeaders } from '../hooks/useAuth';
 
-// API calls use relative paths — vite proxy in dev, same origin in prod
+import { API_BASE } from '../api/client';
 import {
   Box,
   TextField,
@@ -115,7 +115,7 @@ export default function AgentChatPage() {
   const loadAvailableModels = async () => {
     try {
       console.log('🔄 Loading available models...');
-      const response = await fetch(`/api/agent/models/available`, { headers: getAuthHeaders(), credentials: 'include' });
+      const response = await fetch(`${API_BASE}/api/agent/models/available`, { headers: getAuthHeaders(), credentials: 'include' });
       console.log('📡 API Response status:', response.status);
       const data = await response.json();
       console.log('📦 Models data:', data);
@@ -134,7 +134,7 @@ export default function AgentChatPage() {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch(`/api/agent/conversations`, { headers: getAuthHeaders(), credentials: 'include' });
+      const response = await fetch(`${API_BASE}/api/agent/conversations`, { headers: getAuthHeaders(), credentials: 'include' });
       const data = await response.json();
       setConversations(data.items || []);
     } catch (error) {
@@ -182,7 +182,7 @@ export default function AgentChatPage() {
     setMessages((prev) => [...prev, assistantMessage]);
 
     try {
-      const response = await fetch(`/api/agent/research/stream`, {
+      const response = await fetch(`${API_BASE}/api/agent/research/stream`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -368,7 +368,7 @@ export default function AgentChatPage() {
     setMessages((prev) => [...prev, assistantMessage]);
 
     try {
-      const response = await fetch(`/api/agent/chat`, {
+      const response = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         credentials: 'include',
         headers: {

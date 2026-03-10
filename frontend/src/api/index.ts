@@ -1,4 +1,4 @@
-import { get, post, put, del } from './client';
+import { get, post, put, del, API_BASE } from './client';
 
 // ── Types ──
 
@@ -572,7 +572,7 @@ export const runArenaStream = (
 
   (async () => {
     try {
-      const response = await fetch(`/api/index/arena/run/stream`, {
+      const response = await fetch(`${API_BASE}/api/index/arena/run/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,8 +1,10 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 
-// 创建axios实例 — 使用相对路径，本地走 vite proxy，生产环境同源
+// API base URL: production 用 VITE_API_URL 指向后端，dev 留空走 vite proxy
+export const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const apiClient: AxiosInstance = axios.create({
-  baseURL: '',
+  baseURL: API_BASE,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
