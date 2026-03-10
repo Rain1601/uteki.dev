@@ -31,13 +31,14 @@ import LoadingDots from '../LoadingDots';
 import { toast } from 'sonner';
 import {
   ScheduleTask,
+  ModelConfig,
   fetchSchedules,
   createSchedule,
   updateSchedule,
   deleteSchedule,
   triggerSchedule,
-  createIndexTables,
-  seedIndexDefaults,
+  fetchModelConfig,
+  saveModelConfig,
 } from '../../api/index';
 import SystemPromptTab from './context/SystemPromptTab';
 import UserPromptTab from './context/UserPromptTab';
@@ -48,7 +49,7 @@ export default function SettingsPanel() {
   const { theme, isDark } = useTheme();
 
   // Section state
-  const [section, setSection] = useState<'context' | 'schedules' | 'debug'>('context');
+  const [section, setSection] = useState<'context' | 'models' | 'schedules'>('context');
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', px: 3, py: 2 }}>
@@ -56,8 +57,8 @@ export default function SettingsPanel() {
       <Box sx={{ display: 'flex', gap: 1, mb: 3, flexWrap: 'wrap' }}>
         {[
           { key: 'context', label: 'Context' },
+          { key: 'models', label: 'Models' },
           { key: 'schedules', label: 'Schedules' },
-          ...(import.meta.env.DEV ? [{ key: 'debug', label: 'Debug' }] : []),
         ].map(({ key, label }) => (
           <Chip
             key={key}
@@ -76,8 +77,8 @@ export default function SettingsPanel() {
       </Box>
 
       {section === 'context' && <ContextSection theme={theme} isDark={isDark} />}
+      {section === 'models' && <ModelsSection theme={theme} isDark={isDark} />}
       {section === 'schedules' && <ScheduleSection theme={theme} isDark={isDark} />}
-      {import.meta.env.DEV && section === 'debug' && <DebugSection theme={theme} isDark={isDark} />}
     </Box>
   );
 }
@@ -118,6 +119,172 @@ function ContextSection({ theme, isDark }: { theme: any; isDark: boolean }) {
       {subTab === 'user' && <UserPromptTab theme={theme} isDark={isDark} />}
       {subTab === 'memory' && <MemoryTab theme={theme} isDark={isDark} />}
       {subTab === 'tools' && <ToolsTab theme={theme} isDark={isDark} />}
+    </Box>
+  );
+}
+
+// ── Models (per-model web search config) ──
+
+const NATIVE_SEARCH_PROVIDERS = new Set(['anthropic', 'google', 'qwen']);
+
+function ModelsSection({ theme, isDark }: { theme: any; isDark: boolean }) {
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetchModelConfig();
+      if (res.success && res.data) {
+        // Ensure web_search fields have defaults
+        const normalized = (res.data as ModelConfig[]).map(m => ({
+          ...m,
+          web_search_enabled: m.web_search_enabled ?? false,
+          web_search_provider: m.web_search_provider ?? 'google',
+        }));
+        setModels(normalized);
+      }
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleToggleSearch = (idx: number) => {
+    setModels(prev => prev.map((m, i) =>
+      i === idx ? { ...m, web_search_enabled: !m.web_search_enabled } : m
+    ));
+    setDirty(true);
+  };
+
+  const handleProviderChange = (idx: number, provider: 'native' | 'google') => {
+    setModels(prev => prev.map((m, i) =>
+      i === idx ? { ...m, web_search_provider: provider } : m
+    ));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await saveModelConfig(models);
+      if (res.success) {
+        toast.success('Model config saved');
+        setDirty(false);
+      } else {
+        toast.error('Save failed');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const tableCellSx = { color: theme.text.primary, borderBottom: `1px solid ${theme.border.subtle}`, fontSize: 13, py: 1.2 };
+  const tableHeadSx = { color: theme.text.muted, borderBottom: `1px solid ${theme.border.default}`, fontSize: 12, fontWeight: 600, py: 1 };
+
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary }}>
+          Arena Model Config
+        </Typography>
+        <Button
+          size="small"
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          sx={{
+            bgcolor: theme.brand.primary,
+            color: '#fff',
+            textTransform: 'none', fontSize: 13, fontWeight: 600, borderRadius: 2,
+            visibility: dirty ? 'visible' : 'hidden',
+            '&:hover': { bgcolor: theme.brand.hover },
+          }}
+        >
+          {saving ? 'Saving...' : 'Save Changes'}
+        </Button>
+      </Box>
+
+      {loading ? (
+        <LoadingDots text="Loading models" fontSize={13} />
+      ) : models.length === 0 ? (
+        <Typography sx={{ py: 4, textAlign: 'center', color: theme.text.muted, fontSize: 13 }}>
+          No models configured. Add models in Admin {'>'} Models first.
+        </Typography>
+      ) : (
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                {['Provider', 'Model', 'Enabled', 'Web Search', 'Search Provider'].map(h => (
+                  <TableCell key={h} sx={tableHeadSx}>{h}</TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {models.map((m, idx) => {
+                const supportsNative = NATIVE_SEARCH_PROVIDERS.has(m.provider);
+                return (
+                  <TableRow key={`${m.provider}-${m.model}`}>
+                    <TableCell sx={{ ...tableCellSx, fontWeight: 600 }}>{m.provider}</TableCell>
+                    <TableCell sx={{ ...tableCellSx, fontFamily: 'monospace', fontSize: 12 }}>{m.model}</TableCell>
+                    <TableCell sx={tableCellSx}>
+                      <Chip
+                        label={m.enabled ? 'ON' : 'OFF'}
+                        size="small"
+                        sx={{
+                          fontSize: 10, height: 20,
+                          bgcolor: m.enabled ? 'rgba(76,175,80,0.15)' : 'rgba(158,158,158,0.15)',
+                          color: m.enabled ? '#4caf50' : theme.text.muted,
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell sx={tableCellSx}>
+                      <Switch
+                        checked={m.web_search_enabled}
+                        onChange={() => handleToggleSearch(idx)}
+                        size="small"
+                        sx={{
+                          '& .MuiSwitch-switchBase.Mui-checked': { color: theme.brand.primary },
+                          '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: theme.brand.primary },
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ ...tableCellSx, width: 180 }}>
+                      <TextField
+                        select
+                        size="small"
+                        value={m.web_search_provider}
+                        onChange={(e) => handleProviderChange(idx, e.target.value as 'native' | 'google')}
+                        variant="standard"
+                        disabled={!m.web_search_enabled}
+                        sx={{ minWidth: 140 }}
+                        InputProps={{ sx: { color: m.web_search_enabled ? theme.text.primary : theme.text.muted, fontSize: 12 } }}
+                      >
+                        <MenuItem value="google">Google Search</MenuItem>
+                        {supportsNative ? (
+                          <MenuItem value="native">Native ({m.provider})</MenuItem>
+                        ) : (
+                          <MenuItem value="native" disabled>
+                            Native (not supported)
+                          </MenuItem>
+                        )}
+                      </TextField>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <Typography sx={{ mt: 2, fontSize: 11, color: theme.text.muted, lineHeight: 1.6 }}>
+        Web Search: Google uses Google Custom Search API (requires API key in env). Native search is available for Anthropic, Google Gemini, and Qwen only. Settings only affect this Index Agent's Arena pipeline.
+      </Typography>
     </Box>
   );
 }
@@ -338,77 +505,3 @@ function ScheduleSection({ theme, isDark }: { theme: any; isDark: boolean }) {
   );
 }
 
-// ── Debug ──
-
-function DebugSection({ theme, isDark }: { theme: any; isDark: boolean }) {
-  const [tableLoading, setTableLoading] = useState(false);
-  const [seedLoading, setSeedLoading] = useState(false);
-
-  const handleCreateTables = async () => {
-    setTableLoading(true);
-    try {
-      const res = await createIndexTables();
-      if (res.success) toast.success('Tables created');
-      else toast.error(res.error || 'Failed');
-    } catch (e: any) {
-      toast.error(e.message || 'Failed');
-    } finally {
-      setTableLoading(false);
-    }
-  };
-
-  const handleSeed = async () => {
-    setSeedLoading(true);
-    try {
-      const res = await seedIndexDefaults();
-      if (res.success) toast.success('Defaults seeded');
-      else toast.error(res.error || 'Failed');
-    } catch (e: any) {
-      toast.error(e.message || 'Failed');
-    } finally {
-      setSeedLoading(false);
-    }
-  };
-
-  return (
-    <Box>
-      <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary, mb: 2 }}>
-        Debug Tools
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        <Button
-          onClick={handleCreateTables}
-          disabled={tableLoading}
-          sx={{
-            bgcolor: isDark ? 'rgba(255,152,0,0.15)' : 'rgba(255,152,0,0.08)',
-            color: '#ff9800',
-            border: `1px solid ${isDark ? 'rgba(255,152,0,0.3)' : 'rgba(255,152,0,0.2)'}`,
-            textTransform: 'none',
-            fontWeight: 600,
-            fontSize: 13,
-            borderRadius: 2,
-            px: 3,
-          }}
-        >
-          {tableLoading ? <LoadingDots text="Creating" fontSize={12} /> : 'Create Tables'}
-        </Button>
-        <Button
-          onClick={handleSeed}
-          disabled={seedLoading}
-          sx={{
-            bgcolor: isDark ? 'rgba(76,175,80,0.15)' : 'rgba(76,175,80,0.08)',
-            color: '#4caf50',
-            border: `1px solid ${isDark ? 'rgba(76,175,80,0.3)' : 'rgba(76,175,80,0.2)'}`,
-            textTransform: 'none',
-            fontWeight: 600,
-            fontSize: 13,
-            borderRadius: 2,
-            px: 3,
-          }}
-        >
-          {seedLoading ? <LoadingDots text="Seeding" fontSize={12} /> : 'Seed Defaults'}
-        </Button>
-      </Box>
-    </Box>
-  );
-}

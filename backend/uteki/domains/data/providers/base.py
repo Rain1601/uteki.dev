@@ -26,13 +26,13 @@ class DataProvider(str, Enum):
 
 # Default provider routing per asset type
 PROVIDER_ROUTING: dict[AssetType, DataProvider] = {
-    AssetType.US_STOCK: DataProvider.YFINANCE,
-    AssetType.US_ETF: DataProvider.YFINANCE,
-    AssetType.CRYPTO: DataProvider.YFINANCE,  # BTC-USD format; switch to BINANCE for BTCUSDT
-    AssetType.FOREX: DataProvider.YFINANCE,
-    AssetType.HK_STOCK: DataProvider.YFINANCE,
+    AssetType.US_STOCK: DataProvider.FMP,
+    AssetType.US_ETF: DataProvider.FMP,
+    AssetType.CRYPTO: DataProvider.YFINANCE,   # BTC-USD format; FMP uses different symbol format
+    AssetType.FOREX: DataProvider.YFINANCE,    # EURUSD=X format; FMP uses different symbol format
+    AssetType.HK_STOCK: DataProvider.YFINANCE, # FMP HK coverage uncertain
     AssetType.A_SHARE: DataProvider.AKSHARE,
-    AssetType.FUTURES: DataProvider.YFINANCE,
+    AssetType.FUTURES: DataProvider.YFINANCE,  # GC=F format; FMP uses different symbol format
 }
 
 

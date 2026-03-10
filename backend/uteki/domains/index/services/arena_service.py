@@ -74,7 +74,11 @@ def load_models_from_db() -> List[Dict[str, Any]]:
 
     优先级：admin.llm_providers (解密) → agent_memory (legacy) → 空列表
     Shared by Arena, Agent Chat, Reflection, Backtest services.
+
+    Also merges per-model web_search settings from agent_memory (web_search_config).
     """
+    models: List[Dict[str, Any]] = []
+
     # Priority 1: Admin LLM Providers (encrypted, via Supabase)
     try:
         from uteki.domains.admin.service import get_llm_provider_service, get_encryption_service
@@ -89,32 +93,50 @@ def load_models_from_db() -> List[Dict[str, Any]]:
             # We're inside an async context, use a thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                models = pool.submit(
+                admin_models = pool.submit(
                     lambda: asyncio.run(llm_svc.get_active_models_for_runtime(encryption_service=enc))
                 ).result(timeout=10)
         else:
-            models = asyncio.run(llm_svc.get_active_models_for_runtime(encryption_service=enc))
+            admin_models = asyncio.run(llm_svc.get_active_models_for_runtime(encryption_service=enc))
 
-        if models:
-            logger.info(f"Loaded {len(models)} models from admin config")
-            return models
+        if admin_models:
+            logger.info(f"Loaded {len(admin_models)} models from admin config")
+            models = admin_models
     except Exception as e:
         logger.warning(f"Failed to load models from admin config: {e}")
 
     # Priority 2: Legacy agent_memory (for backward compat)
+    if not models:
+        try:
+            repo = SupabaseRepository("agent_memory")
+            row = repo.select_one(eq={"category": "model_config", "agent_key": "system"})
+            if row:
+                parsed = json.loads(row.get("content") or "[]")
+                result = [m for m in parsed if m.get("enabled", True) and m.get("api_key")]
+                if result:
+                    logger.info(f"Loaded {len(result)} models from agent_memory (legacy)")
+                    models = result
+        except Exception as e:
+            logger.warning(f"Failed to load models from agent_memory: {e}")
+
+    if not models:
+        return []
+
+    # ── Merge web_search overlay ──
     try:
         repo = SupabaseRepository("agent_memory")
-        row = repo.select_one(eq={"category": "model_config", "agent_key": "system"})
-        if row:
-            models = json.loads(row.get("content") or "[]")
-            result = [m for m in models if m.get("enabled", True) and m.get("api_key")]
-            if result:
-                logger.info(f"Loaded {len(result)} models from agent_memory (legacy)")
-                return result
+        ws_row = repo.select_one(eq={"category": "web_search_config", "agent_key": "system"})
+        if ws_row:
+            ws_config = json.loads(ws_row.get("content") or "{}")
+            for m in models:
+                key = f"{m['provider']}:{m['model']}"
+                ws = ws_config.get(key, {})
+                m["web_search_enabled"] = ws.get("web_search_enabled", False)
+                m["web_search_provider"] = ws.get("web_search_provider", "google")
     except Exception as e:
-        logger.warning(f"Failed to load models from agent_memory: {e}")
+        logger.warning(f"Failed to load web_search config: {e}")
 
-    return []
+    return models
 
 
 class ArenaService:
@@ -1476,8 +1498,8 @@ class ArenaService:
         lines.append("=== 账户状态 ===")
         account = harness.get("account_state") or {}
         lines.append(f"现金: ${account.get('cash', 0)}")
-        lines.append(f"总资产: ${account.get('total', 0)}")
-        for pos in account.get("positions", []):
+        lines.append(f"总资产: ${account.get('total_value') or account.get('total', 0)}")
+        for pos in account.get("index_positions") or account.get("positions", []):
             lines.append(f"持仓: {pos.get('symbol', '?')} {pos.get('quantity', 0)}股")
 
         lines.append("")
@@ -1597,6 +1619,12 @@ class ArenaService:
                 continue
 
             account = h.get("account_state") or {}
+            account_total = account.get("total_value") or account.get("total")
+
+            # Skip runs with no valid account data (e.g. SNB connection failures)
+            if not account_total or account_total <= 0:
+                continue
+
             adopted_io_id = log_map.get(hid)
             adopted_structured = adopted_ios.get(adopted_io_id) if adopted_io_id else None
             action = None
@@ -1606,7 +1634,7 @@ class ArenaService:
             timeline.append({
                 "harness_id": hid,
                 "created_at": h.get("created_at"),
-                "account_total": account.get("total"),
+                "account_total": account_total,
                 "action": action,
                 "harness_type": h.get("harness_type"),
                 "model_count": model_count,
@@ -1669,6 +1697,11 @@ class ArenaService:
             timeline = []
             for h, model_count in harness_rows:
                 account = h.account_state or {}
+                account_total = account.get("total_value") or account.get("total")
+
+                if not account_total or account_total <= 0:
+                    continue
+
                 adopted_io_id = log_map.get(h.id)
                 adopted_structured = adopted_ios.get(adopted_io_id) if adopted_io_id else None
                 action = None
@@ -1678,7 +1711,7 @@ class ArenaService:
                 timeline.append({
                     "harness_id": h.id,
                     "created_at": h.created_at.isoformat() if h.created_at else None,
-                    "account_total": account.get("total"),
+                    "account_total": account_total,
                     "action": action,
                     "harness_type": h.harness_type,
                     "model_count": model_count,

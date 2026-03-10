@@ -391,11 +391,16 @@ export default function ArenaView() {
         >
           {running ? <LoadingDots text="Running" fontSize={12} color="#fff" /> : 'Run Arena'}
         </Button>
-        {running && (
-          <Typography sx={{ fontSize: 11, color: theme.text.muted, flexShrink: 0 }}>
-            {elapsedSeconds}s
-          </Typography>
-        )}
+        <Typography sx={{
+          fontSize: 11,
+          color: theme.text.muted,
+          flexShrink: 0,
+          minWidth: 28,
+          textAlign: 'right',
+          visibility: running ? 'visible' : 'hidden',
+        }}>
+          {elapsedSeconds}s
+        </Typography>
 
       </Box>
 
@@ -1463,26 +1468,19 @@ function ModelCard({
         pb: 0.5,
       }}
     >
-      {/* Header */}
+      {/* Header + Actions — fixed layout, actions always at same position */}
       <Box sx={{ py: 0.8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ModelLogo provider={model.model_provider} size={18} isDark={isDark} />
           <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.primary }}>
             {model.model_name}
           </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
           {isWinner && (
             <Chip
               label="Winner"
               size="small"
               sx={{ fontSize: 9, height: 18, fontWeight: 700, bgcolor: 'rgba(76,175,80,0.15)', color: '#4caf50' }}
             />
-          )}
-          {voteSummary && (
-            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
-              +{voteSummary.approve}/-{voteSummary.reject}
-            </Typography>
           )}
           {structured.action && (
             <Chip
@@ -1503,6 +1501,49 @@ function ModelCard({
             size="small"
             sx={{ fontSize: 9, height: 18, bgcolor: statusBg, color: statusColor }}
           />
+          {voteSummary && (
+            <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
+              +{voteSummary.approve}/-{voteSummary.reject}
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+          <Button
+            size="small"
+            onClick={handleExpand}
+            endIcon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24, minWidth: 80 }}
+          >
+            {expanded ? 'Collapse' : 'Details'}
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setShowPipeline(!showPipeline)}
+            sx={{
+              color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24,
+              visibility: pipelineSteps && pipelineSteps.length > 0 ? 'visible' : 'hidden',
+            }}
+          >
+            Pipeline
+          </Button>
+          <Button
+            size="small"
+            startIcon={<CheckCircle size={14} />}
+            onClick={handleAdopt}
+            disabled={adopting || isError}
+            sx={{
+              color: isError ? theme.text.muted : theme.brand.primary,
+              textTransform: 'none',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 1,
+              py: 0.2,
+              minHeight: 24,
+              visibility: isError ? 'hidden' : 'visible',
+            }}
+          >
+            {adopting ? '...' : 'Adopt'}
+          </Button>
         </Box>
       </Box>
 
@@ -1552,46 +1593,6 @@ function ModelCard({
           <Typography sx={{ fontSize: 10, color: theme.text.muted }}>
             {(structured.confidence * 100).toFixed(0)}%
           </Typography>
-        )}
-      </Box>
-
-      {/* Actions */}
-      <Box sx={{ display: 'flex', gap: 0.5, py: 0.3 }}>
-        <Button
-          size="small"
-          onClick={handleExpand}
-          endIcon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24 }}
-        >
-          {expanded ? 'Collapse' : 'Details'}
-        </Button>
-        {pipelineSteps && pipelineSteps.length > 0 && (
-          <Button
-            size="small"
-            onClick={() => setShowPipeline(!showPipeline)}
-            sx={{ color: theme.text.muted, textTransform: 'none', fontSize: 11, borderRadius: 1, py: 0.2, minHeight: 24 }}
-          >
-            Pipeline
-          </Button>
-        )}
-        {!isError && (
-          <Button
-            size="small"
-            startIcon={<CheckCircle size={14} />}
-            onClick={handleAdopt}
-            disabled={adopting}
-            sx={{
-              color: theme.brand.primary,
-              textTransform: 'none',
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 1,
-              py: 0.2,
-              minHeight: 24,
-            }}
-          >
-            {adopting ? '...' : 'Adopt'}
-          </Button>
         )}
       </Box>
 

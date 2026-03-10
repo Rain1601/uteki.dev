@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-TOOL_TIMEOUT = 5  # seconds per tool execution
+TOOL_TIMEOUT = 10  # seconds per tool execution
 MAX_TOOL_ROUNDS = 3  # max tool-use cycles per skill
 SKILL_TIMEOUT = 60  # seconds per skill LLM call
 
@@ -261,6 +261,20 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "required": ["symbol", "action"],
         },
     },
+    "web_search": {
+        "name": "web_search",
+        "description": "搜索互联网获取最新的市场新闻、宏观经济数据、公司公告等实时信息",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词，如 'US CPI data March 2026' 或 'Fed interest rate decision'",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 }
 
 
@@ -289,6 +303,7 @@ class ToolExecutor:
             "get_recent_news": self._get_recent_news,
             "read_memory": self._read_memory,
             "calculate_position_size": self._calculate_position_size,
+            "web_search": self._web_search,
         }
         executor = executor_map.get(tool_name)
         if not executor:
@@ -383,6 +398,17 @@ class ToolExecutor:
             "confidence_applied": confidence,
         }
 
+    async def _web_search(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        from uteki.domains.agent.research.web_search import get_web_search_service
+
+        query = args.get("query", "")
+        svc = get_web_search_service()
+        if not svc.available:
+            return {"error": "Web search not configured (missing Google API keys)", "query": query}
+
+        results = await svc.search(query, max_results=5)
+        return {"query": query, "results": results, "count": len(results)}
+
 
 # ============================================================
 # AgentSkillRunner
@@ -410,6 +436,8 @@ class AgentSkillRunner:
         self.harness_data = harness_data
         self.agent_key = agent_key
         self.user_id = user_id
+        self.web_search_enabled = model_config.get("web_search_enabled", False)
+        self.web_search_provider = model_config.get("web_search_provider", "google")
         self.tool_executor = ToolExecutor(
             harness_data=harness_data,
             agent_key=agent_key,
@@ -456,6 +484,19 @@ class AgentSkillRunner:
         from uteki.common.config import settings
         base_url = settings.google_api_base_url if provider_name == "google" else None
 
+        # Determine if this provider supports thinking mode
+        _thinking_providers = {"anthropic", "deepseek", "openai"}
+        _supports_thinking = provider_name in _thinking_providers
+        # DeepSeek thinking requires the reasoner model
+        _is_deepseek_reasoner = provider_name == "deepseek" and "reasoner" in model_name
+        # OpenAI thinking is implicit for o-series models
+        _is_openai_reasoning = provider_name == "openai" and any(
+            model_name.startswith(p) for p in ("o1", "o3", "o4")
+        )
+        # Only Anthropic needs explicit thinking config; others use model name
+        _use_thinking_config = provider_name == "anthropic"
+
+        # Default adapter (no thinking) — used for analysis skills
         adapter = LLMAdapterFactory.create_adapter(
             provider=provider,
             api_key=api_key,
@@ -463,6 +504,22 @@ class AgentSkillRunner:
             config=LLMConfig(temperature=0, max_tokens=4096),
             base_url=base_url,
         )
+
+        # Thinking adapter — used for make_decision skill (Anthropic extended thinking)
+        thinking_adapter = None
+        if _use_thinking_config:
+            thinking_adapter = LLMAdapterFactory.create_adapter(
+                provider=provider,
+                api_key=api_key,
+                model=model_name,
+                config=LLMConfig(
+                    temperature=1,  # Required by Anthropic for extended thinking
+                    max_tokens=16000,  # Room for thinking + output
+                    thinking=True,
+                    thinking_budget=10000,
+                ),
+                base_url=base_url,
+            )
 
         pipeline_start = time.time()
         accumulated_context: List[Dict[str, Any]] = []
@@ -485,15 +542,38 @@ class AgentSkillRunner:
                     skill, user_prompt, accumulated_context
                 )
 
+                # Inject web search note into system prompt when enabled
+                sys_prompt = skill.system_prompt_template
+                if self.web_search_enabled:
+                    sys_prompt += (
+                        "\n\n【联网搜索】你可以使用 web_search 工具搜索互联网获取最新信息。"
+                        "当你需要验证数据、获取最新新闻或补充分析依据时，请主动使用搜索。"
+                    )
+
                 messages = [
-                    LLMMessage(role="system", content=skill.system_prompt_template),
+                    LLMMessage(role="system", content=sys_prompt),
                     LLMMessage(role="user", content=skill_user_msg),
                 ]
 
-                # Data is pre-injected via harness — skip tools to avoid
-                # models (e.g. deepseek) getting distracted by tool-call intent
+                # Prepare tools: web_search when enabled via google tool
+                skill_tools = None
+                if self.web_search_enabled and self.web_search_provider == "google":
+                    ws_def = TOOL_DEFINITIONS["web_search"]
+                    skill_tools = [
+                        LLMTool(
+                            name=ws_def["name"],
+                            description=ws_def["description"],
+                            parameters=ws_def["parameters"],
+                        )
+                    ]
+
+                # Use thinking adapter for make_decision if available
+                active_adapter = adapter
+                if skill.skill_name == "make_decision" and thinking_adapter:
+                    active_adapter = thinking_adapter
+
                 skill_output, skill_tool_calls = await self._execute_skill_with_tools(
-                    adapter, messages, None, skill.skill_name, LLMMessage
+                    active_adapter, messages, skill_tools, skill.skill_name, LLMMessage
                 )
 
                 skill_latency = int((time.time() - skill_start) * 1000)

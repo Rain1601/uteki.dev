@@ -50,6 +50,8 @@ class LLMConfig:
     max_tokens: int = 2000
     top_p: Optional[float] = None
     stop_sequences: Optional[List[str]] = None
+    thinking: bool = False
+    thinking_budget: int = 10000
 
 
 @dataclass
@@ -193,13 +195,18 @@ class OpenAIAdapter(BaseLLMAdapter):
         """OpenAI 聊天接口"""
         openai_messages = self.convert_messages(messages)
 
+        # Reasoning models (o1/o3/o4) use max_completion_tokens, not max_tokens
+        is_reasoning = any(self.model.startswith(p) for p in ("o1", "o3", "o4"))
         kwargs = {
             "model": self.model,
             "messages": openai_messages,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
             "stream": stream,
         }
+        if is_reasoning:
+            kwargs["max_completion_tokens"] = self.config.max_tokens
+        else:
+            kwargs["temperature"] = self.config.temperature
+            kwargs["max_tokens"] = self.config.max_tokens
 
         if tools:
             kwargs["tools"] = self.convert_tools(tools)
@@ -214,7 +221,12 @@ class OpenAIAdapter(BaseLLMAdapter):
                         yield delta.content
         else:
             if hasattr(response, 'choices') and len(response.choices) > 0:
-                yield response.choices[0].message.content
+                msg = response.choices[0].message
+                # o-series reasoning models may include reasoning in response
+                reasoning = getattr(msg, 'reasoning_content', None)
+                if reasoning:
+                    yield f"<thinking>\n{reasoning}\n</thinking>\n\n"
+                yield msg.content or ""
 
 
 class AnthropicAdapter(BaseLLMAdapter):
@@ -263,15 +275,24 @@ class AnthropicAdapter(BaseLLMAdapter):
         stream: bool = True,
         tools: Optional[List[LLMTool]] = None
     ) -> AsyncGenerator[str, None]:
-        """Claude 聊天接口"""
+        """Claude 聊天接口（支持 extended thinking）"""
         system_message, anthropic_messages = self.convert_messages(messages)
 
         kwargs = {
             "model": self.model,
             "messages": anthropic_messages,
-            "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
+
+        if self.config.thinking:
+            # Extended thinking: temperature must be 1, use budget_tokens
+            kwargs["temperature"] = 1
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self.config.thinking_budget,
+            }
+        else:
+            kwargs["temperature"] = self.config.temperature
 
         if system_message:
             kwargs["system"] = system_message
@@ -285,7 +306,17 @@ class AnthropicAdapter(BaseLLMAdapter):
                     yield text
         else:
             response = await self.client.messages.create(**kwargs)
-            yield response.content[0].text
+            # Extract thinking + text from response blocks
+            thinking_text = ""
+            output_text = ""
+            for block in response.content:
+                if block.type == "thinking":
+                    thinking_text += block.thinking
+                elif block.type == "text":
+                    output_text += block.text
+            if thinking_text:
+                yield f"<thinking>\n{thinking_text}\n</thinking>\n\n"
+            yield output_text
 
 
 class DeepSeekAdapter(OpenAIAdapter):
@@ -299,6 +330,35 @@ class DeepSeekAdapter(OpenAIAdapter):
             api_key=api_key,
             base_url="https://api.deepseek.com"
         )
+
+    async def chat(
+        self,
+        messages: List[LLMMessage],
+        stream: bool = True,
+        tools: Optional[List[LLMTool]] = None
+    ) -> AsyncGenerator[str, None]:
+        """DeepSeek 聊天接口 — deepseek-reasoner 自带 reasoning_content"""
+        is_reasoner = "reasoner" in self.model
+        if not is_reasoner:
+            async for chunk in super().chat(messages, stream, tools):
+                yield chunk
+            return
+
+        # deepseek-reasoner: no temperature, no streaming, has reasoning_content
+        openai_messages = self.convert_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "messages": openai_messages,
+            "stream": False,
+            "max_completion_tokens": self.config.max_tokens,
+        }
+        response = await self.client.chat.completions.create(**kwargs)
+        if hasattr(response, 'choices') and len(response.choices) > 0:
+            msg = response.choices[0].message
+            reasoning = getattr(msg, 'reasoning_content', None)
+            if reasoning:
+                yield f"<thinking>\n{reasoning}\n</thinking>\n\n"
+            yield msg.content or ""
 
 
 class QwenAdapter(OpenAIAdapter):

@@ -44,13 +44,16 @@ DEFAULT_USER_PROMPT_TEMPLATE = """日期: {{date}}
 === 市场行情 ===
 {{market_quotes}}
 
+=== 近期走势（日线） ===
+{{price_history}}
+
 === 估值数据 ===
 {{valuations}}
 
 === 宏观经济 ===
 {{macro}}
 
-=== 市场情绪 ===
+=== 经济日历 ===
 {{sentiment}}
 
 === 账户状态 ===
@@ -230,21 +233,57 @@ class PromptService:
         quote_lines = []
         for symbol, data in quotes.items():
             price = data.get("price", "N/A")
-            pe = data.get("pe_ratio", "N/A")
             ma50 = data.get("ma50", "N/A")
             ma200 = data.get("ma200", "N/A")
             rsi = data.get("rsi", "N/A")
-            quote_lines.append(f"{symbol}: 价格=${price} | PE={pe} | MA50={ma50} | MA200={ma200} | RSI={rsi}")
+            high_52w = data.get("high_52w", "N/A")
+            low_52w = data.get("low_52w", "N/A")
+            quote_lines.append(
+                f"{symbol}: 价格=${price} | MA50={ma50} | MA200={ma200} | RSI={rsi} | 52周高={high_52w} | 52周低={low_52w}"
+            )
+
+        # Price history (K-line)
+        history_data = snapshot.get("price_history", {})
+        history_lines = []
+        for symbol, days in history_data.items():
+            if not days:
+                history_lines.append(f"{symbol}: 无历史数据")
+                continue
+            # Compact table: date, close, change%
+            history_lines.append(f"{symbol} (近{len(days)}天):")
+            history_lines.append("  日期       | 收盘    | 涨跌%  | 最高   | 最低")
+            prev_close = None
+            for d in days:
+                close = d.get("close", 0)
+                change_pct = ""
+                if prev_close and prev_close > 0:
+                    change_pct = f"{(close / prev_close - 1) * 100:+.1f}%"
+                else:
+                    change_pct = "  -  "
+                history_lines.append(
+                    f"  {d.get('date', '')} | ${close:<7.2f} | {change_pct:<6} | ${d.get('high', 0):.2f} | ${d.get('low', 0):.2f}"
+                )
+                prev_close = close
 
         # Valuations
         val_lines = []
         for symbol, v in valuations_data.items():
-            pe = v.get("pe_ratio", "N/A")
-            cape = v.get("shiller_cape", "N/A")
-            div_yield = v.get("dividend_yield", "N/A")
-            ey = v.get("earnings_yield", "N/A")
-            erp = v.get("equity_risk_premium", "N/A")
-            val_lines.append(f"{symbol}: PE={pe} | CAPE={cape} | 股息率={div_yield} | 盈利收益率={ey} | 风险溢价={erp}")
+            parts = []
+            div_yield = v.get("dividend_yield")
+            if div_yield:
+                parts.append(f"股息率={div_yield}%")
+            pct52 = v.get("pct_in_52w_range")
+            if pct52 is not None:
+                parts.append(f"52周位置={pct52}%")
+            val_lines.append(f"{symbol}: {' | '.join(parts)}" if parts else f"{symbol}: 无估值数据")
+
+        # Data quality warnings
+        data_warnings = snapshot.get("data_quality_warnings", [])
+        if data_warnings:
+            val_lines.append("")
+            val_lines.append("⚠ 数据质量提示:")
+            for w in data_warnings:
+                val_lines.append(f"  - {w}")
 
         # Macro
         macro_lines = []
@@ -255,53 +294,72 @@ class PromptService:
             ("核心 PCE 同比", "core_pce_yoy", "%"),
             ("GDP 季环比", "gdp_growth_qoq", "%"),
             ("失业率", "unemployment_rate", "%"),
-            ("ISM 制造业 PMI", "ism_manufacturing_pmi", ""),
-            ("ISM 服务业 PMI", "ism_services_pmi", ""),
             ("收益率曲线 2Y-10Y", "yield_curve_2y10y", "bps"),
             ("VIX", "vix", ""),
             ("美元指数 DXY", "dxy", ""),
+            ("巴菲特指数", "buffett_indicator", ""),
+            ("市场 PE (S&P500)", "market_pe", ""),
+            ("股权风险溢价", "equity_risk_premium", ""),
         ]
         for label, key, suffix in macro_fields:
             val = macro_data.get(key)
             formatted = f"{val}{suffix}" if val is not None else "N/A"
             macro_lines.append(f"{label}: {formatted}")
 
-        # Sentiment
+        # Sentiment — only calendar events (Fear&Greed/AAII/Put-Call not available)
         sent_lines = []
-        sent_fields = [
-            ("Fear & Greed 指数", "fear_greed_index"),
-            ("AAII 看多比例", "aaii_bull_ratio"),
-            ("AAII 看空比例", "aaii_bear_ratio"),
-            ("Put/Call Ratio", "put_call_ratio"),
-            ("新闻情绪评分", "news_sentiment_score"),
-        ]
-        for label, key in sent_fields:
-            val = sentiment_data.get(key)
-            sent_lines.append(f"{label}: {val if val is not None else 'N/A'}")
         events = sentiment_data.get("news_key_events", [])
-        for evt in events[:5]:
-            sent_lines.append(f"  - {evt}")
+        if events:
+            sent_lines.append("近期重要经济事件:")
+            for evt in events[:5]:
+                sent_lines.append(f"  - {evt}")
+        else:
+            sent_lines.append("近期无重要经济事件")
 
-        # Positions
+        # Positions — index-filtered view
         pos_lines = []
-        for pos in account.get("positions", []):
-            pos_lines.append(f"持仓: {pos.get('symbol', '?')} {pos.get('quantity', 0)}股")
+        index_positions = account.get("index_positions", [])
+        if index_positions:
+            for pos in index_positions:
+                symbol = pos.get("symbol", "?")
+                qty = pos.get("quantity", 0)
+                avg_p = pos.get("avg_price", 0)
+                mkt_p = pos.get("market_price", 0)
+                mv = pos.get("market_value", 0)
+                pnl = pos.get("unrealized_pnl", 0)
+                pnl_pct = (pnl / (avg_p * qty) * 100) if avg_p and qty else 0
+                pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+                pnl_pct_str = f"+{pnl_pct:.1f}%" if pnl_pct >= 0 else f"{pnl_pct:.1f}%"
+                pos_lines.append(
+                    f"持仓: {symbol} {qty}股 | 均价=${avg_p:,.2f} | 现价=${mkt_p:,.2f} | 市值=${mv:,.2f} | 盈亏={pnl_str}({pnl_pct_str})"
+                )
+            index_mv = account.get("index_market_value", 0)
+            pos_lines.append(f"Index 持仓合计: ${index_mv:,.2f}")
+        else:
+            pos_lines.append("无 Index ETF 持仓")
+
+        non_index_value = account.get("non_index_value", 0)
+        if non_index_value > 0:
+            pos_lines.append(f"非 Index 持仓(个股等): ${non_index_value:,.2f}")
 
         # Budget calculations
         cash = account.get("cash", 0)
-        total = account.get("total", 0) or cash
-        available_cash = cash
+        total = account.get("total_value", 0) or cash
+        available_cash = account.get("available_for_index", cash)
         budget = task.get("budget") or available_cash
         max_pct = constraints.get("max_single_position_pct", 40) / 100.0
 
+        # Use projected total (current + incoming budget) for position limits
+        # This prevents max_buy=0 when total=0 but budget>0 (e.g. first DCA)
+        projected_total = total + budget
+
         # Per-ETF limits
         etf_limit_lines = []
-        positions = account.get("positions", [])
-        pos_map = {p.get("symbol", ""): p.get("market_value", 0) for p in positions}
+        pos_map = {p.get("symbol", ""): p.get("market_value", 0) for p in index_positions}
         watchlist = task.get("watchlist", [])
         for symbol in watchlist:
             current_value = pos_map.get(symbol, 0)
-            max_allowed = total * max_pct - current_value
+            max_allowed = projected_total * max_pct - current_value
             max_buy = min(budget, max(0, max_allowed))
             etf_limit_lines.append(f"  {symbol}: 最大可买 ${max_buy:,.0f} (已持 ${current_value:,.0f}, 上限 {max_pct*100:.0f}%)")
 
@@ -333,6 +391,7 @@ class PromptService:
             "date": created_at or datetime.now().isoformat(),
             "harness_type": harness_data.get("harness_type", "unknown"),
             "market_quotes": "\n".join(quote_lines) or "无数据",
+            "price_history": "\n".join(history_lines) or "无历史数据",
             "valuations": "\n".join(val_lines) or "无数据",
             "macro": "\n".join(macro_lines),
             "sentiment": "\n".join(sent_lines),
