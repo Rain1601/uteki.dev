@@ -54,6 +54,7 @@ async def init_database():
         DataQualityLog,
         IngestionRun,
     )
+    from uteki.domains.company.models import CompanyAnalysis
 
     # Get engine
     from uteki.common.config import settings
@@ -72,7 +73,7 @@ async def init_database():
                 if table.schema:
                     model_schemas.add(table.schema)
             # Also ensure known schemas exist
-            all_schemas = model_schemas | {"admin", "agent", "auth", "snb", "index", "market_data"}
+            all_schemas = model_schemas | {"admin", "agent", "auth", "snb", "index", "market_data", "company"}
             for schema in sorted(all_schemas):
                 await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
             logger.info(f"✓ Created schemas: {', '.join(sorted(all_schemas))}")

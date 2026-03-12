@@ -1,80 +1,165 @@
 """
-Company Agent — Pydantic schemas for skill outputs and API I/O.
+Company Agent — Pydantic schemas for 7-gate decision tree pipeline.
 
-Pipeline: Buffett (Moat) → Fisher (15 Points) → Munger (Risk) → Verdict
-Focus: Is this a great business worth holding forever? Then: is the price right?
+Pipeline: 业务解析 → 成长质量(Fisher) → 护城河(Buffett) → 管理层 → 逆向检验(Munger) → 估值 → 仓位
 """
 from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
 
-# ── Skill 1: Business Quality & Moat (Buffett) ───────────────────────────
+# ── Gate 1: 业务解析 ──────────────────────────────────────────────────────
 
-class MoatAssessmentOutput(BaseModel):
-    business_model: str = ""                # one-line description of how the company makes money
-    moat_types: list[str] = Field(default_factory=list)   # BRAND/NETWORK/SWITCHING/COST/SCALE
-    moat_width: Literal["wide", "narrow", "none"] = "narrow"
-    moat_trend: Literal["strengthening", "stable", "eroding"] = "stable"
-    moat_durability_years: int = 0
-    owner_earnings_per_share: float = 0.0   # FCF proxy
-    reinvestment_runway: str = ""           # can the company deploy capital at high ROIC?
-    management_quality: Literal["excellent", "good", "mediocre", "poor"] = "good"
-    capital_allocation: str = ""            # buyback/M&A/dividend discipline
-    key_strengths: list[str] = Field(default_factory=list)
-    key_weaknesses: list[str] = Field(default_factory=list)
+class RevenueStream(BaseModel):
+    name: str = ""
+    percentage: float = 0.0
+    growth_trend: str = ""
+
+class BusinessAnalysisOutput(BaseModel):
+    business_description: str = ""
+    revenue_streams: list[RevenueStream] = Field(default_factory=list)
+    profit_logic: str = ""
+    is_good_business: bool = False
+    business_quality: Literal["excellent", "good", "mediocre", "poor"] = "good"
+    quality_reasons: list[str] = Field(default_factory=list)
+    sustainability_score: float = 5.0
+    sustainability_reasoning: str = ""
+    key_metrics: dict = Field(default_factory=dict)
     summary: str = ""
 
 
-# ── Skill 2: Growth & Scuttlebutt (Fisher 15 Points) ─────────────────────
+# ── Gate 2: 成长质量分析 (Fisher 15问 QA) ─────────────────────────────────
 
-class FisherFifteenOutput(BaseModel):
-    scores: dict = Field(default_factory=dict)  # {"G1": 0.8, "G2": 0.9, ...} 0-1 each
-    fisher_total: float = 0.0               # 0–15 sum
+class FisherQuestion(BaseModel):
+    id: str = ""
+    question: str = ""
+    answer: str = ""
+    score: float = 5.0
+    data_confidence: Literal["high", "medium", "low"] = "medium"
+
+class FisherQAOutput(BaseModel):
+    questions: list[FisherQuestion] = Field(default_factory=list)
+    total_score: float = 0.0
     growth_verdict: Literal["compounder", "cyclical", "declining", "turnaround"] = "cyclical"
-    revenue_cagr_3yr: float = 0.0           # estimated 3yr CAGR
-    tam_assessment: str = ""                # Total Addressable Market outlook
-    management_candor_score: int = 5        # 0–10
+    radar_data: dict = Field(default_factory=lambda: {
+        "market_potential": 5, "innovation": 5, "profitability": 5,
+        "management": 5, "competitive_edge": 5,
+    })
     green_flags: list[str] = Field(default_factory=list)
     red_flags: list[str] = Field(default_factory=list)
     summary: str = ""
 
 
-# ── Skill 3: Risk Audit & Mental Models (Munger) ─────────────────────────
+# ── Gate 3: 护城河评估 (Buffett) ──────────────────────────────────────────
 
-class MungerRiskOutput(BaseModel):
-    critical_risks: list[dict] = Field(default_factory=list)  # [{type, probability, impact, timeline}]
-    lollapalooza_positive: list[str] = Field(default_factory=list)
-    lollapalooza_negative: list[str] = Field(default_factory=list)
-    checklist_red_flags: list[str] = Field(default_factory=list)
-    fatal_scenario: str = ""                # single worst-case narrative
-    resilience_score: float = 5.0           # 0–10
+class MoatType(BaseModel):
+    type: str = ""
+    strength: Literal["strong", "moderate", "weak"] = "moderate"
+    evidence: str = ""
+
+class MoatAssessmentOutput(BaseModel):
+    moat_types: list[MoatType] = Field(default_factory=list)
+    moat_width: Literal["wide", "narrow", "none"] = "narrow"
+    moat_trend: Literal["strengthening", "stable", "eroding"] = "stable"
+    moat_durability_years: int = 0
+    competitive_position: str = ""
+    market_share_trend: str = ""
+    moat_evidence: list[str] = Field(default_factory=list)
+    moat_threats: list[str] = Field(default_factory=list)
+    owner_earnings_quality: str = ""
     summary: str = ""
 
 
-# ── Skill 4: Final Verdict ───────────────────────────────────────────────
+# ── Gate 4: 管理层评估 (Fisher + Munger) ──────────────────────────────────
 
-class VerdictOutput(BaseModel):
-    # Part 1: Is this company worth holding long-term?
-    quality_verdict: Literal["EXCELLENT", "GOOD", "MEDIOCRE", "POOR"] = "GOOD"
-    long_term_hold: bool = False            # would you hold this for 10+ years?
-    conviction: float = 0.5                 # 0.0–1.0
+class ManagementAssessmentOutput(BaseModel):
+    integrity_score: float = 5.0
+    integrity_evidence: str = ""
+    capital_allocation_score: float = 5.0
+    capital_allocation_detail: str = ""
+    shareholder_orientation_score: float = 5.0
+    shareholder_orientation_detail: str = ""
+    succession_risk: Literal["low", "medium", "high"] = "medium"
+    succession_detail: str = ""
+    insider_signal: str = ""
+    key_person_risk: str = ""
+    compensation_assessment: str = ""
+    management_score: float = 5.0
+    summary: str = ""
 
-    # Part 2: Is the current price reasonable? (only matters if quality is good)
+
+# ── Gate 5: 逆向检验 (Munger) ─────────────────────────────────────────────
+
+class DestructionScenario(BaseModel):
+    scenario: str = ""
+    probability: float = 0.0
+    impact: float = 5.0
+    timeline: str = ""
+    reasoning: str = ""
+
+class RedFlag(BaseModel):
+    flag: str = ""
+    triggered: bool = False
+    detail: str = ""
+
+class ReverseTestOutput(BaseModel):
+    destruction_scenarios: list[DestructionScenario] = Field(default_factory=list)
+    red_flags: list[RedFlag] = Field(default_factory=list)
+    resilience_score: float = 5.0
+    resilience_reasoning: str = ""
+    cognitive_biases: list[str] = Field(default_factory=list)
+    worst_case_narrative: str = ""
+    summary: str = ""
+
+
+# ── Gate 6: 估值与时机 (Buffett) ──────────────────────────────────────────
+
+class ValuationOutput(BaseModel):
     price_assessment: Literal["cheap", "fair", "expensive", "bubble"] = "fair"
-    reasoning: str = ""                     # why this price assessment
+    price_reasoning: str = ""
+    safety_margin: Literal["large", "moderate", "thin", "negative"] = "moderate"
+    safety_margin_detail: str = ""
+    market_sentiment: Literal["fear", "neutral", "greed", "euphoria"] = "neutral"
+    sentiment_detail: str = ""
+    comparable_assessment: str = ""
+    buy_confidence: float = 5.0
+    price_vs_quality: str = ""
+    summary: str = ""
 
-    # Actionable output
+
+# ── Gate 7: 仓位与持有 ───────────────────────────────────────────────────
+
+class PositionHoldingOutput(BaseModel):
     action: Literal["BUY", "WATCH", "AVOID"] = "WATCH"
-    hold_horizon: str = "5-10yr"
+    conviction: float = 0.5
+    quality_verdict: Literal["EXCELLENT", "GOOD", "MEDIOCRE", "POOR"] = "GOOD"
+    position_size_pct: float = 0.0
+    position_reasoning: str = ""
     sell_triggers: list[str] = Field(default_factory=list)
+    add_triggers: list[str] = Field(default_factory=list)
+    hold_horizon: str = "5-10yr"
     philosophy_scores: dict = Field(default_factory=lambda: {
-        "buffett": 5, "fisher": 5, "munger": 5
+        "buffett": 5, "fisher": 5, "munger": 5,
     })
+    buffett_comment: str = ""
+    fisher_comment: str = ""
+    munger_comment: str = ""
     one_sentence: str = ""
+    summary: str = ""
 
 
 # ── API Request / Response ─────────────────────────────────────────────────
+
+class CompanyFullReport(BaseModel):
+    """Gate 7 comprehensive output — all 7 sections structured from natural language analyses."""
+    business_analysis: BusinessAnalysisOutput = Field(default_factory=BusinessAnalysisOutput)
+    fisher_qa: FisherQAOutput = Field(default_factory=FisherQAOutput)
+    moat_assessment: MoatAssessmentOutput = Field(default_factory=MoatAssessmentOutput)
+    management_assessment: ManagementAssessmentOutput = Field(default_factory=ManagementAssessmentOutput)
+    reverse_test: ReverseTestOutput = Field(default_factory=ReverseTestOutput)
+    valuation: ValuationOutput = Field(default_factory=ValuationOutput)
+    position_holding: PositionHoldingOutput = Field(default_factory=PositionHoldingOutput)
+
 
 class CompanyAnalyzeRequest(BaseModel):
     symbol: str
@@ -82,11 +167,3 @@ class CompanyAnalyzeRequest(BaseModel):
     investment_horizon: str = "5-10yr"
     provider: Optional[str] = None
     model: Optional[str] = None
-
-
-SKILL_SCHEMAS = {
-    "moat_assessment":    MoatAssessmentOutput,
-    "fisher_fifteen":     FisherFifteenOutput,
-    "munger_risk":        MungerRiskOutput,
-    "verdict":            VerdictOutput,
-}

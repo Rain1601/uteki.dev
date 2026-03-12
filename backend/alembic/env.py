@@ -19,6 +19,7 @@ from uteki.domains.macro.models import EconomicEvent
 from uteki.domains.data.models import Symbol, KlineDaily, DataQualityLog, IngestionRun
 from uteki.domains.user.models import User, UserAuthProvider
 from uteki.domains.auth.models import RefreshToken
+from uteki.domains.company.models import CompanyAnalysis
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
