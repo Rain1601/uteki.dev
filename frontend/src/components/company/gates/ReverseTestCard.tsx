@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material';
 import { useTheme } from '../../../theme/ThemeProvider';
-import { SectionHeader, ScoreBar, BulletList } from '../ui';
+import { SectionHeader, ScoreBar, BulletList, AccentCard } from '../ui';
 import RiskMatrix from '../charts/RiskMatrix';
 
 interface Props {
@@ -42,16 +42,7 @@ export default function ReverseTestCard({ data }: Props) {
               {scenarios.map((s: any, i: number) => {
                 const impactColor = (s.impact || 0) >= 7 ? '#f44336' : (s.impact || 0) >= 4 ? '#ff9800' : '#4caf50';
                 return (
-                  <Box
-                    key={i}
-                    sx={{
-                      px: 1.5,
-                      py: 1,
-                      bgcolor: theme.background.hover,
-                      borderRadius: 1,
-                      borderLeft: `3px solid ${impactColor}`,
-                    }}
-                  >
+                  <AccentCard key={i} color={impactColor}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                       <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary, flex: 1 }}>
                         {s.scenario}
@@ -73,7 +64,7 @@ export default function ReverseTestCard({ data }: Props) {
                         {s.reasoning}
                       </Typography>
                     )}
-                  </Box>
+                  </AccentCard>
                 );
               })}
             </Box>
@@ -128,14 +119,14 @@ export default function ReverseTestCard({ data }: Props) {
 
       {/* Worst case */}
       {data.worst_case_narrative && (
-        <Box sx={{ p: 2, bgcolor: 'rgba(244,67,54,0.06)', borderRadius: 1.5, borderLeft: '3px solid #f44336' }}>
+        <AccentCard color="#f44336">
           <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#f44336', mb: 0.5 }}>
             Worst Case Narrative
           </Typography>
           <Typography sx={{ fontSize: 13, color: theme.text.secondary, lineHeight: 1.7 }}>
             {data.worst_case_narrative}
           </Typography>
-        </Box>
+        </AccentCard>
       )}
     </Box>
   );

@@ -180,13 +180,26 @@ export function BulletList({ items, variant = 'neutral' }: BulletListProps) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
       {items.map((item, i) => (
-        <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, pl: 0.5 }}>
+        <Box
+          key={i}
+          sx={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 1,
+            px: 1.5,
+            py: 0.75,
+            bgcolor: `${dotColor}08`,
+            borderRadius: 2,
+            border: `1px solid ${dotColor}0c`,
+          }}
+        >
           <Box
             sx={{
               width: 6,
               height: 6,
               borderRadius: '50%',
               bgcolor: dotColor,
+              boxShadow: `0 0 6px ${dotColor}80`,
               flexShrink: 0,
               mt: '7px',
             }}
@@ -218,10 +231,19 @@ export function ScoreBar({ label, score, max = 10, color }: ScoreBarProps) {
   const barColor = color || (score >= 7 ? '#4caf50' : score >= 4 ? '#ff9800' : '#f44336');
 
   return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+    <Box
+      sx={{
+        mb: 1.5,
+        px: 2,
+        py: 1.25,
+        bgcolor: `${barColor}0c`,
+        borderRadius: 2.5,
+        border: `1px solid ${barColor}18`,
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
         <Typography sx={{ fontSize: 13, color: theme.text.secondary }}>{label}</Typography>
-        <Typography sx={{ fontSize: 13, fontWeight: 600, color: barColor }}>
+        <Typography sx={{ fontSize: 13, fontWeight: 700, color: barColor }}>
           {score}/{max}
         </Typography>
       </Box>
@@ -232,7 +254,11 @@ export function ScoreBar({ label, score, max = 10, color }: ScoreBarProps) {
           height: 6,
           borderRadius: 3,
           bgcolor: theme.background.secondary,
-          '& .MuiLinearProgress-bar': { bgcolor: barColor, borderRadius: 3 },
+          '& .MuiLinearProgress-bar': {
+            bgcolor: barColor,
+            borderRadius: 3,
+            boxShadow: `0 0 8px ${barColor}60`,
+          },
         }}
       />
     </Box>
@@ -306,6 +332,34 @@ export function StatusBadge({ variant, value }: StatusBadgeProps) {
       }}
     >
       {String(value).toUpperCase()}
+    </Box>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// 7. AccentCard — colored accent card with glow
+// ═══════════════════════════════════════════════════
+
+interface AccentCardProps {
+  color: string;
+  children: React.ReactNode;
+  sx?: Record<string, any>;
+}
+
+export function AccentCard({ color, children, sx }: AccentCardProps) {
+  return (
+    <Box
+      sx={{
+        px: 2,
+        py: 1.5,
+        bgcolor: `${color}14`,
+        borderRadius: 3,
+        border: `1px solid ${color}30`,
+        boxShadow: `0 2px 12px ${color}12, inset 0 1px 0 ${color}18`,
+        ...sx,
+      }}
+    >
+      {children}
     </Box>
   );
 }

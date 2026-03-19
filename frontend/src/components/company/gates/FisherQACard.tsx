@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Box, Typography, Collapse, LinearProgress } from '@mui/material';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTheme } from '../../../theme/ThemeProvider';
-import { SectionHeader, StatGrid, BulletList } from '../ui';
+import { SectionHeader, StatGrid, BulletList, AccentCard } from '../ui';
 import FisherRadarChart from '../charts/FisherRadarChart';
 
 interface Props {
@@ -74,29 +74,23 @@ export default function FisherQACard({ data }: Props) {
         <SectionHeader>Fisher 15 Questions</SectionHeader>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           {questions.map((q: any) => {
-            const isOpen = expandedQ[q.id] ?? false;
+            const isOpen = expandedQ[q.id] ?? true;
             const scoreColor = (q.score || 0) >= 7 ? '#4caf50' : (q.score || 0) >= 4 ? '#ff9800' : '#f44336';
             const confColor = CONFIDENCE_COLORS[q.data_confidence] || theme.text.muted;
 
             return (
-              <Box
-                key={q.id}
-                sx={{
-                  bgcolor: theme.background.hover,
-                  borderRadius: 1,
-                  overflow: 'hidden',
-                }}
-              >
+              <AccentCard key={q.id} color={scoreColor} sx={{ overflow: 'hidden', px: 0, py: 0 }}>
                 <Box
                   onClick={() => toggleQ(q.id)}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
                     gap: 1,
-                    px: 1.5,
-                    py: 1,
+                    px: 2,
+                    py: 1.25,
                     cursor: 'pointer',
-                    '&:hover': { bgcolor: theme.background.active || theme.background.hover },
+                    transition: 'background 0.15s',
+                    '&:hover': { bgcolor: `${scoreColor}10` },
                   }}
                 >
                   {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -111,6 +105,7 @@ export default function FisherQACard({ data }: Props) {
                       sx={{
                         width: 6, height: 6, borderRadius: '50%',
                         bgcolor: confColor,
+                        boxShadow: `0 0 6px ${confColor}80`,
                       }}
                       title={`Data confidence: ${q.data_confidence}`}
                     />
@@ -120,7 +115,7 @@ export default function FisherQACard({ data }: Props) {
                   </Box>
                 </Box>
                 <Collapse in={isOpen}>
-                  <Box sx={{ px: 1.5, pb: 1.5, pt: 0.5 }}>
+                  <Box sx={{ px: 2, pb: 1.5, pt: 0.5 }}>
                     <Typography sx={{ fontSize: 13, color: theme.text.secondary, lineHeight: 1.6 }}>
                       {q.answer}
                     </Typography>
@@ -132,12 +127,16 @@ export default function FisherQACard({ data }: Props) {
                         height: 4,
                         borderRadius: 2,
                         bgcolor: theme.background.secondary,
-                        '& .MuiLinearProgress-bar': { bgcolor: scoreColor, borderRadius: 2 },
+                        '& .MuiLinearProgress-bar': {
+                          bgcolor: scoreColor,
+                          borderRadius: 2,
+                          boxShadow: `0 0 6px ${scoreColor}60`,
+                        },
                       }}
                     />
                   </Box>
                 </Collapse>
-              </Box>
+              </AccentCard>
             );
           })}
         </Box>

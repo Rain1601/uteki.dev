@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material';
 import { useTheme } from '../../../theme/ThemeProvider';
-import { SectionHeader, StatGrid, BulletList } from '../ui';
+import { SectionHeader, StatGrid, BulletList, AccentCard } from '../ui';
 import PhilosophyScoresBar from '../charts/PhilosophyScoresBar';
 
 interface Props {
@@ -59,25 +59,16 @@ export default function PositionHoldingCard({ data }: Props) {
           ]
             .filter((p) => p.comment)
             .map((p) => (
-              <Box
-                key={p.name}
-                sx={{
-                  display: 'flex',
-                  gap: 1.5,
-                  px: 2,
-                  py: 1.25,
-                  bgcolor: theme.background.hover,
-                  borderRadius: 1,
-                  borderLeft: `3px solid ${p.color}`,
-                }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: p.color, minWidth: 50 }}>
-                  {p.name}
-                </Typography>
-                <Typography sx={{ fontSize: 13, color: theme.text.secondary, fontStyle: 'italic' }}>
-                  "{p.comment}"
-                </Typography>
-              </Box>
+              <AccentCard key={p.name} color={p.color}>
+                <Box sx={{ display: 'flex', gap: 1.5 }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: p.color, minWidth: 50 }}>
+                    {p.name}
+                  </Typography>
+                  <Typography sx={{ fontSize: 13, color: theme.text.secondary, fontStyle: 'italic' }}>
+                    "{p.comment}"
+                  </Typography>
+                </Box>
+              </AccentCard>
             ))}
         </Box>
       )}

@@ -1,7 +1,7 @@
 import { Box, Typography, Chip } from '@mui/material';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useTheme } from '../../../theme/ThemeProvider';
-import { SectionHeader, ScoreBar, StatGrid, BulletList } from '../ui';
+import { SectionHeader, ScoreBar, StatGrid, BulletList, AccentCard } from '../ui';
 
 interface Props {
   data: Record<string, any>;
@@ -72,28 +72,18 @@ export default function MoatAssessmentCard({ data }: Props) {
             {data.moat_types.map((m: any, i: number) => {
               const sColor = STRENGTH_COLORS[m.strength] || theme.text.muted;
               return (
-                <Box
-                  key={i}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    px: 1.5,
-                    py: 1,
-                    bgcolor: theme.background.hover,
-                    borderRadius: 1,
-                    borderLeft: `3px solid ${sColor}`,
-                  }}
-                >
-                  <Chip
-                    label={m.type}
-                    size="small"
-                    sx={{ fontSize: 12, fontWeight: 700, bgcolor: `${sColor}15`, color: sColor }}
-                  />
-                  <Typography sx={{ fontSize: 13, color: theme.text.secondary, flex: 1 }}>
-                    {m.evidence}
-                  </Typography>
-                </Box>
+                <AccentCard key={i} color={sColor}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Chip
+                      label={m.type}
+                      size="small"
+                      sx={{ fontSize: 12, fontWeight: 700, bgcolor: `${sColor}15`, color: sColor }}
+                    />
+                    <Typography sx={{ fontSize: 13, color: theme.text.secondary, flex: 1 }}>
+                      {m.evidence}
+                    </Typography>
+                  </Box>
+                </AccentCard>
               );
             })}
           </Box>
