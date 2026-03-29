@@ -192,38 +192,21 @@ class ReflectionService:
 
     async def _get_adapter(self):
         from uteki.domains.agent.llm_adapter import (
-            LLMAdapterFactory, LLMProvider, LLMConfig
+            LLMAdapterFactory, LLMConfig
         )
         from uteki.domains.index.services.arena_service import load_models_from_db
 
-        provider_map = {
-            "anthropic": LLMProvider.ANTHROPIC,
-            "openai": LLMProvider.OPENAI,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "google": LLMProvider.GOOGLE,
-            "qwen": LLMProvider.QWEN,
-            "minimax": LLMProvider.MINIMAX,
-        }
-
-        # Try DB config first
+        # Try DB config first to determine which model to use
         db_models = load_models_from_db()
         if db_models:
             m = db_models[0]
-            provider = provider_map.get(m["provider"])
-            if provider:
-                try:
-                    base_url = m.get("base_url") or (
-                        settings.google_api_base_url if m["provider"] == "google" else None
-                    )
-                    return LLMAdapterFactory.create_adapter(
-                        provider=provider,
-                        api_key=m["api_key"],
-                        model=m["model"],
-                        config=LLMConfig(temperature=0.5, max_tokens=2048),
-                        base_url=base_url,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to create adapter from DB config: {e}")
+            try:
+                return LLMAdapterFactory.create_unified(
+                    model=m["model"],
+                    config=LLMConfig(temperature=0.5, max_tokens=2048),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create adapter from DB config: {e}")
 
         logger.warning("No LLM model configured in DB for reflection service")
         return None

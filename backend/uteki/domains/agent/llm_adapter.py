@@ -151,12 +151,15 @@ class BaseLLMAdapter(ABC):
 
 
 class OpenAIAdapter(BaseLLMAdapter):
-    """OpenAI LLM Adapter"""
+    """OpenAI LLM Adapter — supports custom base_url for proxies (OpenRouter, AIHubMix, etc.)"""
 
-    def __init__(self, api_key: str, model: str, config: Optional[LLMConfig] = None):
+    def __init__(self, api_key: str, model: str, config: Optional[LLMConfig] = None, base_url: Optional[str] = None):
         super().__init__(api_key, model, config)
         from openai import AsyncOpenAI
-        self.client = AsyncOpenAI(api_key=api_key)
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**kwargs)
 
     def convert_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
         """转换为 OpenAI 消息格式"""
@@ -442,6 +445,95 @@ class LLMAdapterFactory:
     """LLM Adapter 工厂类"""
 
     @staticmethod
+    def create_unified(
+        model: str,
+        config: Optional[LLMConfig] = None,
+    ) -> BaseLLMAdapter:
+        """
+        通过统一 API 入口 (AIHubMix) 创建 adapter。
+
+        所有模型统一走 OpenAI-compatible 格式，一个 API key 访问所有模型。
+        如果未配置统一入口，自动 fallback 到直连 provider。
+
+        Args:
+            model: 模型名称 (如 "deepseek-chat", "gpt-4.1", "claude-sonnet-4-5")
+            config: LLM 配置
+
+        Returns:
+            OpenAIAdapter (通过统一入口) 或 fallback 到直连 adapter
+        """
+        from uteki.common.config import settings
+
+        # 优先使用统一入口
+        api_key = getattr(settings, "aihubmix_api_key", None)
+        base_url = getattr(settings, "aihubmix_base_url", None) or "https://aihubmix.com/v1"
+
+        if api_key:
+            # Map legacy/direct model names to AIHubMix-compatible names
+            resolved_model = LLMAdapterFactory._resolve_model_name(model)
+            return OpenAIAdapter(api_key, resolved_model, config, base_url=base_url)
+
+        # Fallback: 根据模型名推断 provider 并直连
+        provider, fallback_key, fallback_url = LLMAdapterFactory._infer_provider(model)
+        if fallback_key:
+            return LLMAdapterFactory.create_adapter(
+                provider=provider, api_key=fallback_key,
+                model=model, config=config, base_url=fallback_url,
+            )
+
+        raise ValueError(
+            f"No API key available for model '{model}'. "
+            f"Set AIHUBMIX_API_KEY for unified access, or configure the provider-specific key."
+        )
+
+    # Model name mapping: Admin DB / legacy names → AIHubMix-compatible names
+    _MODEL_NAME_MAP: dict[str, str] = {
+        # Gemini: "thinking" suffix is not a separate model on AIHubMix
+        "gemini-2.5-pro-thinking": "gemini-2.5-pro",
+        "gemini-2.0-flash-exp": "gemini-2.0-flash",
+        # GPT: upgrade legacy model names
+        "gpt-4o": "gpt-4.1",
+        "gpt-4o-mini": "gpt-4.1-mini",
+        "gpt-4-turbo": "gpt-4.1",
+        # Qwen: upgrade to latest
+        "qwen-plus": "qwen3.5-plus",
+    }
+
+    @staticmethod
+    def _resolve_model_name(model: str) -> str:
+        """Map legacy/direct model names to AIHubMix-compatible names."""
+        return LLMAdapterFactory._MODEL_NAME_MAP.get(model, model)
+
+    @staticmethod
+    def _infer_provider(model: str) -> tuple:
+        """从模型名推断 provider + 获取对应的 API key (fallback 用)."""
+        from uteki.common.config import settings
+
+        _MODEL_PROVIDER_RULES = [
+            ("claude",    LLMProvider.ANTHROPIC, "anthropic_api_key", None),
+            ("gpt-",      LLMProvider.OPENAI,    "openai_api_key",    None),
+            ("o1",        LLMProvider.OPENAI,    "openai_api_key",    None),
+            ("o3",        LLMProvider.OPENAI,    "openai_api_key",    None),
+            ("o4",        LLMProvider.OPENAI,    "openai_api_key",    None),
+            ("deepseek",  LLMProvider.DEEPSEEK,  "deepseek_api_key",  None),
+            ("qwen",      LLMProvider.QWEN,      "dashscope_api_key", None),
+            ("gemini",    LLMProvider.GOOGLE,     "google_api_key",    "google_api_base_url"),
+            ("minimax",   LLMProvider.MINIMAX,    "minimax_api_key",   None),
+            ("doubao",    LLMProvider.DOUBAO,     "doubao_api_key",    None),
+            ("abab",      LLMProvider.MINIMAX,    "minimax_api_key",   None),
+        ]
+
+        model_lower = model.lower()
+        for prefix, provider, key_attr, url_attr in _MODEL_PROVIDER_RULES:
+            if prefix in model_lower:
+                api_key = getattr(settings, key_attr, None)
+                base_url = getattr(settings, url_attr, None) if url_attr else None
+                if api_key:
+                    return provider, api_key, base_url
+
+        return LLMProvider.OPENAI, None, None
+
+    @staticmethod
     def create_adapter(
         provider: LLMProvider,
         api_key: str,
@@ -450,7 +542,7 @@ class LLMAdapterFactory:
         base_url: Optional[str] = None,
     ) -> BaseLLMAdapter:
         """
-        创建 LLM Adapter
+        直连创建 LLM Adapter (legacy — 新代码请用 create_unified)
 
         Args:
             provider: LLM 提供商
@@ -463,7 +555,7 @@ class LLMAdapterFactory:
             相应的 Adapter 实例
         """
         if provider in [LLMProvider.OPENAI]:
-            return OpenAIAdapter(api_key, model, config)
+            return OpenAIAdapter(api_key, model, config, base_url=base_url)
         elif provider == LLMProvider.ANTHROPIC:
             return AnthropicAdapter(api_key, model, config)
         elif provider == LLMProvider.DEEPSEEK:

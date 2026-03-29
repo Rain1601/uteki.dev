@@ -19,7 +19,7 @@ from uuid import uuid4
 from uteki.common.config import settings
 from uteki.common.database import SupabaseRepository
 from uteki.domains.agent.llm_adapter import (
-    LLMAdapterFactory, LLMConfig, LLMMessage, LLMProvider,
+    LLMAdapterFactory, LLMConfig, LLMMessage,
 )
 from uteki.domains.index.services.agent_skills import (
     AgentSkillRunner, ToolExecutor,
@@ -37,15 +37,6 @@ logger = logging.getLogger(__name__)
 MODEL_TIMEOUT = 90  # seconds per single-shot LLM call
 BENCHMARK_SYMBOLS = ["VOO", "QQQ"]
 
-PROVIDER_MAP = {
-    "anthropic": LLMProvider.ANTHROPIC,
-    "openai": LLMProvider.OPENAI,
-    "deepseek": LLMProvider.DEEPSEEK,
-    "google": LLMProvider.GOOGLE,
-    "qwen": LLMProvider.QWEN,
-    "minimax": LLMProvider.MINIMAX,
-    "doubao": LLMProvider.DOUBAO,
-}
 
 # ── Action mapping: Chinese → English ──
 ACTION_MAP = {
@@ -831,24 +822,11 @@ class LLMBacktestService:
         user_prompt: str,
     ) -> str:
         """Single-shot LLM call as fallback when pipeline fails."""
-        provider_name = model_config["provider"]
         model_name = model_config["model"]
-        api_key = model_config["api_key"]
 
-        provider = PROVIDER_MAP.get(provider_name)
-        if not provider:
-            raise ValueError(f"Unknown provider: {provider_name}")
-
-        base_url = model_config.get("base_url") or (
-            settings.google_api_base_url if provider_name == "google" else None
-        )
-
-        adapter = LLMAdapterFactory.create_adapter(
-            provider=provider,
-            api_key=api_key,
+        adapter = LLMAdapterFactory.create_unified(
             model=model_name,
             config=LLMConfig(temperature=0, max_tokens=4096),
-            base_url=base_url,
         )
 
         messages = [

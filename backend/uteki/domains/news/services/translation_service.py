@@ -6,7 +6,7 @@ import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from uteki.domains.agent.llm_adapter import LLMAdapterFactory, LLMProvider, LLMConfig
+from uteki.domains.agent.llm_adapter import LLMAdapterFactory, LLMConfig
 from uteki.domains.news.services.sync_service import get_news_repo, backup_to_sqlite
 
 logger = logging.getLogger(__name__)
@@ -58,16 +58,6 @@ TRANSLATION_ONLY_SYSTEM_PROMPT = """你是一个专业的英文到中文翻译�
 class TranslationService:
     """新闻翻译与自动标签服务"""
 
-    _PROVIDER_MAP = {
-        "deepseek": LLMProvider.DEEPSEEK,
-        "qwen": LLMProvider.QWEN,
-        "anthropic": LLMProvider.ANTHROPIC,
-        "openai": LLMProvider.OPENAI,
-        "google": LLMProvider.GOOGLE,
-        "minimax": LLMProvider.MINIMAX,
-        "doubao": LLMProvider.DOUBAO,
-    }
-
     def __init__(self, provider: str = "deepseek"):
         self.provider = provider.lower()
         self._llm_adapter = None
@@ -86,11 +76,9 @@ class TranslationService:
 
         if self._db_model:
             self.model = self._db_model["model"]
-            self.llm_provider = self._PROVIDER_MAP.get(self.provider)
             logger.info(f"翻译服务初始化: provider={self.provider}, model={self.model}")
         else:
             self.model = None
-            self.llm_provider = None
             logger.warning("翻译服务初始化: 未找到任何 LLM 配置")
 
     def _get_llm_adapter(self):
@@ -100,16 +88,11 @@ class TranslationService:
                 raise ValueError(
                     "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
                 )
-            if not self.llm_provider:
-                raise ValueError(f"不支持的 LLM provider: {self.provider}")
 
             config = LLMConfig(temperature=0.3, max_tokens=4096)
-            self._llm_adapter = LLMAdapterFactory.create_adapter(
-                provider=self.llm_provider,
-                api_key=self._db_model["api_key"],
+            self._llm_adapter = LLMAdapterFactory.create_unified(
                 model=self.model,
                 config=config,
-                base_url=self._db_model.get("base_url"),
             )
         return self._llm_adapter
 

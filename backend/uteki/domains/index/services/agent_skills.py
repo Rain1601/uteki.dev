@@ -461,28 +461,11 @@ class AgentSkillRunner:
                         tool_calls, latency_ms, status
         """
         from uteki.domains.agent.llm_adapter import (
-            LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage, LLMTool,
+            LLMAdapterFactory, LLMConfig, LLMMessage, LLMTool,
         )
 
         provider_name = self.model_config["provider"]
         model_name = self.model_config["model"]
-        api_key = self.model_config["api_key"]
-
-        provider_map = {
-            "anthropic": LLMProvider.ANTHROPIC,
-            "openai": LLMProvider.OPENAI,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "google": LLMProvider.GOOGLE,
-            "qwen": LLMProvider.QWEN,
-            "minimax": LLMProvider.MINIMAX,
-            "doubao": LLMProvider.DOUBAO,
-        }
-        provider = provider_map.get(provider_name)
-        if not provider:
-            raise ValueError(f"Unknown provider: {provider_name}")
-
-        from uteki.common.config import settings
-        base_url = settings.google_api_base_url if provider_name == "google" else None
 
         # Determine if this provider supports thinking mode
         _thinking_providers = {"anthropic", "deepseek", "openai"}
@@ -497,20 +480,15 @@ class AgentSkillRunner:
         _use_thinking_config = provider_name == "anthropic"
 
         # Default adapter (no thinking) — used for analysis skills
-        adapter = LLMAdapterFactory.create_adapter(
-            provider=provider,
-            api_key=api_key,
+        adapter = LLMAdapterFactory.create_unified(
             model=model_name,
             config=LLMConfig(temperature=0, max_tokens=4096),
-            base_url=base_url,
         )
 
         # Thinking adapter — used for make_decision skill (Anthropic extended thinking)
         thinking_adapter = None
         if _use_thinking_config:
-            thinking_adapter = LLMAdapterFactory.create_adapter(
-                provider=provider,
-                api_key=api_key,
+            thinking_adapter = LLMAdapterFactory.create_unified(
                 model=model_name,
                 config=LLMConfig(
                     temperature=1,  # Required by Anthropic for extended thinking
@@ -518,7 +496,6 @@ class AgentSkillRunner:
                     thinking=True,
                     thinking_budget=10000,
                 ),
-                base_url=base_url,
             )
 
         pipeline_start = time.time()

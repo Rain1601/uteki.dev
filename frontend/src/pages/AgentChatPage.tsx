@@ -7,7 +7,6 @@ import {
   TextField,
   IconButton,
   Typography,
-  Button,
   List,
   ListItem,
   ListItemButton,
@@ -50,7 +49,6 @@ interface Conversation {
   created_at: string;
 }
 
-// 模型选项接口
 interface ModelOption {
   id: string;
   name: string;
@@ -72,11 +70,11 @@ export default function AgentChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedMode, setSelectedMode] = useState('research');
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4-20250514'); // 默认选择Claude
-  const [modelSelectorHovered, setModelSelectorHovered] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4-20250514');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const textFieldRef = useRef<HTMLTextAreaElement>(null);
 
   // Deep Research state
   const [researchMode, setResearchMode] = useState(false);
@@ -87,7 +85,6 @@ export default function AgentChatPage() {
   const [researchInProgress, setResearchInProgress] = useState(false);
   const [currentSourceReading, setCurrentSourceReading] = useState('');
 
-  // 智能滚动：只有用户在底部附近时才自动滚动
   const scrollToBottom = () => {
     if (isNearBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -105,30 +102,21 @@ export default function AgentChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  // 加载会话列表和可用模型
   useEffect(() => {
     loadConversations();
     loadAvailableModels();
   }, []);
 
-  // 加载可用模型
   const loadAvailableModels = async () => {
     try {
-      console.log('🔄 Loading available models...');
       const response = await fetch(`${API_BASE}/api/agent/models/available`, { headers: getAuthHeaders(), credentials: 'include' });
-      console.log('📡 API Response status:', response.status);
       const data = await response.json();
-      console.log('📦 Models data:', data);
-      // 显示所有模型（包括未配置的）
       setModelOptions(data.models || []);
-      console.log('✅ Model options set:', data.models?.length || 0, 'models');
-      // 设置默认模型（只能选择available的）
       if (data.default_model && data.models.length > 0) {
         setSelectedModelId(data.default_model);
-        console.log('🎯 Default model selected:', data.default_model);
       }
     } catch (error) {
-      console.error('❌ Failed to load available models:', error);
+      console.error('Failed to load available models:', error);
     }
   };
 
@@ -157,14 +145,11 @@ export default function AgentChatPage() {
     setMessage('');
     setIsStreaming(true);
     setResearchInProgress(true);
-
-    // Reset research state
     setResearchThoughts([]);
     setResearchSources({});
     setResearchSourceUrls([]);
     setResearchStatus('Initializing research...');
 
-    // Create assistant message placeholder
     const assistantMessageId = (Date.now() + 1).toString();
     const currentIcon = modelOptions.find((m) => m.id === selectedModelId)?.icon;
     const assistantMessage: Message = {
@@ -173,11 +158,7 @@ export default function AgentChatPage() {
       content: '',
       timestamp: new Date(),
       modelIcon: currentIcon,
-      research_data: {
-        thoughts: [],
-        sources: {},
-        sourceUrls: [],
-      },
+      research_data: { thoughts: [], sources: {}, sourceUrls: [] },
     };
     setMessages((prev) => [...prev, assistantMessage]);
 
@@ -185,135 +166,71 @@ export default function AgentChatPage() {
       const response = await fetch(`${API_BASE}/api/agent/research/stream`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify({
-          query: userMessage.content,
-          max_sources: 20,
-          max_scrape: 10,
-        }),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ query: userMessage.content, max_sources: 20, max_scrape: 10 }),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to start research');
-      }
+      if (!response.ok) throw new Error('Failed to start research');
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error('No response body');
-      }
+      if (!reader) throw new Error('No response body');
 
       let accumulatedContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const eventData = JSON.parse(line.slice(6));
-
             switch (eventData.type) {
               case 'research_start':
                 setResearchStatus('Research started...');
                 break;
-
               case 'thought':
                 if (eventData.data.thoughts) {
                   setResearchThoughts(eventData.data.thoughts);
-                  setMessages((prev) =>
-                    prev.map((msg) =>
-                      msg.id === assistantMessageId
-                        ? {
-                            ...msg,
-                            research_data: {
-                              ...msg.research_data,
-                              thoughts: eventData.data.thoughts,
-                            },
-                          }
-                        : msg
-                    )
-                  );
+                  setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, research_data: { ...msg.research_data, thoughts: eventData.data.thoughts } } : msg));
                 }
                 break;
-
               case 'status':
                 setResearchStatus(eventData.data.message);
                 break;
-
               case 'plan_created':
                 setResearchStatus('Research plan created');
                 break;
-
               case 'sources_update':
-                setResearchStatus(
-                  `Found ${eventData.data.count} sources (${eventData.data.current_subtask}/${eventData.data.total_subtasks})`
-                );
+                setResearchStatus(`Found ${eventData.data.count} sources (${eventData.data.current_subtask}/${eventData.data.total_subtasks})`);
                 break;
-
               case 'sources_complete':
                 setResearchSources(eventData.data.sources || {});
                 setResearchSourceUrls(eventData.data.sourceUrls || []);
                 setResearchStatus('Sources collected, reading content...');
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          research_data: {
-                            ...msg.research_data,
-                            sources: eventData.data.sources,
-                            sourceUrls: eventData.data.sourceUrls,
-                          },
-                        }
-                      : msg
-                  )
-                );
+                setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, research_data: { ...msg.research_data, sources: eventData.data.sources, sourceUrls: eventData.data.sourceUrls } } : msg));
                 break;
-
-              case 'source_read':
+              case 'source_read': {
                 const urlParts = eventData.data.url.split('/');
                 const domain = urlParts[2] || eventData.data.url;
                 setCurrentSourceReading(domain);
-                setResearchStatus(
-                  `Reading: ${domain} (${eventData.data.current}/${eventData.data.total})`
-                );
+                setResearchStatus(`Reading: ${domain} (${eventData.data.current}/${eventData.data.total})`);
                 break;
-
+              }
               case 'content_chunk':
                 accumulatedContent += eventData.data.content;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? { ...msg, content: accumulatedContent }
-                      : msg
-                  )
-                );
+                setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: accumulatedContent } : msg));
                 break;
-
               case 'research_complete':
                 setResearchInProgress(false);
                 setResearchStatus('');
                 setCurrentSourceReading('');
                 setIsStreaming(false);
                 break;
-
               case 'error':
-                console.error('Research error:', eventData.data.message);
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? { ...msg, content: `Error: ${eventData.data.message}` }
-                      : msg
-                  )
-                );
+                setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: `Error: ${eventData.data.message}` } : msg));
                 setResearchInProgress(false);
                 setIsStreaming(false);
                 break;
@@ -323,13 +240,7 @@ export default function AgentChatPage() {
       }
     } catch (error) {
       console.error('Research error:', error);
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, content: 'Sorry, an error occurred during research.' }
-            : msg
-        )
-      );
+      setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: 'Sorry, an error occurred during research.' } : msg));
       setResearchInProgress(false);
       setIsStreaming(false);
     }
@@ -338,11 +249,7 @@ export default function AgentChatPage() {
   // 发送消息（SSE流式）
   const handleSendMessage = async () => {
     if (!message.trim() || isStreaming) return;
-
-    // Use Deep Research if research mode is enabled
-    if (researchMode) {
-      return handleDeepResearchSend();
-    }
+    if (researchMode) return handleDeepResearchSend();
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -355,7 +262,6 @@ export default function AgentChatPage() {
     setMessage('');
     setIsStreaming(true);
 
-    // 创建助手消息占位符
     const assistantMessageId = (Date.now() + 1).toString();
     const currentIcon = modelOptions.find((m) => m.id === selectedModelId)?.icon;
     const assistantMessage: Message = {
@@ -371,97 +277,64 @@ export default function AgentChatPage() {
       const response = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           conversation_id: currentConversationId,
           message: userMessage.content,
           mode: selectedMode,
           stream: true,
-          model_id: selectedModelId, // 传递用户选择的模型
+          model_id: selectedModelId,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to send message');
-      }
+      if (!response.ok) throw new Error('Failed to send message');
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error('No response body');
-      }
+      if (!reader) throw new Error('No response body');
 
       let accumulatedContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = JSON.parse(line.slice(6));
-
-            // 更新会话ID
             if (data.conversation_id && !currentConversationId) {
               setCurrentConversationId(data.conversation_id);
             }
-
-            // 累积内容
             if (!data.done && data.chunk) {
               accumulatedContent += data.chunk;
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? { ...msg, content: accumulatedContent }
-                    : msg
-                )
-              );
+              setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: accumulatedContent } : msg));
             }
-
-            // 完成
             if (data.done) {
               setIsStreaming(false);
-              loadConversations(); // 刷新会话列表
+              loadConversations();
             }
           }
         }
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, content: '抱歉，发送消息时出现错误。' }
-            : msg
-        )
-      );
+      setMessages((prev) => prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: '抱歉，发送消息时出现错误。' } : msg));
       setIsStreaming(false);
     }
   };
 
-  // 加载会话历史
   const loadConversation = async (conversationId: string) => {
     try {
-      const response = await fetch(
-        `/api/agent/conversations/${conversationId}`,
-        { headers: getAuthHeaders(), credentials: 'include' }
-      );
+      const response = await fetch(`/api/agent/conversations/${conversationId}`, { headers: getAuthHeaders(), credentials: 'include' });
       const data = await response.json();
-
       const loadedMessages: Message[] = data.messages.map((msg: any) => ({
         id: msg.id,
         role: msg.role,
         content: msg.content,
         timestamp: new Date(msg.created_at),
       }));
-
       setMessages(loadedMessages);
       setCurrentConversationId(conversationId);
       setHistoryDrawerOpen(false);
@@ -470,13 +343,11 @@ export default function AgentChatPage() {
     }
   };
 
-  // 新建对话
   const handleNewConversation = () => {
     setMessages([]);
     setCurrentConversationId(null);
   };
 
-  // 处理回车发送
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -484,8 +355,204 @@ export default function AgentChatPage() {
     }
   };
 
-  // 判断是否为空白状态
   const isEmpty = messages.length === 0;
+  const compact = isMobile || isSmallScreen;
+  const selectedModel = modelOptions.find((m) => m.id === selectedModelId);
+
+  // ── Shared input composer (used in both empty + chat states) ──
+  const renderComposer = () => (
+    <Box
+      sx={{
+        width: '100%',
+        maxWidth: 800,
+        mx: 'auto',
+        px: compact ? 1.5 : 0,
+      }}
+    >
+      {/* Unified input card */}
+      <Box
+        sx={{
+          position: 'relative',
+          bgcolor: theme.background.secondary,
+          border: `1px solid ${theme.border.default}`,
+          borderRadius: '20px',
+          overflow: 'hidden',
+          transition: 'border-color 0.2s, box-shadow 0.2s',
+          '&:focus-within': {
+            borderColor: theme.border.active,
+            boxShadow: `0 0 0 1px ${theme.border.active}`,
+          },
+        }}
+      >
+        {/* Text area */}
+        <TextField
+          inputRef={textFieldRef}
+          fullWidth
+          multiline
+          maxRows={6}
+          minRows={1}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyPress={handleKeyPress}
+          placeholder={isEmpty ? 'Ask anything...' : 'Reply...'}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              bgcolor: 'transparent',
+              fontSize: '0.95rem',
+              color: theme.text.primary,
+              lineHeight: 1.6,
+              '& fieldset': { border: 'none' },
+              '&:hover fieldset': { border: 'none' },
+              '&.Mui-focused fieldset': { border: 'none' },
+            },
+            '& .MuiInputBase-input': {
+              py: 1.5,
+              px: 2.5,
+              color: theme.text.primary,
+              '&::placeholder': {
+                color: theme.text.muted,
+                opacity: 0.5,
+              },
+            },
+          }}
+        />
+
+        {/* Bottom toolbar inside the card */}
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            px: 1.5,
+            pb: 1,
+            pt: 0,
+          }}
+        >
+          {/* Left: Research toggle */}
+          <Box
+            onClick={() => setResearchMode(!researchMode)}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              px: 1.5,
+              py: 0.5,
+              borderRadius: '10px',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 500,
+              color: researchMode ? theme.brand.primary : theme.text.muted,
+              bgcolor: researchMode ? `${theme.brand.primary}14` : 'transparent',
+              transition: 'all 0.2s',
+              userSelect: 'none',
+              '&:hover': {
+                bgcolor: researchMode ? `${theme.brand.primary}1f` : theme.background.hover,
+                color: researchMode ? theme.brand.primary : theme.text.secondary,
+              },
+            }}
+          >
+            <SearchIcon size={14} />
+            <span>Research</span>
+          </Box>
+
+          {/* Right: Model selector + Send */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {/* Model icons */}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.25,
+              }}
+            >
+              {modelOptions.map((model) => (
+                <Tooltip key={model.id} title={model.available ? model.name : `${model.name} (未配置)`} placement="top">
+                  <Box
+                    onClick={() => model.available && setSelectedModelId(model.id)}
+                    sx={{
+                      width: 30,
+                      height: 30,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: model.available ? 'pointer' : 'default',
+                      borderRadius: '8px',
+                      bgcolor: selectedModelId === model.id ? `${theme.brand.primary}18` : 'transparent',
+                      opacity: model.available ? (selectedModelId === model.id ? 1 : 0.5) : 0.2,
+                      transition: 'all 0.15s',
+                      '&:hover': {
+                        opacity: model.available ? 1 : 0.2,
+                        bgcolor: model.available ? theme.background.hover : 'transparent',
+                      },
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={model.icon}
+                      alt={model.provider}
+                      sx={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: '4px',
+                        objectFit: 'contain',
+                        filter: !model.available
+                          ? 'grayscale(100%)'
+                          : model.provider === 'OpenAI' && isDark
+                          ? 'invert(1)'
+                          : 'none',
+                      }}
+                      onError={(e: any) => { e.target.style.display = 'none'; }}
+                    />
+                  </Box>
+                </Tooltip>
+              ))}
+            </Box>
+
+            {/* Divider */}
+            <Box sx={{ width: '1px', height: 20, bgcolor: theme.border.subtle, mx: 0.5 }} />
+
+            {/* Send button */}
+            <IconButton
+              onClick={handleSendMessage}
+              disabled={!message.trim() || isStreaming}
+              sx={{
+                width: 32,
+                height: 32,
+                borderRadius: '10px',
+                bgcolor: message.trim() && !isStreaming ? theme.brand.primary : 'transparent',
+                color: message.trim() && !isStreaming ? '#fff' : theme.text.disabled,
+                transition: 'all 0.2s',
+                '&:hover': {
+                  bgcolor: message.trim() && !isStreaming ? theme.brand.hover : 'transparent',
+                },
+                '&.Mui-disabled': {
+                  color: theme.text.disabled,
+                },
+              }}
+            >
+              <SendIcon size={16} />
+            </IconButton>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* Subtle hint below */}
+      {isEmpty && (
+        <Typography
+          sx={{
+            textAlign: 'center',
+            mt: 1.5,
+            fontSize: '0.72rem',
+            color: theme.text.muted,
+            opacity: 0.4,
+            letterSpacing: '0.02em',
+          }}
+        >
+          {selectedModel?.name || 'AI'} · Shift+Enter for new line
+        </Typography>
+      )}
+    </Box>
+  );
 
   return (
     <Box
@@ -500,572 +567,188 @@ export default function AgentChatPage() {
         overflow: 'hidden',
       }}
     >
-      {/* 右上角固定按钮 */}
-      <Box
-        sx={{
-          position: 'fixed',
-          top: isMobile || isSmallScreen ? 8 : 16,
-          right: isMobile || isSmallScreen ? 8 : 16,
-          display: 'flex',
-          gap: isMobile || isSmallScreen ? 0.5 : 1.5,
-          zIndex: 1000,
-        }}
-      >
-        <IconButton
-          onClick={() => setHistoryDrawerOpen(true)}
+      {/* Top bar — minimal, only when in chat */}
+      {!isEmpty && (
+        <Box
           sx={{
-            minWidth: isMobile || isSmallScreen ? 44 : 'auto',
-            minHeight: isMobile || isSmallScreen ? 44 : 'auto',
-            padding: isMobile || isSmallScreen ? '10px' : '12px 20px',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-            borderRadius: isMobile || isSmallScreen ? '50%' : '12px',
-            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-            backdropFilter: 'blur(12px)',
-            border: `1px solid ${theme.border.subtle}`,
-            backgroundColor: theme.background.secondary,
-            color: theme.text.muted,
-            '&:hover': {
-              transform: 'translateY(-1px)',
-              backgroundColor: theme.background.tertiary,
-              borderColor: theme.border.default,
-              color: theme.text.primary,
-              boxShadow: theme.effects.shadow.md,
-            },
-            '&:active': {
-              transform: 'translateY(0)',
-            },
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            px: compact ? 1.5 : 3,
+            py: 1,
+            zIndex: 10,
+            pointerEvents: 'none',
           }}
         >
-          <HistoryIcon size={20} />
-          {!(isMobile || isSmallScreen) && (
-            <Box
-              component="span"
+          <Box sx={{ display: 'flex', gap: 0.75, pointerEvents: 'auto' }}>
+            <IconButton
+              onClick={() => setHistoryDrawerOpen(true)}
+              size="small"
               sx={{
-                ml: 1,
-                '@media (max-width: 1400px)': {
-                  display: 'none',
-                },
+                color: theme.text.muted,
+                opacity: 0.6,
+                '&:hover': { opacity: 1, bgcolor: theme.background.secondary },
               }}
             >
-              历史记录
-            </Box>
-          )}
-        </IconButton>
+              <HistoryIcon size={18} />
+            </IconButton>
+            <IconButton
+              onClick={handleNewConversation}
+              size="small"
+              sx={{
+                color: theme.text.muted,
+                opacity: 0.6,
+                '&:hover': { opacity: 1, bgcolor: theme.background.secondary },
+              }}
+            >
+              <AddIcon size={18} />
+            </IconButton>
+          </Box>
+        </Box>
+      )}
 
-        <IconButton
-          onClick={handleNewConversation}
+      {/* Main content */}
+      {isEmpty ? (
+        /* ── Empty state ── */
+        <Box
           sx={{
-            minWidth: isMobile || isSmallScreen ? 44 : 'auto',
-            minHeight: isMobile || isSmallScreen ? 44 : 'auto',
-            padding: isMobile || isSmallScreen ? '10px' : '12px 20px',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-            borderRadius: isMobile || isSmallScreen ? '50%' : '12px',
-            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-            backdropFilter: 'blur(12px)',
-            border: `1px solid ${theme.border.default}`,
-            backgroundColor: theme.background.tertiary,
-            color: theme.text.secondary,
-            '&:hover': {
-              transform: 'translateY(-1px)',
-              backgroundColor: theme.background.hover,
-              borderColor: theme.border.hover,
-              color: theme.text.primary,
-              boxShadow: theme.effects.shadow.md,
-            },
-            '&:active': {
-              transform: 'translateY(0)',
-            },
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            px: 3,
+            pb: 8,
           }}
         >
-          <AddIcon size={20} />
-          {!(isMobile || isSmallScreen) && (
-            <Box
-              component="span"
-              sx={{
-                ml: 1,
-                '@media (max-width: 1400px)': {
-                  display: 'none',
-                },
-              }}
-            >
-              新对话
-            </Box>
-          )}
-        </IconButton>
-      </Box>
-
-      {/* 中心内容区域 */}
-      <Box
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: isEmpty ? 'center' : 'flex-start',
-          overflow: 'hidden',
-          px: isMobile || isSmallScreen ? 1.5 : 3,
-          pt: isEmpty ? 0 : isMobile || isSmallScreen ? 6 : 10,
-          pb: isMobile || isSmallScreen ? 1 : 3,
-        }}
-      >
-        {isEmpty ? (
-          /* 空白状态 - 居中显示欢迎语 */
+          {/* Top buttons in empty state */}
           <Box
             sx={{
+              position: 'absolute',
+              top: compact ? 8 : 16,
+              right: compact ? 8 : 24,
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 6,
-              maxWidth: '800px',
-              width: '100%',
+              gap: 0.75,
             }}
           >
-            {/* 标题 */}
-            <Typography
+            <IconButton
+              onClick={() => setHistoryDrawerOpen(true)}
+              size="small"
               sx={{
-                fontSize: isMobile || isSmallScreen ? '1.5rem' : '2.2rem',
-                fontWeight: 400,
-                textAlign: 'center',
-                color: theme.text.primary,
-                letterSpacing: '0.02em',
-                px: isMobile || isSmallScreen ? 2 : 0,
-                fontFamily: 'Times New Roman, serif', // 匹配原项目字体
+                color: theme.text.muted,
+                opacity: 0.5,
+                '&:hover': { opacity: 1, bgcolor: theme.background.secondary },
               }}
             >
-              What do you want to know today?
-            </Typography>
-
-            {/* 输入框 */}
-            <Box sx={{ width: '100%' }}>
-              <TextField
-                fullWidth
-                multiline
-                maxRows={4}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder={`Message ${modelOptions.find(m => m.id === selectedModelId)?.name || 'AI'}...`}
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    bgcolor: theme.background.secondary,
-                    borderRadius: '16px',
-                    fontSize: '1rem',
-                    color: theme.text.primary,
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    '& fieldset': {
-                      borderColor: theme.border.default,
-                      borderWidth: '1px',
-                    },
-                    '&:hover': {
-                      bgcolor: theme.background.tertiary,
-                    },
-                    '&:hover fieldset': {
-                      borderColor: theme.border.hover,
-                    },
-                    '&.Mui-focused': {
-                      bgcolor: theme.background.hover,
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: theme.border.active,
-                      borderWidth: '1px',
-                    },
-                  },
-                  '& .MuiInputBase-input': {
-                    py: 2.5,
-                    px: 3,
-                    color: theme.text.primary,
-                    '&::placeholder': {
-                      color: theme.text.muted,
-                      opacity: 0.6,
-                    },
-                  },
-                }}
-                InputProps={{
-                  endAdornment: (
-                    <IconButton
-                      onClick={handleSendMessage}
-                      disabled={!message.trim() || isStreaming}
-                      sx={{
-                        color: message.trim() && !isStreaming ? theme.brand.primary : theme.text.disabled,
-                        '&:hover': {
-                          bgcolor: 'rgba(100, 149, 237, 0.1)',
-                        },
-                      }}
-                    >
-                      <SendIcon size={20} />
-                    </IconButton>
-                  ),
-                }}
-              />
-
-              {/* Bottom Controls - Research & Model Selector */}
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  mt: 3,
-                  gap: 2,
-                }}
-              >
-                {/* Research Mode Button */}
-                <Button
-                  onClick={() => setResearchMode(!researchMode)}
-                  sx={{
-                    padding: '12px 20px',
-                    backgroundColor: researchMode
-                      ? theme.button.interactive.bg
-                      : theme.background.secondary,
-                    border: researchMode
-                      ? `1px solid ${theme.brand.primary}`
-                      : `1px solid ${theme.border.subtle}`,
-                    borderRadius: '24px',
-                    color: researchMode ? theme.brand.muted : theme.text.muted,
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    letterSpacing: '0.3px',
-                    textTransform: 'none',
-                    boxShadow: researchMode
-                      ? `0 0 15px ${theme.brand.muted}26`
-                      : 'none',
-                    '&:hover': {
-                      backgroundColor: researchMode
-                        ? theme.button.interactive.hover
-                        : theme.background.tertiary,
-                      borderColor: researchMode ? theme.brand.hover : theme.border.default,
-                      color: researchMode ? theme.brand.mutedDark : theme.text.secondary,
-                    },
-                  }}
-                >
-                  <SearchIcon size={16} />
-                  <span>Research</span>
-                </Button>
-
-                {/* Model Selector - Horizontal Icons */}
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    padding: '4px 8px',
-                    backgroundColor: theme.background.secondary,
-                    borderRadius: '12px',
-                    border: `1px solid ${theme.border.subtle}`,
-                  }}
-                >
-                  {modelOptions.map((model) => (
-                    <Tooltip
-                      key={model.id}
-                      title={model.available ? model.name : `${model.name} (未配置)`}
-                      placement="top"
-                    >
-                      <Box
-                        onClick={() => {
-                          if (model.available) {
-                            setSelectedModelId(model.id);
-                          }
-                        }}
-                        sx={{
-                          position: 'relative',
-                          width: '40px',
-                          height: '40px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: model.available ? 'pointer' : 'not-allowed',
-                          borderRadius: '8px',
-                          border: '2px solid transparent',
-                          backgroundColor:
-                            selectedModelId === model.id
-                              ? 'rgba(144, 202, 249, 0.15)'
-                              : 'transparent',
-                          transition: 'all 0.2s ease',
-                          padding: '4px',
-                          opacity: model.available ? 1 : 0.3,
-                          '&:hover': {
-                            backgroundColor:
-                              selectedModelId === model.id
-                                ? 'rgba(144, 202, 249, 0.15)'
-                                : model.available
-                                ? theme.background.hover
-                                : 'transparent',
-                          },
-                        }}
-                      >
-                        <Box
-                          component="img"
-                          src={model.icon}
-                          alt={model.provider}
-                          sx={{
-                            width: '28px',
-                            height: '28px',
-                            borderRadius: '6px',
-                            objectFit: 'contain',
-                            filter: !model.available
-                              ? 'grayscale(100%)'
-                              : model.provider === 'OpenAI' && isDark
-                              ? 'invert(1)'
-                              : 'none',
-                          }}
-                          onError={(e: any) => {
-                            e.target.style.display = 'none';
-                          }}
-                        />
-                      </Box>
-                    </Tooltip>
-                  ))}
-                </Box>
-              </Box>
-            </Box>
+              <HistoryIcon size={18} />
+            </IconButton>
           </Box>
-        ) : (
-          /* 对话状态 - 消息列表 */
+
+          {/* Welcome */}
+          <Typography
+            sx={{
+              fontSize: compact ? '1.6rem' : '2rem',
+              fontWeight: 300,
+              textAlign: 'center',
+              color: theme.text.secondary,
+              mb: 5,
+              letterSpacing: '-0.01em',
+            }}
+          >
+            What can I help with?
+          </Typography>
+
+          {renderComposer()}
+        </Box>
+      ) : (
+        /* ── Chat state ── */
+        <>
+          {/* Messages */}
           <Box
             ref={scrollContainerRef}
             onScroll={handleScroll}
             sx={{
               flex: 1,
-              width: '100%',
-              maxWidth: isMobile || isSmallScreen ? '100%' : '1000px',
+              minHeight: 0,
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              gap: isMobile || isSmallScreen ? 2 : 3,
-              px: isMobile || isSmallScreen ? 0 : 0,
-              // 移动端底部留出空间给固定的输入框
-              pb: isMobile || isSmallScreen ? 16 : 0,
-              '&::-webkit-scrollbar': { width: 6 },
+              gap: compact ? 1.5 : 2,
+              px: compact ? 0 : 3,
+              pt: compact ? 5 : 6,
+              pb: 2,
+              '&::-webkit-scrollbar': { width: 4 },
               '&::-webkit-scrollbar-track': { background: 'transparent' },
-              '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}50`, borderRadius: 3 },
+              '&::-webkit-scrollbar-thumb': {
+                background: theme.text.muted,
+                opacity: 0.2,
+                borderRadius: 2,
+                '&:hover': { opacity: 0.4 },
+              },
             }}
           >
-            {messages.map((msg) => {
-              // Use EnhancedMessage if message has research_data
-              if (msg.research_data) {
-                return <EnhancedMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
-              }
-              return <ChatMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
-            })}
+            <Box sx={{ maxWidth: 800, width: '100%', mx: 'auto', display: 'flex', flexDirection: 'column', gap: compact ? 1.5 : 2 }}>
+              {messages.map((msg) => {
+                if (msg.research_data) {
+                  return <EnhancedMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
+                }
+                return <ChatMessage key={msg.id} message={msg} modelIcon={msg.modelIcon} />;
+              })}
 
-            {/* Research Progress Cards */}
-            {researchInProgress && (
-              <>
-                {researchStatus && (
-                  <ResearchStatusCard
-                    status={researchStatus}
-                    sourcesCount={Object.values(researchSources).reduce(
-                      (a, b) => a + b,
-                      0
-                    )}
-                    currentSource={currentSourceReading}
-                  />
-                )}
-                <TypingIndicator />
-              </>
-            )}
+              {researchInProgress && (
+                <>
+                  {researchStatus && (
+                    <ResearchStatusCard
+                      status={researchStatus}
+                      sourcesCount={Object.values(researchSources).reduce((a, b) => a + b, 0)}
+                      currentSource={currentSourceReading}
+                    />
+                  )}
+                  <TypingIndicator />
+                </>
+              )}
 
-            {/* Regular chat streaming indicator */}
-            {isStreaming && !researchInProgress && (
-              <TypingIndicator />
-            )}
+              {isStreaming && !researchInProgress && <TypingIndicator />}
 
-            <div ref={messagesEndRef} />
-          </Box>
-        )}
-      </Box>
-
-      {/* 底部输入框（对话状态时显示） */}
-      {!isEmpty && (
-        <Box
-          sx={{
-            position: isMobile || isSmallScreen ? 'fixed' : 'relative',
-            // 键盘弹出时调整底部位置
-            bottom: isKeyboardVisible ? keyboardHeight : 0,
-            left: 0,
-            right: 0,
-            borderTop: `1px solid ${theme.border.subtle}`,
-            bgcolor: theme.background.primary,
-            p: isMobile || isSmallScreen ? 1.5 : 2,
-            zIndex: 100,
-            // 平滑过渡
-            transition: 'bottom 0.2s ease-out',
-          }}
-        >
-          <Box sx={{ maxWidth: isMobile || isSmallScreen ? '100%' : '1000px', mx: 'auto' }}>
-            {/* Bottom Controls - Research & Model Selector */}
-            <Box
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                mb: 1.5,
-                gap: 2,
-              }}
-            >
-              {/* Research Mode Button */}
-              <Button
-                onClick={() => setResearchMode(!researchMode)}
-                sx={{
-                  padding: '12px 20px',
-                  backgroundColor: researchMode
-                    ? theme.button.interactive.bg
-                    : theme.background.secondary,
-                  border: researchMode
-                    ? `1px solid ${theme.brand.primary}`
-                    : `1px solid ${theme.border.subtle}`,
-                  borderRadius: '24px',
-                  color: researchMode ? theme.brand.muted : theme.text.muted,
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  letterSpacing: '0.3px',
-                  textTransform: 'none',
-                  boxShadow: researchMode
-                    ? `0 0 15px ${theme.brand.muted}26`
-                    : 'none',
-                  '&:hover': {
-                    backgroundColor: researchMode
-                      ? theme.button.interactive.hover
-                      : theme.background.tertiary,
-                    borderColor: researchMode ? theme.brand.hover : theme.border.default,
-                    color: researchMode ? theme.brand.mutedDark : theme.text.secondary,
-                  },
-                }}
-              >
-                <SearchIcon size={16} />
-                <span>Research</span>
-              </Button>
-
-              {/* Model Selector - Horizontal Icons */}
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  padding: '4px 8px',
-                  backgroundColor: theme.background.secondary,
-                  borderRadius: '12px',
-                  border: `1px solid ${theme.border.subtle}`,
-                }}
-              >
-                {modelOptions.map((model) => (
-                  <Tooltip
-                    key={model.id}
-                    title={model.available ? model.name : `${model.name} (未配置)`}
-                    placement="top"
-                  >
-                    <Box
-                      onClick={() => {
-                        if (model.available) {
-                          setSelectedModelId(model.id);
-                        }
-                      }}
-                      sx={{
-                        position: 'relative',
-                        width: '40px',
-                        height: '40px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: model.available ? 'pointer' : 'not-allowed',
-                        borderRadius: '8px',
-                        border: '2px solid transparent',
-                        backgroundColor:
-                          selectedModelId === model.id
-                            ? 'rgba(144, 202, 249, 0.15)'
-                            : 'transparent',
-                        transition: 'all 0.2s ease',
-                        padding: '4px',
-                        opacity: model.available ? 1 : 0.3,
-                        '&:hover': {
-                          backgroundColor:
-                            selectedModelId === model.id
-                              ? 'rgba(144, 202, 249, 0.15)'
-                              : model.available
-                              ? theme.background.hover
-                              : 'transparent',
-                        },
-                      }}
-                    >
-                      <Box
-                        component="img"
-                        src={model.icon}
-                        alt={model.provider}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '6px',
-                          objectFit: 'contain',
-                          filter: !model.available
-                            ? 'grayscale(100%)'
-                            : model.provider === 'OpenAI' && isDark
-                            ? 'invert(1)'
-                            : 'none',
-                        }}
-                        onError={(e: any) => {
-                          e.target.style.display = 'none';
-                        }}
-                      />
-                    </Box>
-                  </Tooltip>
-                ))}
-              </Box>
+              <div ref={messagesEndRef} />
             </Box>
-
-            <TextField
-              fullWidth
-              multiline
-              maxRows={4}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="继续对话..."
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: theme.background.secondary,
-                  borderRadius: '8px',
-                  '& fieldset': {
-                    borderColor: theme.border.subtle,
-                  },
-                  '&:hover fieldset': {
-                    borderColor: theme.border.default,
-                  },
-                  '&.Mui-focused fieldset': {
-                    borderColor: theme.brand.primary,
-                  },
-                },
-              }}
-              InputProps={{
-                endAdornment: (
-                  <IconButton
-                    onClick={handleSendMessage}
-                    disabled={!message.trim() || isStreaming}
-                    sx={{
-                      color: message.trim() && !isStreaming ? theme.brand.primary : theme.text.disabled,
-                    }}
-                  >
-                    <SendIcon size={20} />
-                  </IconButton>
-                ),
-              }}
-            />
           </Box>
-        </Box>
+
+          {/* Bottom composer — seamless, no hard separator */}
+          <Box
+            sx={{
+              position: compact ? 'fixed' : 'relative',
+              bottom: isKeyboardVisible ? keyboardHeight : 0,
+              left: 0,
+              right: 0,
+              py: compact ? 1 : 1.5,
+              px: compact ? 1 : 3,
+              zIndex: 100,
+              bgcolor: theme.background.primary,
+              // Soft fade instead of hard border
+              '&::before': compact ? {} : {
+                content: '""',
+                position: 'absolute',
+                top: -24,
+                left: 0,
+                right: 0,
+                height: 24,
+                background: `linear-gradient(transparent, ${theme.background.primary})`,
+                pointerEvents: 'none',
+              },
+              transition: 'bottom 0.2s ease-out',
+            }}
+          >
+            {renderComposer()}
+          </Box>
+        </>
       )}
 
-      {/* 历史记录侧边栏 */}
+      {/* History drawer */}
       <SwipeableDrawer
         anchor="right"
         open={historyDrawerOpen}
@@ -1075,7 +758,7 @@ export default function AgentChatPage() {
         disableDiscovery={false}
         sx={{
           '& .MuiDrawer-paper': {
-            width: isMobile || isSmallScreen ? '85%' : 320,
+            width: compact ? '85%' : 320,
             maxWidth: 360,
             bgcolor: theme.background.secondary,
             borderLeft: `1px solid ${theme.border.subtle}`,
@@ -1095,7 +778,7 @@ export default function AgentChatPage() {
                   sx={{
                     borderRadius: 1,
                     mb: 0.5,
-                    minHeight: 48, // 增加触摸区域
+                    minHeight: 48,
                     '&.Mui-selected': {
                       bgcolor: `rgba(100, 149, 237, 0.12)`,
                       borderLeft: `3px solid ${theme.brand.primary}`,
@@ -1106,11 +789,7 @@ export default function AgentChatPage() {
                     primary={conv.title}
                     secondary={new Date(conv.created_at).toLocaleDateString()}
                     primaryTypographyProps={{
-                      sx: {
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      },
+                      sx: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
                     }}
                   />
                 </ListItemButton>

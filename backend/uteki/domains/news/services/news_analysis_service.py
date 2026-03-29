@@ -4,7 +4,7 @@ import logging
 from typing import Optional, Dict, AsyncGenerator
 from datetime import datetime
 
-from uteki.domains.agent.llm_adapter import LLMAdapterFactory, LLMProvider
+from uteki.domains.agent.llm_adapter import LLMAdapterFactory
 from uteki.domains.news.services.sync_service import get_news_repo, backup_to_sqlite
 
 logger = logging.getLogger(__name__)
@@ -117,16 +117,6 @@ class NewsAnalysisService:
         if self._llm_adapter is None:
             from uteki.domains.index.services.arena_service import load_models_from_db
 
-            provider_map = {
-                "anthropic": LLMProvider.ANTHROPIC,
-                "openai": LLMProvider.OPENAI,
-                "deepseek": LLMProvider.DEEPSEEK,
-                "google": LLMProvider.GOOGLE,
-                "qwen": LLMProvider.QWEN,
-                "minimax": LLMProvider.MINIMAX,
-                "doubao": LLMProvider.DOUBAO,
-            }
-
             db_models = load_models_from_db()
             if not db_models:
                 raise ValueError(
@@ -135,15 +125,9 @@ class NewsAnalysisService:
 
             # Prefer deepseek for news analysis (cost-effective + fast)
             m = next((m for m in db_models if m["provider"] == "deepseek"), db_models[0])
-            provider = provider_map.get(m["provider"])
-            if not provider:
-                raise ValueError(f"不支持的 LLM provider: {m['provider']}")
 
-            self._llm_adapter = LLMAdapterFactory.create_adapter(
-                provider=provider,
-                api_key=m["api_key"],
+            self._llm_adapter = LLMAdapterFactory.create_unified(
                 model=m["model"],
-                base_url=m.get("base_url"),
             )
         return self._llm_adapter
 

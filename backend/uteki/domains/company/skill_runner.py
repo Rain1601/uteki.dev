@@ -1,56 +1,60 @@
 """
-Company Investment Analysis — 7-Gate Decision Tree Pipeline
+Company Investment Analysis — 7-Gate Decision Tree Pipeline (ReAct Architecture)
 
 Architecture:
-- Gates 1-6: 自然语言分析（无 JSON 约束，质量优先）
+- Gates 1-6: ReAct loop (Think → Act → Observe → Conclude) with tool budget
 - Gate 7:    读取全部 6 份分析报告 → 投资裁决 + 全量结构化 JSON
+- Orchestrator: manages gate flow, reflection checkpoints, context accumulation
 
 Supports:
-- Tool-use loop (web_search) for gates 1-6
+- Dynamic tool use with budget constraints
+- <conclude> tag for agent-driven termination
+- Cross-gate reflection at checkpoints (Gate 3, Gate 5)
 - on_progress callback for SSE streaming
-- Progressive context accumulation between gates
+- Backward-compatible output format
 """
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from uteki.domains.agent.llm_adapter import (
     LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage,
 )
+from uteki.domains.agent.core.budget import ToolBudget
+from uteki.domains.agent.core.tool_parser import ToolCallParser, ParsedToolCall
+from uteki.domains.agent.core.context import (
+    GateResult, PipelineContext, ToolAction, Reflection,
+)
 from uteki.common.config import settings
-from .skills import COMPANY_SKILL_PIPELINE, CompanySkill
+from .skills import (
+    COMPANY_SKILL_PIPELINE, CompanySkill,
+    REFLECTION_CHECKPOINTS, GATE_TOOLS,
+)
 from .schemas import CompanyFullReport, PositionHoldingOutput
 from .output_parser import parse_skill_output
 from .financials import format_company_data_for_prompt
 
 logger = logging.getLogger(__name__)
 
-# ── Core Conclusion Extractor ─────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────
 
-_CORE_CONCLUSION_RE = re.compile(
-    r'【核心结论】[*\s]*\n(.*?)(?:\n\n|\n【|\Z)', re.DOTALL
-)
+GATE_TIMEOUT = 180          # seconds per gate (ReAct loop budget)
+GATE_TIMEOUT_GATE7 = 300    # Gate 7 reads all 6 reports + generates JSON
+REFLECTION_TIMEOUT = 60     # seconds per reflection checkpoint
+TOOL_TIMEOUT = 15           # seconds per tool execution
 
+# ReAct budget defaults per gate
+DEFAULT_BUDGET = ToolBudget(max_searches=6, max_rounds=5, max_tool_calls=10, timeout_seconds=GATE_TIMEOUT)
+GATE7_BUDGET = ToolBudget(max_searches=0, max_rounds=1, max_tool_calls=0, timeout_seconds=GATE_TIMEOUT_GATE7)
 
-def _extract_core_conclusion(raw: str) -> str | None:
-    """Extract the 【核心结论】 paragraph from a gate's raw output."""
-    m = _CORE_CONCLUSION_RE.search(raw)
-    if m:
-        text = m.group(1).strip()
-        if text:
-            return text
-    return None
+_STREAM_CHUNK_SIZE = 80     # chars before emitting gate_text SSE event
 
-SKILL_TIMEOUT = 120       # seconds per skill (including tool rounds)
-SKILL_TIMEOUT_GATE7 = 300  # Gate 7 reads all 6 reports + generates structured JSON
-MAX_TOOL_ROUNDS = 3   # max tool-use cycles per skill
-TOOL_TIMEOUT = 15     # seconds per tool execution
-
-# ── Provider Map ───────────────────────────────────────────────────────────
+# ── Provider Map ──────────────────────────────────────────────────────────
 
 _PROVIDER_MAP = {
     "anthropic": LLMProvider.ANTHROPIC,
@@ -63,13 +67,14 @@ _PROVIDER_MAP = {
 }
 
 
-# ── Tool Executor ──────────────────────────────────────────────────────────
+# ── Tool Executor ─────────────────────────────────────────────────────────
 
 class CompanyToolExecutor:
     """Executes tools available to the company analysis pipeline."""
 
-    def __init__(self):
+    def __init__(self, company_data: dict | None = None):
         self._web_search = None
+        self._company_data = company_data or {}
 
     def _get_web_search(self):
         if self._web_search is None:
@@ -79,220 +84,225 @@ class CompanyToolExecutor:
 
     async def execute(self, tool_name: str, args: dict) -> str:
         if tool_name == "web_search":
-            query = args.get("query", "")
-            if not query:
-                return "Error: empty search query"
-            try:
-                svc = self._get_web_search()
-                if not svc.available:
-                    return "Error: web search service not configured (missing API keys)"
-                results = await asyncio.wait_for(
-                    svc.search(query, max_results=5),
-                    timeout=TOOL_TIMEOUT,
-                )
-                if not results:
-                    return f"No results found for: {query}"
-                lines = []
-                for r in results:
-                    lines.append(f"- {r['title']}: {r['snippet']} ({r['url']})")
-                return "\n".join(lines)
-            except asyncio.TimeoutError:
-                return f"Error: search timeout for: {query}"
-            except Exception as e:
-                logger.warning(f"[company_tools] web_search failed: {e}")
-                return f"Error: search failed: {e}"
+            return await self._exec_web_search(args)
+        if tool_name == "compare_peers":
+            return await self._exec_compare_peers(args)
         return f"Error: unknown tool '{tool_name}'"
 
+    async def _exec_web_search(self, args: dict) -> str:
+        query = args.get("query", "")
+        if not query:
+            return "Error: empty search query"
+        try:
+            svc = self._get_web_search()
+            if not svc.available:
+                return "Error: web search service not configured (missing API keys)"
+            results = await asyncio.wait_for(
+                svc.search(query, max_results=5),
+                timeout=TOOL_TIMEOUT,
+            )
+            if not results:
+                return f"No results found for: {query}"
+            lines = []
+            for r in results:
+                lines.append(f"- {r['title']}: {r['snippet']} ({r['url']})")
+            return "\n".join(lines)
+        except asyncio.TimeoutError:
+            return f"Error: search timeout for: {query}"
+        except Exception as e:
+            logger.warning(f"[company_tools] web_search failed: {e}")
+            return f"Error: search failed: {e}"
 
-# ── Tool Call Parser ───────────────────────────────────────────────────────
+    async def _exec_compare_peers(self, args: dict) -> str:
+        """Compare the target company with industry peers on key metrics."""
+        metrics = args.get("metrics", ["roe", "gross_margin", "revenue_growth"])
+        # LLMs sometimes pass metrics as a JSON string instead of a list
+        if isinstance(metrics, str):
+            try:
+                metrics = json.loads(metrics)
+            except (json.JSONDecodeError, ValueError):
+                metrics = [m.strip().strip("'\"") for m in metrics.strip("[]").split(",") if m.strip()]
+        if not metrics:
+            return "Error: no metrics specified"
 
-def _parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
-    """Parse tool call from model output.
+        profile = self._company_data.get("profile", {})
+        symbol = profile.get("symbol", "")
+        industry = profile.get("industry", "Unknown")
 
-    Handles many formats models use:
-    - <tool_call>{"name":"...", "arguments":{...}}</tool_call>  (JSON inside XML)
-    - <tool_call><name>...</name><arguments><query>...</query></arguments></tool_call>  (full XML)
-    - <tool_call><name>...</name><query>...</query></tool_call>  (XML, no <arguments> wrapper)
-    - <tool_call><name>...</name><arguments><query>...</query></tool_call>  (unclosed <arguments>)
-    - ```tool_call\n{...}\n```  (markdown code block)
+        # Gather target company data
+        profitability = self._company_data.get("profitability", {})
+        growth = self._company_data.get("growth", {})
+        balance = self._company_data.get("balance", {})
+        derived = self._company_data.get("derived", {})
+        price_data = self._company_data.get("price_data", {})
+
+        metric_map = {
+            "roe": ("ROE", profitability.get("roe")),
+            "roa": ("ROA", profitability.get("roa")),
+            "gross_margin": ("毛利率", profitability.get("gross_margin")),
+            "operating_margin": ("营业利润率", profitability.get("operating_margin")),
+            "net_margin": ("净利率", profitability.get("profit_margin")),
+            "revenue_growth": ("营收增速", growth.get("revenue_growth_yoy")),
+            "debt_to_equity": ("资产负债率", balance.get("debt_equity")),
+            "current_ratio": ("流动比率", balance.get("current_ratio")),
+            "fcf_margin": ("FCF利润率", None),
+            "pe_ratio": ("PE", None),
+        }
+
+        # Calculate FCF margin
+        fcf = derived.get("free_cashflow")
+        # Try to get revenue from income history
+        income_history = self._company_data.get("income_history", [])
+        latest_revenue = None
+        if income_history:
+            latest = income_history[-1] if isinstance(income_history, list) else None
+            if latest and isinstance(latest, dict):
+                latest_revenue = latest.get("revenue")
+        if fcf and latest_revenue and latest_revenue > 0:
+            metric_map["fcf_margin"] = ("FCF利润率", fcf / latest_revenue)
+
+        # Build target company metrics
+        lines = [f"## {symbol} ({industry}) 关键指标"]
+        target_values = {}
+        for m in metrics:
+            label, val = metric_map.get(m, (m, None))
+            target_values[m] = val
+            if val is not None:
+                if m in ("roe", "roa", "gross_margin", "operating_margin", "net_margin",
+                         "revenue_growth", "fcf_margin"):
+                    lines.append(f"- {label}: {val:.1%}")
+                else:
+                    lines.append(f"- {label}: {val:.2f}")
+            else:
+                lines.append(f"- {label}: [数据缺失]")
+
+        # Try to fetch peer data via yfinance
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(symbol)
+            # Some tickers don't have industry peers — search by industry instead
+            peers = []
+            # Try getting recommendations/peers if available
+            try:
+                # yfinance may or may not have peer info depending on version
+                raw_peers = getattr(ticker, 'recommendations', None)
+                if hasattr(ticker, 'get_recommendations'):
+                    pass  # Not all versions support this
+            except Exception:
+                pass
+
+            # Fallback: use sector/industry to find 3-5 comparable companies
+            # We'll use web search as the primary peer discovery method
+            svc = self._get_web_search()
+            if svc.available:
+                search_results = await asyncio.wait_for(
+                    svc.search(f"{symbol} competitors peer companies {industry}", max_results=3),
+                    timeout=TOOL_TIMEOUT,
+                )
+                if search_results:
+                    lines.append(f"\n## 行业竞争对手参考")
+                    for r in search_results:
+                        lines.append(f"- {r['title']}: {r['snippet']}")
+
+        except Exception as e:
+            logger.warning(f"[compare_peers] peer lookup failed: {e}")
+            lines.append(f"\n(同行对比数据获取失败: {e})")
+
+        return "\n".join(lines)
+
+
+# ── Gate Executor (ReAct Loop) ────────────────────────────────────────────
+
+class GateExecutor:
+    """Executes a single gate using the ReAct pattern.
+
+    Think → Act → Observe → (repeat or Conclude)
     """
-    # Find <tool_call>...</tool_call> block
-    m = re.search(r'<tool_call>(.*?)</tool_call>', text, re.DOTALL)
-    if m:
-        inner = m.group(1).strip()
 
-        # Try JSON body first
-        try:
-            return json.loads(inner)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # XML elements — extract <name> and all other elements as arguments
-        name_m = re.search(r'<name>(.*?)</name>', inner)
-        if name_m:
-            name = name_m.group(1).strip()
-            args: Dict[str, Any] = {}
-            # Check for JSON inside <arguments>
-            args_json_m = re.search(r'<arguments>\s*(\{.*?\})\s*', inner, re.DOTALL)
-            if args_json_m:
-                try:
-                    args = json.loads(args_json_m.group(1))
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            # Fallback: find XML value elements inside <arguments> or entire block
-            if not args:
-                # If <arguments> wrapper exists, search inside it; otherwise search entire block
-                args_wrapper = re.search(r'<arguments>(.*?)(?:</arguments>|$)', inner, re.DOTALL)
-                search_text = args_wrapper.group(1) if args_wrapper else inner
-                skip_tags = {'name', 'arguments', 'tool_call'}
-                for arg_m in re.finditer(r'<(\w+)>(.*?)</\1>', search_text, re.DOTALL):
-                    tag = arg_m.group(1)
-                    if tag not in skip_tags:
-                        args[tag] = arg_m.group(2).strip()
-            if name:
-                return {"name": name, "arguments": args}
-
-    # Code block ```tool_call\n...\n```
-    m = re.search(r'```tool_call\s*\n(\{.*?\})\s*\n```', text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # JSON with tool_call key
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict) and "tool_call" in parsed:
-            return parsed["tool_call"]
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    return None
-
-
-# ── Skill Runner ───────────────────────────────────────────────────────────
-
-class CompanySkillRunner:
     def __init__(
         self,
         model_config: dict,
-        company_data: dict,
-        on_progress: Optional[Callable[[dict], Any]] = None,
+        tool_executor: CompanyToolExecutor,
+        tool_parser: ToolCallParser,
     ):
         self.model_config = model_config
-        self.company_data = company_data
-        self.on_progress = on_progress
+        self.tool_executor = tool_executor
+        self.tool_parser = tool_parser
         self._adapter = None
-        self._data_context = format_company_data_for_prompt(company_data)
-        self._tool_executor = CompanyToolExecutor()
 
-    def _emit(self, event: dict):
-        if self.on_progress:
-            try:
-                self.on_progress(event)
-            except Exception as e:
-                logger.warning(f"[company_pipeline] progress emit error: {e}")
+    def _get_adapter(self, max_tokens: int = 8192):
+        provider_name = self.model_config["provider"]
+        provider = _PROVIDER_MAP.get(provider_name)
+        if not provider:
+            raise ValueError(f"Unsupported provider: {provider_name}")
 
-    def _get_adapter(self):
-        if self._adapter is None:
-            provider_name = self.model_config["provider"]
-            provider = _PROVIDER_MAP.get(provider_name)
-            if not provider:
-                raise ValueError(f"Unsupported provider: {provider_name}")
+        base_url = self.model_config.get("base_url")
+        if provider_name == "google" and not base_url:
+            base_url = getattr(settings, "google_api_base_url", None)
 
-            base_url = self.model_config.get("base_url")
-            if provider_name == "google" and not base_url:
-                base_url = getattr(settings, "google_api_base_url", None)
-
-            self._adapter = LLMAdapterFactory.create_adapter(
-                provider=provider,
-                api_key=self.model_config["api_key"],
-                model=self.model_config["model"],
-                config=LLMConfig(temperature=0, max_tokens=8192),
-                base_url=base_url,
-            )
-        return self._adapter
-
-    def _build_user_message(self, skill: CompanySkill, accumulated: list[dict]) -> str:
-        """Build user message with data context + progressive context from prior gates.
-
-        - Gates 1-6: data context + brief summaries from prior gates
-        - Gate 7:    data context + FULL raw text from all 6 prior gates
-        """
-        parts = [
-            f"请对以下公司进行【{skill.display_name}】分析。\n",
-            "以下是这家公司的财务数据和业务信息：\n",
-            "【重要提示】标记为 [数据缺失] 的部分表示无法获取，请基于已有数据分析，"
-            "明确标注哪些结论缺乏数据支持。不要对缺失数据进行猜测或编造。\n",
-            self._data_context,
-        ]
-
-        if accumulated:
-            if skill.gate_number == 7:
-                # Gate 7: full raw text from all 6 prior analyses
-                parts.append("\n\n══════════════════════════════════════════")
-                parts.append("以下是6位分析师的完整研究报告，请仔细阅读后进行结构化：")
-                parts.append("══════════════════════════════════════════")
-                for prev in accumulated:
-                    parts.append(f"\n\n───── Gate {prev['gate']}: {prev['display_name']} ─────")
-                    parts.append(prev.get("raw", "(no output)"))
-            else:
-                # Gates 2-6: core conclusions from prior gates (fallback to raw[:800])
-                parts.append("\n\n══ 前序分析结论（请在此基础上深化而非重复）══")
-                for prev in accumulated:
-                    parts.append(f"\n【Gate {prev['gate']}: {prev['display_name']}】")
-                    conclusion = prev.get("core_conclusion") or prev.get("summary", "")
-                    parts.append(f"结论: {conclusion}")
-
-        return "\n".join(parts)
-
-    async def _execute_skill_with_tools(
-        self,
-        skill: CompanySkill,
-        messages: list[LLMMessage],
-        is_anthropic_json: bool = False,
-    ) -> tuple[str, list[dict]]:
-        """Execute a single skill, supporting tool-use loop.
-
-        is_anthropic_json: True only for Gate 7 with Anthropic provider (JSON prefill).
-
-        Returns: (final_output_text, tool_calls_record)
-        """
-        adapter = self._get_adapter()
-        has_tools = bool(skill.tools)
-        tool_calls_record: list[dict] = []
-        # Track whether the first round used Anthropic prefill
-        first_round_prefilled = (
-            is_anthropic_json
-            and len(messages) > 0
-            and messages[-1].role == "assistant"
-            and messages[-1].content == "{"
+        return LLMAdapterFactory.create_adapter(
+            provider=provider,
+            api_key=self.model_config["api_key"],
+            model=self.model_config["model"],
+            config=LLMConfig(temperature=0, max_tokens=max_tokens),
+            base_url=base_url,
         )
 
-        # Buffering threshold for gate_text streaming events
-        _STREAM_CHUNK_SIZE = 80
+    async def execute(
+        self,
+        skill: CompanySkill,
+        context: PipelineContext,
+        budget: ToolBudget,
+        on_progress: Optional[Callable[[dict], Any]] = None,
+    ) -> GateResult:
+        """Execute a gate with ReAct loop."""
+        budget.start()
+        start_time = time.time()
 
-        for round_num in range(MAX_TOOL_ROUNDS + 1):
+        if skill.gate_number == 7:
+            return await self._execute_gate7(skill, context, budget, on_progress)
+
+        return await self._execute_react(skill, context, budget, on_progress, start_time)
+
+    async def _execute_react(
+        self,
+        skill: CompanySkill,
+        context: PipelineContext,
+        budget: ToolBudget,
+        on_progress: Optional[Callable],
+        start_time: float,
+    ) -> GateResult:
+        """ReAct loop for gates 1-6."""
+        adapter = self._get_adapter()
+        user_msg = self._build_user_message(skill, context)
+        messages = [
+            LLMMessage(role="system", content=skill.system_prompt),
+            LLMMessage(role="user", content=user_msg),
+        ]
+        actions: list[ToolAction] = []
+        # Accumulate all non-tool-call text across rounds for richer output
+        all_analysis_text: list[str] = []
+
+        while budget.can_continue_round():
+            budget.record_round()
             raw = ""
-            _pending_text = ""  # buffer for gate_text emission
+            _pending_text = ""
 
             async def _collect():
                 nonlocal raw, _pending_text
                 async for chunk in adapter.chat(messages, stream=True):
                     raw += chunk
                     _pending_text += chunk
-                    if len(_pending_text) >= _STREAM_CHUNK_SIZE:
-                        self._emit({
+                    if on_progress and len(_pending_text) >= _STREAM_CHUNK_SIZE:
+                        on_progress({
                             "type": "gate_text",
                             "gate": skill.gate_number,
                             "skill": skill.skill_name,
                             "text": _pending_text,
                         })
                         _pending_text = ""
-                # Flush remaining buffer
-                if _pending_text:
-                    self._emit({
+                if on_progress and _pending_text:
+                    on_progress({
                         "type": "gate_text",
                         "gate": skill.gate_number,
                         "skill": skill.skill_name,
@@ -300,79 +310,343 @@ class CompanySkillRunner:
                     })
                     _pending_text = ""
 
-            skill_timeout = SKILL_TIMEOUT_GATE7 if skill.gate_number == 7 else SKILL_TIMEOUT
-            await asyncio.wait_for(_collect(), timeout=skill_timeout)
+            remaining = budget.timeout_seconds - budget.elapsed_seconds
+            if remaining <= 0:
+                break
+            await asyncio.wait_for(_collect(), timeout=max(remaining, 5))
 
-            # Restore prefilled "{" only on first round
-            if round_num == 0 and first_round_prefilled and raw and not raw.strip().startswith("{"):
-                raw = "{" + raw
+            # Check for conclusion
+            conclusion = self.tool_parser.parse_conclusion(raw)
+            if conclusion:
+                latency = int((time.time() - start_time) * 1000)
+                return GateResult(
+                    gate_number=skill.gate_number,
+                    skill_name=skill.skill_name,
+                    display_name=skill.display_name,
+                    raw=conclusion.text,
+                    core_conclusion=conclusion.core_conclusion,
+                    key_findings=conclusion.key_findings or [],
+                    confidence=conclusion.confidence,
+                    actions=actions,
+                    rounds=budget.rounds_used,
+                    latency_ms=latency,
+                    parse_status="text",
+                )
 
-            # If no tools or last round, return the output
-            if not has_tools or round_num >= MAX_TOOL_ROUNDS:
-                return raw, tool_calls_record
-
-            # Check for tool call in output
-            tool_call = _parse_tool_call(raw)
+            # Check for tool call
+            tool_call = self.tool_parser.parse_tool_call(raw)
             if not tool_call:
-                # No tool call found — model gave final answer
-                return raw, tool_calls_record
+                # No tool call and no conclude tag — treat as implicit conclusion
+                # Use the last round's full text as the primary output
+                all_analysis_text.append(raw)
+                break
 
-            tool_name = tool_call.get("name", "")
-            tool_args = tool_call.get("arguments", {})
-            logger.info(
-                f"[company_pipeline] {skill.skill_name} round {round_num + 1}: "
-                f"{tool_name}({tool_args})"
-            )
+            # Strip tool_call XML from text before accumulating analysis content
+            analysis_before_tool = re.sub(
+                r'<tool_call>.*?</tool_call>', '', raw, flags=re.DOTALL
+            ).strip()
+            if analysis_before_tool:
+                all_analysis_text.append(analysis_before_tool)
 
-            # Emit tool_call event
-            self._emit({
-                "type": "tool_call",
-                "gate": skill.gate_number,
-                "skill": skill.skill_name,
-                "tool_name": tool_name,
-                "tool_args": tool_args,
-                "round": round_num + 1,
-            })
+            # Validate tool is allowed for this gate
+            if tool_call.name not in GATE_TOOLS.get(skill.gate_number, []):
+                logger.warning(
+                    f"[gate_executor] gate {skill.gate_number} tried disallowed tool: {tool_call.name}"
+                )
+                break
+
+            # Check budget
+            if tool_call.name == "web_search" and not budget.can_search():
+                logger.info(f"[gate_executor] search budget exhausted for gate {skill.gate_number}")
+                messages.append(LLMMessage(role="assistant", content=raw))
+                messages.append(LLMMessage(
+                    role="user",
+                    content="工具调用预算已用完，请基于已有信息直接得出结论。请用 <conclude> 标签包裹你的最终分析。",
+                ))
+                continue
 
             # Execute tool
-            tool_result = await self._tool_executor.execute(tool_name, tool_args)
+            logger.info(
+                f"[gate_executor] gate={skill.gate_number} round={budget.rounds_used} "
+                f"{tool_call.name}({tool_call.arguments})"
+            )
+            if on_progress:
+                on_progress({
+                    "type": "tool_call",
+                    "gate": skill.gate_number,
+                    "skill": skill.skill_name,
+                    "tool_name": tool_call.name,
+                    "tool_args": tool_call.arguments,
+                    "round": budget.rounds_used,
+                })
 
-            tool_calls_record.append({
-                "skill": skill.skill_name,
-                "round": round_num + 1,
-                "tool_name": tool_name,
-                "tool_args": tool_args,
-                "tool_result": tool_result[:500],
-            })
+            tool_result = await self.tool_executor.execute(tool_call.name, tool_call.arguments)
 
-            # Remove the prefill assistant message before appending real conversation
-            if round_num == 0 and first_round_prefilled:
-                messages.pop()  # remove prefill "{"
+            if tool_call.name == "web_search":
+                budget.record_search()
+            else:
+                budget.record_tool_call()
 
-            # Append assistant output + tool result to conversation
+            actions.append(ToolAction(
+                tool_name=tool_call.name,
+                tool_args=tool_call.arguments,
+                result=tool_result[:500],
+                round_num=budget.rounds_used,
+            ))
+
+            # Append conversation turn and continue
             messages.append(LLMMessage(role="assistant", content=raw))
             messages.append(LLMMessage(
                 role="user",
-                content=f"工具 {tool_name} 的执行结果:\n{tool_result}\n\n"
-                        f"请基于此结果继续分析。如果信息充分，请直接输出最终分析结果。",
+                content=(
+                    f"工具 {tool_call.name} 的执行结果:\n{tool_result}\n\n"
+                    f"请基于此结果继续分析。如果信息充分，请用 <conclude> 标签包裹最终分析。"
+                    f"如果还需要更多信息，继续调用工具。"
+                ),
             ))
 
-            # Reset raw for next round
+        # Budget exhausted or implicit conclusion — extract what we can
+        full_raw = "\n\n".join(all_analysis_text) if all_analysis_text else ""
+
+        if not full_raw or len(full_raw) < 200:
+            # Output too short — force one more call asking for a proper conclusion
+            messages.append(LLMMessage(
+                role="user",
+                content="请基于已有数据和搜索结果，直接输出完整的最终分析结论。请用 <conclude> 标签包裹。",
+            ))
             raw = ""
+            _pending_text = ""
 
-        return raw, tool_calls_record
+            async def _force():
+                nonlocal raw, _pending_text
+                async for chunk in adapter.chat(messages, stream=True):
+                    raw += chunk
+                    _pending_text += chunk
+                    if on_progress and len(_pending_text) >= _STREAM_CHUNK_SIZE:
+                        on_progress({
+                            "type": "gate_text",
+                            "gate": skill.gate_number,
+                            "skill": skill.skill_name,
+                            "text": _pending_text,
+                        })
+                        _pending_text = ""
+                if on_progress and _pending_text:
+                    on_progress({
+                        "type": "gate_text",
+                        "gate": skill.gate_number,
+                        "skill": skill.skill_name,
+                        "text": _pending_text,
+                    })
 
-    async def run_pipeline(self) -> dict:
-        accumulated: list[dict] = []
+            remaining = budget.timeout_seconds - budget.elapsed_seconds
+            try:
+                await asyncio.wait_for(_force(), timeout=max(remaining, 10))
+            except asyncio.TimeoutError:
+                pass
+
+            conclusion = self.tool_parser.parse_conclusion(raw)
+            if conclusion:
+                full_raw = conclusion.text
+            elif raw:
+                # Append forced conclusion to accumulated text
+                full_raw = (full_raw + "\n\n" + raw).strip() if full_raw else raw
+
+        latency = int((time.time() - start_time) * 1000)
+        # Extract core conclusion from raw if not from conclude tag
+        core_conclusion = self._extract_core_conclusion(full_raw)
+        key_findings = self._extract_key_findings(full_raw)
+        confidence = self._extract_confidence(full_raw)
+
+        return GateResult(
+            gate_number=skill.gate_number,
+            skill_name=skill.skill_name,
+            display_name=skill.display_name,
+            raw=full_raw,
+            core_conclusion=core_conclusion,
+            key_findings=key_findings,
+            confidence=confidence,
+            actions=actions,
+            rounds=budget.rounds_used,
+            latency_ms=latency,
+            parse_status="text",
+        )
+
+    async def _execute_gate7(
+        self,
+        skill: CompanySkill,
+        context: PipelineContext,
+        budget: ToolBudget,
+        on_progress: Optional[Callable],
+    ) -> GateResult:
+        """Gate 7: synthesis — no ReAct, just structured JSON output."""
+        start_time = time.time()
+
+        # Gate 7 max_tokens: model-specific limits
+        model_name = self.model_config.get("model", "")
+        gate7_tokens = 8192  # safe default for most providers
+        if "claude" in model_name:
+            gate7_tokens = 16384
+        elif "gpt-4" in model_name or "gpt-5" in model_name:
+            gate7_tokens = 16384
+        adapter = self._get_adapter(max_tokens=gate7_tokens)
+
+        cross_gate_context = context.get_context_for_gate(7)
+        user_msg = self._build_gate7_user_message(skill, context, cross_gate_context)
+
+        messages = [
+            LLMMessage(role="system", content=skill.system_prompt),
+            LLMMessage(role="user", content=user_msg),
+        ]
+
+        raw = ""
+        _pending_text = ""
+
+        async def _collect():
+            nonlocal raw, _pending_text
+            async for chunk in adapter.chat(messages, stream=True):
+                raw += chunk
+                _pending_text += chunk
+                if on_progress and len(_pending_text) >= _STREAM_CHUNK_SIZE:
+                    on_progress({
+                        "type": "gate_text",
+                        "gate": 7,
+                        "skill": skill.skill_name,
+                        "text": _pending_text,
+                    })
+                    _pending_text = ""
+            if on_progress and _pending_text:
+                on_progress({
+                    "type": "gate_text",
+                    "gate": 7,
+                    "skill": skill.skill_name,
+                    "text": _pending_text,
+                })
+
+        await asyncio.wait_for(_collect(), timeout=budget.timeout_seconds)
+
+        parsed, parse_status = parse_skill_output(raw, CompanyFullReport)
+        latency = int((time.time() - start_time) * 1000)
+
+        return GateResult(
+            gate_number=7,
+            skill_name=skill.skill_name,
+            display_name=skill.display_name,
+            raw=raw,
+            core_conclusion=None,
+            rounds=1,
+            latency_ms=latency,
+            parse_status=parse_status,
+        )
+
+    def _build_user_message(self, skill: CompanySkill, context: PipelineContext) -> str:
+        """Build user message for gates 1-6."""
+        parts = [
+            f"请对以下公司进行【{skill.display_name}】分析。\n",
+            "以下是这家公司的财务数据和业务信息：\n",
+            "【重要提示】标记为 [数据缺失] 的部分表示无法获取，请基于已有数据分析，"
+            "明确标注哪些结论缺乏数据支持。不要对缺失数据进行猜测或编造。\n",
+            context.company_data_text,
+        ]
+
+        cross_gate = context.get_context_for_gate(skill.gate_number)
+        if cross_gate:
+            parts.append(f"\n\n══ 前序分析结论（请在此基础上深化而非重复）══")
+            parts.append(cross_gate)
+
+        return "\n".join(parts)
+
+    def _build_gate7_user_message(
+        self, skill: CompanySkill, context: PipelineContext, cross_gate_context: str,
+    ) -> str:
+        """Build user message for Gate 7."""
+        parts = [
+            f"请对以下公司进行【{skill.display_name}】。\n",
+            "以下是这家公司的财务数据和业务信息：\n",
+            "【重要提示】标记为 [数据缺失] 的部分表示无法获取，请基于已有数据分析，"
+            "明确标注哪些结论缺乏数据支持。不要对缺失数据进行猜测或编造。\n",
+            context.company_data_text,
+            "\n\n",
+            cross_gate_context,
+        ]
+        return "\n".join(parts)
+
+    # ── Extraction helpers ────────────────────────────────────────────────
+
+    _CORE_CONCLUSION_RE = re.compile(
+        r'【核心结论】[*\s]*\n?(.*?)(?:\n\n|\n【|\Z)', re.DOTALL
+    )
+    _KEY_FINDINGS_RE = re.compile(
+        r'【关键发现】[*\s]*\n?(.*?)(?:\n\n|\n【|\Z)', re.DOTALL
+    )
+    _CONFIDENCE_RE = re.compile(
+        r'【置信度】[*\s]*\n?\s*([\d.]+)', re.DOTALL
+    )
+
+    def _extract_core_conclusion(self, raw: str) -> Optional[str]:
+        m = self._CORE_CONCLUSION_RE.search(raw)
+        return m.group(1).strip() if m else None
+
+    def _extract_key_findings(self, raw: str) -> list[str]:
+        m = self._KEY_FINDINGS_RE.search(raw)
+        if not m:
+            return []
+        return [
+            line.lstrip("- ").strip()
+            for line in m.group(1).strip().split("\n")
+            if line.strip() and line.strip() != "-"
+        ]
+
+    def _extract_confidence(self, raw: str) -> Optional[float]:
+        m = self._CONFIDENCE_RE.search(raw)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+        return None
+
+
+# ── Pipeline Orchestrator ─────────────────────────────────────────────────
+
+class PipelineOrchestrator:
+    """Manages the 7-gate pipeline execution with reflection checkpoints.
+
+    Responsibilities:
+    1. Execute gates sequentially via GateExecutor
+    2. Manage cross-gate context (PipelineContext)
+    3. Trigger reflection at checkpoints (after Gate 3, after Gate 5)
+    4. Build backward-compatible output format
+    """
+
+    def __init__(
+        self,
+        gate_executor: GateExecutor,
+        context: PipelineContext,
+        on_progress: Optional[Callable[[dict], Any]] = None,
+        model_config: dict | None = None,
+    ):
+        self.gate_executor = gate_executor
+        self.context = context
+        self.on_progress = on_progress
+        self.model_config = model_config or {}
+
+    def _emit(self, event: dict):
+        if self.on_progress:
+            try:
+                self.on_progress(event)
+            except Exception as e:
+                logger.warning(f"[orchestrator] progress emit error: {e}")
+
+    async def run(self) -> dict:
+        """Execute the full 7-gate pipeline."""
         results: dict[str, Any] = {}
         all_tool_calls: list[dict] = []
         total_start = time.time()
 
         for skill in COMPANY_SKILL_PIPELINE:
-            skill_start = time.time()
             logger.info(
-                f"[company_pipeline] gate={skill.gate_number} skill={skill.skill_name} "
-                f"model={self.model_config['model']}"
+                f"[orchestrator] gate={skill.gate_number} skill={skill.skill_name} "
+                f"model={self.model_config.get('model', '?')}"
             )
 
             # Emit gate_start
@@ -384,131 +658,213 @@ class CompanySkillRunner:
                 "has_tools": bool(skill.tools),
             })
 
-            raw = ""
-            tool_calls: list[dict] = []
-            error_detail: Optional[str] = None
-            original_adapter = None  # track adapter swap for Gate 7
-
-            try:
-                # Gate 7: use larger max_tokens to avoid JSON truncation
-                # Provider-specific limits (some APIs cap at 8192)
-                _GATE7_MAX_TOKENS: dict[str, int] = {
-                    "deepseek": 8192,
-                    "qwen":     8192,
-                    "minimax":  8192,
-                    "doubao":   8192,
-                }
-                if skill.gate_number == 7:
-                    original_adapter = self._adapter
-                    self._adapter = None  # force re-creation
-                    provider_name = self.model_config["provider"]
-                    provider = _PROVIDER_MAP.get(provider_name)
-                    base_url = self.model_config.get("base_url")
-                    if provider_name == "google" and not base_url:
-                        base_url = getattr(settings, "google_api_base_url", None)
-                    gate7_tokens = _GATE7_MAX_TOKENS.get(provider_name, 16384)
-                    self._adapter = LLMAdapterFactory.create_adapter(
-                        provider=provider,
-                        api_key=self.model_config["api_key"],
-                        model=self.model_config["model"],
-                        config=LLMConfig(temperature=0, max_tokens=gate7_tokens),
-                        base_url=base_url,
-                    )
-
-                user_message = self._build_user_message(skill, accumulated)
-                is_anthropic = self.model_config.get("provider") == "anthropic"
-
-                messages = [
-                    LLMMessage(role="system", content=skill.system_prompt),
-                    LLMMessage(role="user", content=user_message),
-                ]
-
-                # Anthropic prefill trick: only for Gate 7 (JSON output)
-                is_anthropic_json = is_anthropic and skill.gate_number == 7
-                if is_anthropic_json:
-                    messages.append(LLMMessage(role="assistant", content="{"))
-
-                raw, tool_calls = await self._execute_skill_with_tools(
-                    skill, messages, is_anthropic_json=is_anthropic_json,
+            # Build budget for this gate
+            if skill.gate_number == 7:
+                budget = ToolBudget(
+                    max_searches=0, max_rounds=1, max_tool_calls=0,
+                    timeout_seconds=GATE_TIMEOUT_GATE7,
+                )
+            else:
+                budget = ToolBudget(
+                    max_searches=6, max_rounds=5, max_tool_calls=10,
+                    timeout_seconds=GATE_TIMEOUT,
                 )
 
-                if tool_calls:
-                    all_tool_calls.extend(tool_calls)
-
-                # Gate 7: parse comprehensive JSON with CompanyFullReport
-                if skill.gate_number == 7:
-                    parsed, parse_status = parse_skill_output(raw, CompanyFullReport)
-                else:
-                    # Gates 1-6: natural language, no JSON parsing
-                    parsed = None
-                    parse_status = "text"
-
+            # Execute gate
+            try:
+                gate_result = await self.gate_executor.execute(
+                    skill, self.context, budget, self.on_progress,
+                )
             except asyncio.TimeoutError:
-                actual_timeout = SKILL_TIMEOUT_GATE7 if skill.gate_number == 7 else SKILL_TIMEOUT
-                logger.error(f"[company_pipeline] TIMEOUT: {skill.skill_name} after {actual_timeout}s")
-                parsed, parse_status = None, "timeout"
-                error_detail = f"timeout after {actual_timeout}s"
+                timeout = GATE_TIMEOUT_GATE7 if skill.gate_number == 7 else GATE_TIMEOUT
+                logger.error(f"[orchestrator] TIMEOUT: {skill.skill_name} after {timeout}s")
+                gate_result = GateResult(
+                    gate_number=skill.gate_number,
+                    skill_name=skill.skill_name,
+                    display_name=skill.display_name,
+                    raw="",
+                    parse_status="timeout",
+                    error=f"timeout after {timeout}s",
+                )
             except Exception as e:
-                logger.error(f"[company_pipeline] ERROR: {skill.skill_name}: {e}", exc_info=True)
-                parsed, parse_status = None, "error"
-                error_detail = str(e)
-            finally:
-                # Restore original adapter after Gate 7's enlarged-token run
-                if original_adapter is not None:
-                    self._adapter = original_adapter
+                logger.error(f"[orchestrator] ERROR: {skill.skill_name}: {e}", exc_info=True)
+                gate_result = GateResult(
+                    gate_number=skill.gate_number,
+                    skill_name=skill.skill_name,
+                    display_name=skill.display_name,
+                    raw="",
+                    parse_status="error",
+                    error=str(e),
+                )
 
-            latency_ms = int((time.time() - skill_start) * 1000)
+            # Add to context
+            self.context.add_gate_result(gate_result)
+
+            # Convert to legacy result format
+            parsed = None
+            parse_status = gate_result.parse_status
+            if skill.gate_number == 7 and gate_result.raw:
+                parsed, parse_status = parse_skill_output(gate_result.raw, CompanyFullReport)
+
             parsed_dict = parsed.model_dump() if parsed else {}
-
             skill_result: dict[str, Any] = {
                 "gate": skill.gate_number,
                 "display_name": skill.display_name,
                 "parsed": parsed_dict,
-                "raw": raw,
+                "raw": gate_result.raw,
                 "parse_status": parse_status,
-                "latency_ms": latency_ms,
+                "latency_ms": gate_result.latency_ms,
             }
-            if error_detail:
-                skill_result["error"] = error_detail
-            if tool_calls:
-                skill_result["tool_calls"] = tool_calls
+            if gate_result.error:
+                skill_result["error"] = gate_result.error
+
+            # Include ReAct metadata
+            if gate_result.actions:
+                tool_records = []
+                for a in gate_result.actions:
+                    record = {
+                        "skill": skill.skill_name,
+                        "round": a.round_num,
+                        "tool_name": a.tool_name,
+                        "tool_args": a.tool_args,
+                        "tool_result": a.result,
+                    }
+                    tool_records.append(record)
+                    all_tool_calls.append(record)
+                skill_result["tool_calls"] = tool_records
+
+            if gate_result.rounds > 0:
+                skill_result["react_rounds"] = gate_result.rounds
+            if gate_result.confidence is not None:
+                skill_result["confidence"] = gate_result.confidence
+            if gate_result.key_findings:
+                skill_result["key_findings"] = gate_result.key_findings
+
             results[skill.skill_name] = skill_result
 
-            # Accumulate context for next gates
-            core_conclusion = _extract_core_conclusion(raw) if raw else None
-            summary = core_conclusion or (raw[:800] if raw else "(no output)")
-            accumulated.append({
-                "gate": skill.gate_number,
-                "skill": skill.skill_name,
-                "display_name": skill.display_name,
-                "raw": raw,                    # full text for Gate 7
-                "summary": summary,            # fallback for Gates 2-6
-                "core_conclusion": core_conclusion,  # preferred for Gates 2-6
-            })
-
-            # Emit gate_complete — include raw text for all gates
+            # Emit gate_complete
             gate_event: dict[str, Any] = {
                 "type": "gate_complete",
                 "gate": skill.gate_number,
                 "skill": skill.skill_name,
                 "display_name": skill.display_name,
                 "parse_status": parse_status,
-                "latency_ms": latency_ms,
+                "latency_ms": gate_result.latency_ms,
                 "parsed": parsed_dict,
-                "raw": raw,
+                "raw": gate_result.raw,
             }
-            if error_detail:
-                gate_event["error"] = error_detail
+            if gate_result.error:
+                gate_event["error"] = gate_result.error
             self._emit(gate_event)
 
             logger.info(
-                f"[company_pipeline] gate={skill.gate_number} {skill.skill_name} done "
-                f"status={parse_status} latency={latency_ms}ms"
+                f"[orchestrator] gate={skill.gate_number} {skill.skill_name} done "
+                f"status={parse_status} rounds={gate_result.rounds} "
+                f"tools={len(gate_result.actions)} latency={gate_result.latency_ms}ms"
             )
+
+            # ── Reflection checkpoint ─────────────────────────────────────
+            if skill.gate_number in REFLECTION_CHECKPOINTS:
+                await self._run_reflection(skill.gate_number)
 
         total_latency_ms = int((time.time() - total_start) * 1000)
 
-        # ── Post-pipeline: populate all gate results from Gate 7's structured output ──
+        # ── Post-pipeline: populate gate results from Gate 7 ──────────────
+        return self._build_output(results, all_tool_calls, total_latency_ms)
+
+    async def _run_reflection(self, after_gate: int):
+        """Run a reflection checkpoint."""
+        prompt_template = REFLECTION_CHECKPOINTS.get(after_gate)
+        if not prompt_template:
+            return
+
+        self._emit({
+            "type": "reflection_start",
+            "after_gate": after_gate,
+        })
+
+        # Build gate conclusions for the prompt
+        conclusions_parts = []
+        for gn in sorted(self.context.gate_results):
+            if gn > after_gate:
+                break
+            r = self.context.gate_results[gn]
+            conclusions_parts.append(f"Gate {gn} ({r.display_name}):")
+            conclusions_parts.append(f"  核心结论: {r.summary}")
+            if r.key_findings:
+                conclusions_parts.append(f"  关键发现: {'; '.join(r.key_findings[:5])}")
+            if r.confidence is not None:
+                conclusions_parts.append(f"  置信度: {r.confidence}/10")
+            conclusions_parts.append("")
+
+        prompt = prompt_template.format(gate_conclusions="\n".join(conclusions_parts))
+
+        try:
+            adapter = self.gate_executor._get_adapter(max_tokens=2048)
+            messages = [
+                LLMMessage(role="system", content="你是一名投资分析审计员。请以JSON格式输出。"),
+                LLMMessage(role="user", content=prompt),
+            ]
+
+            raw = ""
+            async for chunk in adapter.chat(messages, stream=False):
+                raw += chunk
+
+            # Parse reflection JSON
+            reflection = self._parse_reflection(after_gate, raw)
+            self.context.add_reflection(reflection)
+
+            self._emit({
+                "type": "reflection_complete",
+                "after_gate": after_gate,
+                "contradictions": reflection.contradictions,
+                "downstream_hints": reflection.downstream_hints,
+                "has_contradiction": reflection.has_contradiction,
+            })
+
+            if reflection.has_contradiction:
+                logger.warning(
+                    f"[orchestrator] reflection after gate {after_gate} found contradictions: "
+                    f"{reflection.contradictions}"
+                )
+
+        except Exception as e:
+            logger.warning(f"[orchestrator] reflection after gate {after_gate} failed: {e}")
+            self._emit({
+                "type": "reflection_complete",
+                "after_gate": after_gate,
+                "contradictions": [],
+                "downstream_hints": [],
+                "has_contradiction": False,
+                "error": str(e),
+            })
+
+    def _parse_reflection(self, after_gate: int, raw: str) -> Reflection:
+        """Parse reflection JSON output."""
+        try:
+            # Try to extract JSON from the response
+            json_match = re.search(r'\{[\s\S]*\}', raw)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                return Reflection(
+                    after_gate=after_gate,
+                    contradictions=data.get("contradictions", []),
+                    downstream_hints=data.get("downstream_hints", []),
+                    needs_revisit=data.get("needs_revisit"),
+                    raw=raw,
+                )
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"[orchestrator] reflection parse failed: {e}")
+
+        return Reflection(after_gate=after_gate, raw=raw)
+
+    def _build_output(
+        self,
+        results: dict[str, Any],
+        all_tool_calls: list[dict],
+        total_latency_ms: int,
+    ) -> dict:
+        """Build backward-compatible pipeline output."""
         gate7_result = results.get("final_verdict", {})
         gate7_parsed = gate7_result.get("parsed", {})
 
@@ -523,11 +879,10 @@ class CompanySkillRunner:
                 results[skill_name]["parsed"] = gate_data
                 results[skill_name]["parse_status"] = "structured"
 
-        # Extract verdict from Gate 7's position_holding section
+        # Extract verdict
         verdict_dict = gate7_parsed.get("position_holding", {})
         verdict = PositionHoldingOutput(**verdict_dict) if verdict_dict else PositionHoldingOutput()
 
-        # Also put position_holding parsed data into the final_verdict result
         if verdict_dict:
             results["final_verdict"]["parsed"] = gate7_parsed
 
@@ -544,6 +899,10 @@ class CompanySkillRunner:
             }
             if r.get("error"):
                 entry["error"] = r["error"]
+            if r.get("react_rounds"):
+                entry["react_rounds"] = r["react_rounds"]
+            if r.get("confidence") is not None:
+                entry["confidence"] = r["confidence"]
             trace.append(entry)
 
         return {
@@ -553,3 +912,41 @@ class CompanySkillRunner:
             "trace": trace,
             "tool_calls": all_tool_calls or None,
         }
+
+
+# ── Public Interface (backward-compatible) ────────────────────────────────
+
+class CompanySkillRunner:
+    """Public API — drop-in replacement for the previous CompanySkillRunner.
+
+    Usage:
+        runner = CompanySkillRunner(model_config, company_data, on_progress=emit)
+        result = await runner.run_pipeline()
+    """
+
+    def __init__(
+        self,
+        model_config: dict,
+        company_data: dict,
+        on_progress: Optional[Callable[[dict], Any]] = None,
+    ):
+        self.model_config = model_config
+        self.company_data = company_data
+        self.on_progress = on_progress
+
+    async def run_pipeline(self) -> dict:
+        data_text = format_company_data_for_prompt(self.company_data)
+        context = PipelineContext(company_data_text=data_text)
+
+        tool_executor = CompanyToolExecutor(company_data=self.company_data)
+        tool_parser = ToolCallParser()
+        gate_executor = GateExecutor(self.model_config, tool_executor, tool_parser)
+
+        orchestrator = PipelineOrchestrator(
+            gate_executor=gate_executor,
+            context=context,
+            on_progress=self.on_progress,
+            model_config=self.model_config,
+        )
+
+        return await orchestrator.run()

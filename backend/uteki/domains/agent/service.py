@@ -9,7 +9,6 @@ from uteki.domains.agent.repository import ChatConversationRepository, ChatMessa
 from uteki.domains.agent import schemas
 from uteki.domains.agent.llm_adapter import (
     LLMAdapterFactory,
-    LLMProvider,
     LLMMessage,
     LLMConfig,
     BaseLLMAdapter
@@ -155,29 +154,9 @@ class SimpleLLMService:
 
     def _get_adapter(self, config: Optional[LLMConfig] = None) -> BaseLLMAdapter:
         """创建对应的 LLM Adapter"""
-        api_key = self._get_api_key()
-
-        # 映射 provider 名称到 LLMProvider 枚举
-        provider_mapping = {
-            "openai": LLMProvider.OPENAI,
-            "anthropic": LLMProvider.ANTHROPIC,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "dashscope": LLMProvider.DASHSCOPE,
-            "qwen": LLMProvider.QWEN,
-            "minimax": LLMProvider.MINIMAX,
-            "google": LLMProvider.GOOGLE,
-            "doubao": LLMProvider.DOUBAO,
-        }
-
-        provider_enum = provider_mapping.get(self.provider)
-        if not provider_enum:
-            raise ValueError(f"Unsupported provider: {self.provider}")
-
-        return LLMAdapterFactory.create_adapter(
-            provider=provider_enum,
-            api_key=api_key,
+        return LLMAdapterFactory.create_unified(
             model=self.model,
-            config=config or LLMConfig()
+            config=config or LLMConfig(),
         )
 
     async def chat_completion(

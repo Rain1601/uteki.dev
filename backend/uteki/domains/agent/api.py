@@ -18,11 +18,7 @@ from uteki.domains.agent import schemas
 from uteki.domains.agent.service import ChatService, get_chat_service
 from uteki.domains.agent.research import ResearchRequest, DeepResearchOrchestrator
 from uteki.domains.agent.research.search_engine import SearchEngine
-from uteki.domains.agent.llm_adapter import (
-    LLMAdapterFactory,
-    LLMProvider,
-    LLMConfig,
-)
+from uteki.domains.agent.llm_adapter import LLMAdapterFactory
 from uteki.common.config import settings
 from uteki.domains.auth.deps import get_current_user_optional
 from fastapi import Depends
@@ -412,28 +408,14 @@ async def research_stream(request: ResearchRequest):
         """SSE事件生成器"""
         try:
             # Create LLM adapter from DB config
-            provider_map = {
-                "anthropic": LLMProvider.ANTHROPIC,
-                "openai": LLMProvider.OPENAI,
-                "deepseek": LLMProvider.DEEPSEEK,
-                "google": LLMProvider.GOOGLE,
-                "qwen": LLMProvider.QWEN,
-                "minimax": LLMProvider.MINIMAX,
-                "doubao": LLMProvider.DOUBAO,
-            }
-
             db_models = load_models_from_db()
             llm_adapter = None
             for m in db_models:
-                provider = provider_map.get(m["provider"])
-                if provider:
-                    llm_adapter = LLMAdapterFactory.create_adapter(
-                        provider=provider,
-                        api_key=m["api_key"],
-                        model=m["model"],
-                        base_url=m.get("base_url"),
-                    )
+                try:
+                    llm_adapter = LLMAdapterFactory.create_unified(model=m["model"])
                     break
+                except Exception:
+                    continue
 
             if not llm_adapter:
                 raise ValueError(

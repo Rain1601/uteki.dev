@@ -28,20 +28,12 @@ from .repository import CompanyAnalysisRepository
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_DEFAULT_MODELS = {
-    "anthropic": "claude-sonnet-4-20250514",
-    "openai":    "gpt-4o",
-    "deepseek":  "deepseek-chat",
-    "google":    "gemini-2.5-pro-thinking",
-    "qwen":      "qwen-plus",
-    "minimax":   "MiniMax-Text-01",
-    "doubao":    "doubao-seed-2-0-pro-260215",
-}
+_DEFAULT_MODEL = "deepseek-chat"
 
-# Hardcoded fallback order
+# Legacy fallback models (used when AIHubMix is not configured)
 _FALLBACK_MODELS = [
     {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key_attr": "anthropic_api_key"},
-    {"provider": "openai",    "model": "gpt-4o",                   "api_key_attr": "openai_api_key"},
+    {"provider": "openai",    "model": "gpt-4.1",                  "api_key_attr": "openai_api_key"},
     {"provider": "deepseek",  "model": "deepseek-chat",            "api_key_attr": "deepseek_api_key"},
     {"provider": "google",    "model": "gemini-2.5-pro-thinking",  "api_key_attr": "google_api_key", "base_url_attr": "google_api_base_url"},
     {"provider": "qwen",      "model": "qwen-plus",                "api_key_attr": "dashscope_api_key"},
@@ -49,8 +41,59 @@ _FALLBACK_MODELS = [
 
 
 async def _resolve_model(provider_override: Optional[str], model_override: Optional[str]) -> Optional[dict]:
-    """Load model config from admin or env settings."""
-    disabled_providers: set[str] = set()
+    """Resolve model config.
+
+    Priority:
+    1. AIHubMix unified (single key for all models) — Admin DB controls which models are enabled
+    2. Admin DB direct (legacy — each model has its own key)
+    3. .env fallback (legacy direct provider keys)
+    """
+    aihub_key = getattr(settings, "aihubmix_api_key", None)
+    aihub_url = getattr(settings, "aihubmix_base_url", None) or "https://aihubmix.com/v1"
+
+    # 1. AIHubMix + Admin DB as model registry (which models are enabled)
+    if aihub_key:
+        # If model explicitly specified by caller, use it directly
+        if model_override:
+            config = {
+                "provider": "openai",
+                "model": model_override,
+                "api_key": aihub_key,
+                "base_url": aihub_url,
+            }
+            logger.info(f"[company] AIHubMix unified: {config['model']}")
+            return config
+
+        # Otherwise, pick first enabled model from Admin DB
+        try:
+            from uteki.domains.admin.service import LLMProviderService
+            svc = LLMProviderService()
+            models = await svc.get_active_models_for_runtime()
+            for m in models:
+                if provider_override and m["provider"] != provider_override:
+                    continue
+                config = {
+                    "provider": "openai",
+                    "model": m["model"],
+                    "api_key": aihub_key,
+                    "base_url": aihub_url,
+                }
+                logger.info(f"[company] AIHubMix + admin registry: {config['model']}")
+                return config
+        except Exception as e:
+            logger.warning(f"[company] admin model list load failed: {e}")
+
+        # Admin DB unavailable — use default model
+        config = {
+            "provider": "openai",
+            "model": _DEFAULT_MODEL,
+            "api_key": aihub_key,
+            "base_url": aihub_url,
+        }
+        logger.info(f"[company] AIHubMix default: {config['model']}")
+        return config
+
+    # 2. Legacy: Admin DB with direct provider keys
     try:
         from uteki.domains.admin.service import LLMProviderService
         svc = LLMProviderService()
@@ -64,19 +107,13 @@ async def _resolve_model(provider_override: Optional[str], model_override: Optio
                 "api_key": m["api_key"],
                 "base_url": m.get("base_url") or None,
             }
-            logger.info(f"[company] using admin model: {config['provider']}/{config['model']}")
+            logger.info(f"[company] legacy admin direct: {config['provider']}/{config['model']}")
             return config
-
-        from uteki.domains.admin.repository import LLMProviderRepository
-        all_providers, _ = await LLMProviderRepository.list_all()
-        active_names = {m["provider"] for m in models}
-        disabled_providers = {p["provider"] for p in all_providers} - active_names
     except Exception as e:
         logger.warning(f"[company] admin model load failed: {e}")
 
+    # 3. Legacy: .env direct provider keys
     for m in _FALLBACK_MODELS:
-        if m["provider"] in disabled_providers:
-            continue
         if provider_override and m["provider"] != provider_override:
             continue
         api_key = getattr(settings, m["api_key_attr"], None)
@@ -88,7 +125,7 @@ async def _resolve_model(provider_override: Optional[str], model_override: Optio
                 "api_key": api_key,
                 "base_url": base_url,
             }
-            logger.info(f"[company] using env model: {config['provider']}/{config['model']}")
+            logger.info(f"[company] legacy env direct: {config['provider']}/{config['model']}")
             return config
 
     return None

@@ -59,7 +59,11 @@ class Settings(BaseSettings):
     binance_api_key: Optional[str] = None
     binance_api_secret: Optional[str] = None
 
-    # LLM API Keys (optional)
+    # Unified LLM API Provider (AIHubMix / OpenRouter — single key for all models)
+    aihubmix_api_key: Optional[str] = None
+    aihubmix_base_url: str = "https://aihubmix.com/v1"
+
+    # Legacy LLM API Keys (used as fallback when unified provider is unavailable)
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     dashscope_api_key: Optional[str] = None  # Qwen

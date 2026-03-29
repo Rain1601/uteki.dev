@@ -479,43 +479,22 @@ class ArenaService:
     ) -> Optional[Dict[str, Any]]:
         """Single-shot fallback (original _call_model logic)"""
         from uteki.domains.agent.llm_adapter import (
-            LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage
+            LLMAdapterFactory, LLMConfig, LLMMessage
         )
 
         provider_name = model_config["provider"]
         model_name = model_config["model"]
-        api_key = model_config["api_key"]
         full_input = f"[System Prompt]\n{system_prompt}\n\n[Decision Harness]\n{user_prompt}"
 
         repo = SupabaseRepository("model_io")
         start_time = time.time()
         try:
-            provider_map = {
-                "anthropic": LLMProvider.ANTHROPIC,
-                "openai": LLMProvider.OPENAI,
-                "deepseek": LLMProvider.DEEPSEEK,
-                "google": LLMProvider.GOOGLE,
-                "qwen": LLMProvider.QWEN,
-                "minimax": LLMProvider.MINIMAX,
-                "doubao": LLMProvider.DOUBAO,
-            }
-            provider = provider_map.get(provider_name)
-            if not provider:
-                raise ValueError(f"Unknown provider: {provider_name}")
-
-            # Resolve base_url: model_config > provider defaults
-            base_url = model_config.get("base_url") or (
-                settings.google_api_base_url if provider_name == "google" else None
-            )
             temperature = model_config.get("temperature", 0)
             max_tokens = model_config.get("max_tokens", 4096)
 
-            adapter = LLMAdapterFactory.create_adapter(
-                provider=provider,
-                api_key=api_key,
+            adapter = LLMAdapterFactory.create_unified(
                 model=model_name,
                 config=LLMConfig(temperature=temperature, max_tokens=max_tokens),
-                base_url=base_url,
             )
 
             messages = [
@@ -680,33 +659,13 @@ class ArenaService:
             return []
 
         from uteki.domains.agent.llm_adapter import (
-            LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage
-        )
-
-        provider_map = {
-            "anthropic": LLMProvider.ANTHROPIC,
-            "openai": LLMProvider.OPENAI,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "google": LLMProvider.GOOGLE,
-            "qwen": LLMProvider.QWEN,
-            "minimax": LLMProvider.MINIMAX,
-            "doubao": LLMProvider.DOUBAO,
-        }
-        provider = provider_map.get(voter_provider)
-        if not provider:
-            return []
-
-        base_url = model_base_url or (
-            settings.google_api_base_url if voter_provider == "google" else None
+            LLMAdapterFactory, LLMConfig, LLMMessage
         )
 
         try:
-            adapter = LLMAdapterFactory.create_adapter(
-                provider=provider,
-                api_key=api_key,
+            adapter = LLMAdapterFactory.create_unified(
                 model=voter_model,
                 config=LLMConfig(temperature=0, max_tokens=2048),
-                base_url=base_url,
             )
 
             messages = [

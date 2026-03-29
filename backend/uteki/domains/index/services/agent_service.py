@@ -4,9 +4,8 @@ import json
 import logging
 from typing import Optional, Dict, Any, List
 
-from uteki.common.config import settings
 from uteki.domains.agent.llm_adapter import (
-    LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage
+    LLMAdapterFactory, LLMConfig, LLMMessage
 )
 from uteki.domains.index.services.prompt_service import PromptService
 from uteki.domains.index.services.memory_service import MemoryService
@@ -120,15 +119,6 @@ class AgentService:
         """
         from uteki.domains.index.services.arena_service import load_models_from_db
 
-        provider_map = {
-            "anthropic": LLMProvider.ANTHROPIC,
-            "openai": LLMProvider.OPENAI,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "google": LLMProvider.GOOGLE,
-            "qwen": LLMProvider.QWEN,
-            "minimax": LLMProvider.MINIMAX,
-        }
-
         db_models = load_models_from_db()
         if not db_models:
             raise ValueError(
@@ -137,22 +127,13 @@ class AgentService:
 
         adapters = []
         for m in db_models:
-            provider = provider_map.get(m["provider"])
-            if not provider:
-                continue
             try:
-                base_url = m.get("base_url") or (
-                    settings.google_api_base_url if m["provider"] == "google" else None
-                )
-                adapter = LLMAdapterFactory.create_adapter(
-                    provider=provider,
-                    api_key=m["api_key"],
+                adapter = LLMAdapterFactory.create_unified(
                     model=m["model"],
                     config=LLMConfig(
                         temperature=m.get("temperature", 0.3),
                         max_tokens=m.get("max_tokens", 4096),
                     ),
-                    base_url=base_url,
                 )
                 adapters.append((f"{m['provider']}/{m['model']}", adapter))
             except Exception as e:
