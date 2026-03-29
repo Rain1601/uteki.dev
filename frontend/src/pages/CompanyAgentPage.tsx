@@ -551,6 +551,7 @@ export default function CompanyAgentPage() {
                   toolCallsCount={displayResult?.tool_calls?.length}
                   scrollToGate={scrollToGate}
                   onScrollToGateConsumed={() => setScrollToGate(null)}
+                  onActiveGateChange={(gate) => setActiveGate(gate)}
                 />
               </Box>
             </Box>

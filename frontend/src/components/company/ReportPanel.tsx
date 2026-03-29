@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography } from '@mui/material';
 import { X, FileText, Download, Maximize2, Minimize2 } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
@@ -72,7 +72,8 @@ export default function ReportPanel({
   scrollToGate,
   onScrollToGateConsumed,
   embedded = false,
-}: Props) {
+  onActiveGateChange,
+}: Props & { onActiveGateChange?: (gate: number | null) => void }) {
   const { theme } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -92,6 +93,67 @@ export default function ReportPanel({
   const companyName = companyInfo?.name || companyInfo?.symbol || '';
   const [exporting, setExporting] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+
+  // ── Client-side JSON fallback: if Gate 7 raw is JSON but parsed failed ──
+  const enhancedSkills = useMemo(() => {
+    const gate7 = skills['final_verdict'];
+    if (!gate7?.raw) return skills;
+
+    // Check if any gate already has parsed data
+    const anyParsed = GATE_ORDER.some((s) => {
+      const r = skills[s];
+      return r?.parsed && Object.keys(r.parsed).length > 0;
+    });
+    if (anyParsed) return skills;
+
+    // Try to extract JSON from Gate 7 raw text
+    try {
+      const jsonMatch = gate7.raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return skills;
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (typeof parsed !== 'object') return skills;
+
+      // Distribute parsed sections back to each gate
+      const result = { ...skills };
+      const gateSkillNames = ['business_analysis', 'fisher_qa', 'moat_assessment', 'management_assessment', 'reverse_test', 'valuation'];
+      for (const sn of gateSkillNames) {
+        if (parsed[sn] && result[sn]) {
+          result[sn] = { ...result[sn], parsed: parsed[sn], parse_status: 'structured' };
+        }
+      }
+      if (parsed.position_holding && result['final_verdict']) {
+        result['final_verdict'] = { ...result['final_verdict'], parsed: parsed, parse_status: 'structured' };
+      }
+      return result;
+    } catch {
+      return skills;
+    }
+  }, [skills]);
+
+  // ── Scroll-based gate tracking ──
+  useEffect(() => {
+    if (!onActiveGateChange || !scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+
+    const handleScroll = () => {
+      const sections = container.querySelectorAll('[id^="gate-section-"]');
+      let activeGate: number | null = null;
+      const containerTop = container.getBoundingClientRect().top;
+
+      for (const section of Array.from(sections)) {
+        const rect = section.getBoundingClientRect();
+        const relativeTop = rect.top - containerTop;
+        if (relativeTop <= 80) {
+          const gateNum = parseInt(section.id.replace('gate-section-', ''), 10);
+          if (!isNaN(gateNum)) activeGate = gateNum;
+        }
+      }
+      onActiveGateChange(activeGate);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [onActiveGateChange]);
 
   const handleExportPDF = useCallback(async () => {
     const container = scrollContainerRef.current;
@@ -304,7 +366,7 @@ export default function ReportPanel({
 
           {/* Gate Sections */}
           {GATE_ORDER.map((skillName) => {
-            const result = skills[skillName];
+            const result = enhancedSkills[skillName];
             if (!result) return null;
 
             const gateNum = result.gate ?? (GATE_ORDER.indexOf(skillName) + 1);
