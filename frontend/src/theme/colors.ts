@@ -136,28 +136,28 @@ export const darkTheme: ColorScheme = {
   mode: 'dark',
 
   background: {
-    deepest: '#0a0a0a',      // BG1 - 极深黑
-    primary: '#181c1f',      // BG2 - 主背景
-    secondary: '#1E1E1E',    // BG3 - 次背景/Paper
+    deepest: '#0b0c0f',      // BG1 - 极深（微暖）
+    primary: '#1a1c20',      // BG2 - 主背景（微暖化）
+    secondary: '#1f2124',    // BG3 - 次背景/Paper
     tertiary: '#262830',     // BG4 - 卡片背景
-    quaternary: '#2e3039',
-    hover: '#2e3039',        // BG5 - 悬浮状态
-    active: '#353843',
+    quaternary: '#2c2e36',
+    hover: '#2c2e36',        // BG5 - 悬浮状态
+    active: '#33353d',
   },
 
   border: {
-    default: '#333333',
-    hover: '#444444',
-    active: '#555555',
-    subtle: 'rgba(255, 255, 255, 0.12)',
-    divider: 'rgba(255, 255, 255, 0.06)',
+    default: 'rgba(255, 255, 255, 0.10)',    // 轻量化：从 #333 硬边改为半透明
+    hover: 'rgba(255, 255, 255, 0.16)',
+    active: 'rgba(255, 255, 255, 0.22)',
+    subtle: 'rgba(255, 255, 255, 0.06)',     // 更轻
+    divider: 'rgba(255, 255, 255, 0.04)',
   },
 
   text: {
-    primary: '#ffffff',      // TXT1 - 主文字
-    secondary: '#e5e7eb',    // TXT2 - 次要文字
+    primary: '#f0f0f2',      // TXT1 - 微暖白（不再纯白，减轻视觉压力）
+    secondary: '#d4d5da',    // TXT2 - 次要文字（微暖）
     muted: '#8b8d94',        // TXT3 - 静音文字
-    disabled: '#6b6d74',     // TXT4 - 禁用文字
+    disabled: '#5c5e66',     // TXT4 - 禁用文字（更暗，拉开层级）
   },
 
   brand: {
@@ -277,11 +277,11 @@ export const darkTheme: ColorScheme = {
       dark: 'linear-gradient(180deg, #181c1f 0%, #1E1E1E 100%)',
     },
     shadow: {
-      sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
-      md: '0 4px 6px rgba(0, 0, 0, 0.4)',
-      lg: '0 10px 15px rgba(0, 0, 0, 0.5)',
-      xl: '0 20px 25px rgba(0, 0, 0, 0.6)',
-      glow: '0 0 20px rgba(46, 229, 172, 0.4)',                         // C1 光晕
+      sm: '0 1px 3px rgba(0, 0, 0, 0.12)',
+      md: '0 4px 8px rgba(0, 0, 0, 0.16)',
+      lg: '0 8px 16px rgba(0, 0, 0, 0.20)',
+      xl: '0 16px 24px rgba(0, 0, 0, 0.24)',
+      glow: '0 0 16px rgba(100, 149, 237, 0.2)',   // 品牌蓝光晕（柔和）
     },
   },
 
@@ -304,28 +304,28 @@ export const lightTheme: ColorScheme = {
   mode: 'light',
 
   background: {
-    deepest: '#e8eaed',
-    primary: '#f5f7f9',      // 柔和的浅灰蓝 - 不刺眼的背景
-    secondary: '#eef1f5',    // 稍深的浅灰蓝 - Paper/Drawer
-    tertiary: '#e8ecf1',     // 卡片背景 - 带点灰调
-    quaternary: '#dde2e8',
-    hover: '#d4dae2',
-    active: '#c5ccd6',
+    deepest: '#eaecf0',
+    primary: '#f6f7f9',      // 微暖浅灰 - 主背景
+    secondary: '#eff1f4',    // 次背景
+    tertiary: '#e8eaee',     // 卡片背景
+    quaternary: '#dde0e6',
+    hover: '#d6d9e0',
+    active: '#cdd0d8',
   },
 
   border: {
-    default: '#d1d8e0',      // 浅蓝灰边框
-    hover: '#b8c4d3',
-    active: '#9daab8',
-    subtle: 'rgba(26, 35, 50, 0.08)',  // 带点蓝调的半透明
-    divider: 'rgba(0, 0, 0, 0.06)',
+    default: 'rgba(0, 0, 0, 0.08)',      // 轻量化边框
+    hover: 'rgba(0, 0, 0, 0.14)',
+    active: 'rgba(0, 0, 0, 0.20)',
+    subtle: 'rgba(0, 0, 0, 0.05)',
+    divider: 'rgba(0, 0, 0, 0.04)',
   },
 
   text: {
-    primary: '#1a2332',      // TXT1 - 深蓝灰色（更柔和）
-    secondary: '#5b6b7f',    // TXT2 - 中蓝灰色
-    muted: '#8591a3',        // TXT3 - 浅蓝灰色
-    disabled: '#b8c1cc',     // TXT4 - 很浅的蓝灰色
+    primary: '#1a1f2e',      // TXT1 - 深色主文字
+    secondary: '#4a5568',    // TXT2 - 中灰
+    muted: '#8592a6',        // TXT3 - 浅灰
+    disabled: '#b0b8c4',     // TXT4 - 禁用
   },
 
   brand: {
@@ -444,11 +444,11 @@ export const lightTheme: ColorScheme = {
       dark: 'linear-gradient(180deg, #f5f7f9 0%, #eef1f5 100%)',  // 柔和渐变
     },
     shadow: {
-      sm: '0 1px 3px rgba(26, 35, 50, 0.08)',      // 带蓝调的阴影
-      md: '0 4px 8px rgba(26, 35, 50, 0.10)',
-      lg: '0 10px 20px rgba(26, 35, 50, 0.12)',
-      xl: '0 20px 30px rgba(26, 35, 50, 0.15)',
-      glow: '0 0 20px rgba(46, 229, 172, 0.25)',   // 柔和的光晕
+      sm: '0 1px 3px rgba(0, 0, 0, 0.06)',
+      md: '0 4px 8px rgba(0, 0, 0, 0.08)',
+      lg: '0 8px 16px rgba(0, 0, 0, 0.10)',
+      xl: '0 16px 24px rgba(0, 0, 0, 0.12)',
+      glow: '0 0 16px rgba(100, 149, 237, 0.15)',
     },
   },
 

@@ -57,16 +57,10 @@ const darkThemeOptions: ThemeOptions = {
   },
   typography: {
     fontFamily: [
+      'Inter',
       '-apple-system',
       'BlinkMacSystemFont',
       'Segoe UI',
-      'Roboto',
-      'Oxygen',
-      'Ubuntu',
-      'Cantarell',
-      'Fira Sans',
-      'Droid Sans',
-      'Helvetica Neue',
       'sans-serif',
     ].join(','),
     fontSize: 14,
@@ -74,9 +68,15 @@ const darkThemeOptions: ThemeOptions = {
     fontWeightRegular: 400,
     fontWeightMedium: 500,
     fontWeightBold: 600,
+    h1: { letterSpacing: '-0.03em', fontWeight: 700 },
+    h2: { letterSpacing: '-0.02em', fontWeight: 700 },
+    h3: { letterSpacing: '-0.01em', fontWeight: 600 },
+    h4: { letterSpacing: '-0.01em', fontWeight: 600 },
+    body1: { lineHeight: 1.7 },
+    body2: { lineHeight: 1.6 },
   },
   shape: {
-    borderRadius: 12, // 统一圆角
+    borderRadius: 8, // 统一圆角（从12降到8，更克制）
   },
   components: {
     MuiCssBaseline: {
@@ -84,17 +84,17 @@ const darkThemeOptions: ThemeOptions = {
         body: {
           scrollbarColor: `${darkColors.border.default} ${darkColors.background.secondary}`,
           '&::-webkit-scrollbar': {
-            width: '8px',
-            height: '8px',
+            width: '6px',
+            height: '6px',
           },
           '&::-webkit-scrollbar-track': {
-            background: darkColors.background.secondary,
+            background: 'transparent',
           },
           '&::-webkit-scrollbar-thumb': {
-            background: darkColors.border.default,
-            borderRadius: '4px',
+            background: 'rgba(255,255,255,0.08)',
+            borderRadius: '6px',
             '&:hover': {
-              background: darkColors.border.hover,
+              background: 'rgba(255,255,255,0.16)',
             },
           },
         },
@@ -109,13 +109,14 @@ const darkThemeOptions: ThemeOptions = {
           padding: '10px 20px',
           boxShadow: 'none',
           '&:hover': {
-            boxShadow: `0 4px 12px rgba(100, 149, 237, 0.30)`,  // 道奇蓝光晕
+            boxShadow: 'none',
+            transform: 'translateY(-1px)',
           },
         },
         contained: {
           boxShadow: 'none',
           '&:hover': {
-            boxShadow: `0 4px 12px rgba(100, 149, 237, 0.40)`,
+            boxShadow: '0 2px 8px rgba(100, 149, 237, 0.20)',
           },
         },
         containedPrimary: {
@@ -205,7 +206,8 @@ const darkThemeOptions: ThemeOptions = {
             },
             '&.Mui-focused fieldset': {
               borderColor: darkColors.brand.primary,          // #6495ed - 道奇蓝
-              borderWidth: '2px',
+              borderWidth: '1px',
+              boxShadow: '0 0 0 3px rgba(100, 149, 237, 0.1)',
             },
           },
           '& .MuiInputLabel-root': {
@@ -297,8 +299,8 @@ const darkThemeOptions: ThemeOptions = {
       styleOverrides: {
         indicator: {
           backgroundColor: darkColors.brand.primary,
-          height: '3px',
-          borderRadius: '3px 3px 0 0',
+          height: '2px',
+          borderRadius: '2px 2px 0 0',
         },
       },
     },
@@ -437,7 +439,8 @@ const lightThemeOptions: ThemeOptions = {
             },
             '&.Mui-focused fieldset': {
               borderColor: lightColors.brand.primary,
-              borderWidth: '2px',
+              borderWidth: '1px',
+              boxShadow: '0 0 0 3px rgba(100, 149, 237, 0.1)',
             },
           },
           '& .MuiInputLabel-root': {
