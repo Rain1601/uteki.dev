@@ -38,7 +38,9 @@ export default function VerdictBanner({ verdict, companyName }: Props) {
 
   return (
     <Box
+      className="gate-meta"
       sx={{
+        fontFamily: "Inter, -apple-system, sans-serif",
         bgcolor: config.bg,
         border: `1px solid ${config.color}18`,
         borderRadius: 2,

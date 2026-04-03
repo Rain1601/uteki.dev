@@ -70,7 +70,11 @@ export default function ChatMessage({ message, modelIcon }: ChatMessageProps) {
           <Box
             sx={{
               color: theme.text.primary,
-              lineHeight: 1.7,
+              lineHeight: 1.8,
+              fontFamily: isUser
+                ? "Inter, -apple-system, sans-serif"
+                : "'Times New Roman', 'SimSun', '宋体', Georgia, serif",
+              fontSize: isUser ? '0.95rem' : '1rem',
               ...(isUser && {
                 bgcolor: isDark ? 'rgba(100,149,237,0.12)' : 'rgba(100,149,237,0.08)',
                 borderRadius: '18px 18px 4px 18px',

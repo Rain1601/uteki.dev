@@ -348,7 +348,7 @@ export default function ReportPanel({
           </Box>
         </Box>}
 
-        {/* Body — compact spacing, centered in fullscreen */}
+        {/* Body — serif reading experience for report content */}
         <Box sx={{
           px: fullscreen ? 4 : 2.5,
           py: 2,
@@ -357,6 +357,18 @@ export default function ReportPanel({
           gap: 2.5,
           minWidth: 460,
           maxWidth: fullscreen ? 840 : 'none',
+          // Serif font for reading content — Anthropic design principle
+          fontFamily: "'Times New Roman', 'SimSun', '宋体', Georgia, serif",
+          lineHeight: 1.8,
+          // Override specific elements back to sans-serif
+          '& .MuiTypography-root': {
+            fontFamily: 'inherit',
+          },
+          // Labels, badges, meta info stay sans-serif
+          '& [data-ui="true"], & .gate-header, & .gate-meta': {
+            fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            lineHeight: 1.5,
+          },
           mx: fullscreen ? 'auto' : 0,
         }}>
           {/* Verdict Banner */}
@@ -378,8 +390,8 @@ export default function ReportPanel({
 
             return (
               <Box key={skillName} id={`gate-section-${gateNum}`}>
-                {/* Section header — clean divider */}
-                <Box sx={{ borderTop: `1px solid ${theme.border.subtle}`, pt: 1.5, mb: 1.5 }}>
+                {/* Section header — sans-serif UI element */}
+                <Box className="gate-header" sx={{ borderTop: `1px solid ${theme.border.subtle}`, pt: 1.5, mb: 1.5 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography
                       sx={{
@@ -394,19 +406,20 @@ export default function ReportPanel({
                         fontSize: 11,
                         fontWeight: 700,
                         flexShrink: 0,
+                        fontFamily: "Inter, -apple-system, sans-serif",
                       }}
                     >
                       {gateNum}
                     </Typography>
-                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: theme.text.primary }}>
+                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: theme.text.primary, fontFamily: "Inter, -apple-system, sans-serif", letterSpacing: '-0.01em' }}>
                       {GATE_NAMES[gateNum] || skillName}
                     </Typography>
-                    <Typography sx={{ fontSize: 11, color: theme.text.disabled }}>
+                    <Typography sx={{ fontSize: 11, color: theme.text.disabled, fontFamily: "Inter, -apple-system, sans-serif" }}>
                       {GATE_EN_NAMES[skillName] || ''}
                     </Typography>
                     <Box sx={{ flex: 1 }} />
                     {result.latency_ms != null && (
-                      <Typography sx={{ fontSize: 11, color: theme.text.disabled, flexShrink: 0 }}>
+                      <Typography sx={{ fontSize: 11, color: theme.text.disabled, flexShrink: 0, fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontFeatureSettings: '"tnum"' }}>
                         {(result.latency_ms / 1000).toFixed(1)}s
                       </Typography>
                     )}

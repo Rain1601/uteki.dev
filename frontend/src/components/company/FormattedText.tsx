@@ -34,10 +34,11 @@ export default function FormattedText({ text, theme, streaming }: Props) {
   return (
     <Box
       sx={{
-        fontSize: 13,
+        fontSize: '1rem',
         color: theme.text.secondary,
         lineHeight: 1.8,
         wordBreak: 'break-word',
+        fontFamily: "'Times New Roman', 'SimSun', '宋体', Georgia, serif",
         '& p': { m: 0, mb: 1, '&:last-child': { mb: 0 } },
         '& h1': { fontSize: 16, fontWeight: 700, color: theme.text.primary, mt: 2, mb: 1 },
         '& h2': { fontSize: 15, fontWeight: 700, color: theme.text.primary, mt: 1.5, mb: 0.75 },
