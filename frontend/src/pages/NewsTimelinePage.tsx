@@ -735,15 +735,15 @@ export default function NewsTimelinePage() {
         </Box>
 
         {/* Calendar Grid */}
-        <Box sx={{ p: 2.5, flexShrink: 0 }}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 0.5, mb: 1 }}>
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-              <Box key={day} sx={{ textAlign: 'center', fontSize: 11, color: theme.text.muted, p: 1, fontWeight: 600, textTransform: 'uppercase' }}>
+        <Box sx={{ px: 1, py: 1.5, flexShrink: 0 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px', mb: 0.5 }}>
+            {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((day) => (
+              <Box key={day} sx={{ textAlign: 'center', fontSize: 9, color: theme.text.disabled, py: 0.5, fontWeight: 600, letterSpacing: '0.03em', fontFamily: 'var(--font-ui)' }}>
                 {day}
               </Box>
             ))}
           </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 0.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px' }}>
             {calendarDays.map((dayData, index) => {
               const isSelected = dayData.date.toDateString() === selectedDate.toDateString();
               const hasNewsData = hasNews(dayData.dateStr);
@@ -765,10 +765,10 @@ export default function NewsTimelinePage() {
                   key={index}
                   onClick={() => selectDate(dayData.date)}
                   sx={{
-                    aspectRatio: '1',
+                    py: 0.5,
                     bgcolor: isSelected ? `${theme.brand.primary}20` : densityBg,
-                    border: `1px solid ${isSelected ? `${theme.brand.primary}40` : hasCritical ? 'rgba(244, 67, 54, 0.5)' : theme.border.subtle}`,
-                    borderRadius: 1,
+                    border: `1px solid ${isSelected ? `${theme.brand.primary}40` : hasCritical ? 'rgba(244, 67, 54, 0.5)' : 'transparent'}`,
+                    borderRadius: '4px',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
