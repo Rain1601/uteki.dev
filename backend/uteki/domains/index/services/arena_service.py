@@ -122,6 +122,11 @@ def load_models_from_db() -> List[Dict[str, Any]]:
     if not models:
         return []
 
+    # ── Apply model name mapping (legacy DB names → AIHubMix-compatible) ──
+    from uteki.domains.agent.llm_adapter import LLMAdapterFactory
+    for m in models:
+        m["model"] = LLMAdapterFactory._resolve_model_name(m.get("model", ""))
+
     # ── Merge web_search overlay ──
     try:
         repo = SupabaseRepository("agent_memory")
