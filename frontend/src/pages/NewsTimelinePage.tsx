@@ -612,10 +612,10 @@ export default function NewsTimelinePage() {
       {/* Left Calendar Panel */}
       <Box
         sx={{
-          width: '340px',
-          minWidth: '340px',
+          width: '300px',
+          minWidth: '300px',
           bgcolor: theme.background.secondary,
-          borderRight: `1px solid ${theme.border.default}`,
+          borderRight: `1px solid ${theme.border.subtle}`,
           display: 'flex',
           flexDirection: 'column',
           height: '100%',
@@ -625,9 +625,8 @@ export default function NewsTimelinePage() {
         {/* Year/Month Selector */}
         <Box
           sx={{
-            p: 2.5,
-            bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
-            borderBottom: `1px solid ${theme.border.default}`,
+            p: 1.5,
+            borderBottom: `1px solid ${theme.border.subtle}`,
             flexShrink: 0,
           }}
         >
