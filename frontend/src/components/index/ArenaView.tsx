@@ -135,28 +135,29 @@ export default function ArenaView() {
     finally { setTimelineLoading(false); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadTimeline(); }, [loadTimeline]);
-
-  // Load account summary, agent config, and model config
+  // Load all initial data in parallel (single useEffect, no waterfall)
   useEffect(() => {
-    fetchAccountSummary().then((res) => {
-      if (res.success && res.data) setAccount(res.data);
-    }).catch(() => {});
-    fetchAgentConfig().then((res) => {
-      if (res.success && res.data?.budget != null) {
-        setAgentBudget(res.data.budget);
-        setBudgetInput(String(res.data.budget));
-      }
-    }).catch(() => {});
-    fetchModelConfig().then((res) => {
-      if (res.success && res.data && res.data.length > 0) {
-        const enabled = res.data.filter((m: ModelConfig) => m.enabled);
-        if (enabled.length > 0) {
-          setKnownModels(enabled.map((m: ModelConfig) => ({ provider: m.provider, name: m.model })));
+    Promise.all([
+      loadTimeline(),
+      fetchAccountSummary().then((res) => {
+        if (res.success && res.data) setAccount(res.data);
+      }).catch(() => {}),
+      fetchAgentConfig().then((res) => {
+        if (res.success && res.data?.budget != null) {
+          setAgentBudget(res.data.budget);
+          setBudgetInput(String(res.data.budget));
         }
-      }
-    }).catch(() => {});
-  }, []);
+      }).catch(() => {}),
+      fetchModelConfig().then((res) => {
+        if (res.success && res.data && res.data.length > 0) {
+          const enabled = res.data.filter((m: ModelConfig) => m.enabled);
+          if (enabled.length > 0) {
+            setKnownModels(enabled.map((m: ModelConfig) => ({ provider: m.provider, name: m.model })));
+          }
+        }
+      }).catch(() => {}),
+    ]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save budget
   const handleSaveBudget = useCallback(async () => {

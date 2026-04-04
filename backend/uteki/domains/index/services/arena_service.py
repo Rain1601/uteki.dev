@@ -69,14 +69,26 @@ async def _backup_rows(table: str, rows: list, model_class=None):
         logger.warning(f"SQLite backup failed for {table}: {e}")
 
 
+_models_cache: Optional[List[Dict[str, Any]]] = None
+_models_cache_time: float = 0
+_MODELS_CACHE_TTL = 60  # seconds
+
+
 def load_models_from_db() -> List[Dict[str, Any]]:
     """从 admin 配置加载模型列表，fallback 到 agent_memory。
+    Results cached for 60s to avoid repeated Supabase decryption calls.
 
     优先级：admin.llm_providers (解密) → agent_memory (legacy) → 空列表
     Shared by Arena, Agent Chat, Reflection, Backtest services.
 
     Also merges per-model web_search settings from agent_memory (web_search_config).
     """
+    import copy
+    global _models_cache, _models_cache_time
+    now = time.time()
+    if _models_cache is not None and (now - _models_cache_time) < _MODELS_CACHE_TTL:
+        return copy.deepcopy(_models_cache)
+
     models: List[Dict[str, Any]] = []
 
     # Priority 1: Admin LLM Providers (encrypted, via Supabase)
@@ -141,6 +153,8 @@ def load_models_from_db() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Failed to load web_search config: {e}")
 
+    _models_cache = copy.deepcopy(models)
+    _models_cache_time = time.time()
     return models
 
 
