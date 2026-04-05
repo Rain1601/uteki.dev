@@ -1,10 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Box, Typography, IconButton } from '@mui/material';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, Trash2, Scale } from 'lucide-react';
 import TradingViewChart from '../components/index/TradingViewChart';
 import { ModelLogo } from '../components/index/ModelLogos';
 import PageHeader from '../components/PageHeader';
 import { useTheme } from '../theme/ThemeProvider';
+import { API_BASE } from '../api/client';
 import CompanyAnalysisForm from '../components/company/CompanyAnalysisForm';
 import { type GateStatus } from '../components/company/GateProgressTracker';
 import ThinkingTimeline from '../components/company/ThinkingTimeline';
@@ -79,6 +80,10 @@ export default function CompanyAgentPage() {
   const hasSelection = !!viewingRunId || !!selectedId;
   const [activeGate, setActiveGate] = useState<number | null>(null);
   const [watchlistSymbol, setWatchlistSymbol] = useState<string | null>(null);
+
+  // Judge state
+  const [judging, setJudging] = useState(false);
+  const [judgeResult, setJudgeResult] = useState<any>(null);
 
   // ── Data loading ──
   useEffect(() => {
@@ -253,6 +258,27 @@ export default function CompanyAgentPage() {
       if (selectedId === id) { setSelectedId(null); setSelectedDetail(null); setReportOpen(false); }
     } catch (e) { console.error('Failed to delete analysis:', e); }
   }, [selectedId]);
+
+  const handleJudge = useCallback(async () => {
+    if (!selectedId || judging) return;
+    setJudging(true);
+    setJudgeResult(null);
+    try {
+      const resp = await fetch(`${API_BASE}/api/evaluation/judge/${selectedId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ judge_model: 'deepseek-chat' }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setJudgeResult(data);
+      }
+    } catch (e) { console.error('Judge failed:', e); }
+    finally { setJudging(false); }
+  }, [selectedId, judging]);
+
+  // Clear judge when selection changes
+  useEffect(() => { setJudgeResult(null); }, [selectedId]);
 
   // ── Display derivation ──
   const viewingRun = viewingRunId ? runningAnalyses.get(viewingRunId) : null;
@@ -561,6 +587,26 @@ export default function CompanyAgentPage() {
                 <Typography sx={{ fontSize: 10, color: theme.text.muted, fontFeatureSettings: '"tnum"' }}>
                   {formatTime(isViewingRunning ? viewingRun!.elapsedMs : (displayResult?.total_latency_ms || 0))}
                 </Typography>
+                {/* Judge button — only when analysis is complete */}
+                {isComplete && selectedId && (
+                  <Box
+                    onClick={handleJudge}
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.4,
+                      px: 1, py: 0.3, borderRadius: '6px', cursor: judging ? 'wait' : 'pointer',
+                      fontSize: 10, fontWeight: 500, fontFamily: 'var(--font-ui)',
+                      color: judgeResult ? '#4caf50' : theme.text.muted,
+                      bgcolor: judgeResult ? 'rgba(76,175,80,0.08)' : 'transparent',
+                      border: `1px solid ${judgeResult ? 'rgba(76,175,80,0.2)' : 'transparent'}`,
+                      opacity: judging ? 0.6 : 1,
+                      transition: 'all 0.15s',
+                      '&:hover': { bgcolor: judgeResult ? 'rgba(76,175,80,0.12)' : `${theme.text.primary}06` },
+                    }}
+                  >
+                    {judging ? <Loader2 size={10} style={{ animation: 'spin 1s linear infinite' }} /> : <Scale size={10} />}
+                    <span>{judging ? 'Judging...' : judgeResult ? `${judgeResult.aggregate.overall}/10` : 'Judge'}</span>
+                  </Box>
+                )}
               </Box>
 
               {/* Report content — fills remaining space */}
@@ -588,6 +634,61 @@ export default function CompanyAgentPage() {
                   onScrollToGateConsumed={() => setScrollToGate(null)}
                   onActiveGateChange={(gate) => setActiveGate(gate)}
                 />
+
+                {/* Judge Results — inline below report */}
+                {judgeResult && (
+                  <Box sx={{ px: 2.5, py: 2, borderTop: `1px solid ${theme.border.subtle}` }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: theme.text.primary, mb: 1.5, fontFamily: 'var(--font-ui)', letterSpacing: '-0.01em' }}>
+                      Quality Assessment
+                    </Typography>
+
+                    {/* Aggregate scores */}
+                    <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                      {[
+                        { label: 'Accuracy', value: judgeResult.aggregate.accuracy, color: '#6495ed' },
+                        { label: 'Depth', value: judgeResult.aggregate.depth, color: '#4caf50' },
+                        { label: 'Consistency', value: judgeResult.aggregate.consistency, color: '#ff9800' },
+                        { label: 'Overall', value: judgeResult.aggregate.overall, color: theme.text.primary },
+                      ].map(({ label, value, color }) => (
+                        <Box key={label} sx={{ flex: 1, p: 1, bgcolor: theme.background.secondary, borderRadius: 1, border: `1px solid ${theme.border.subtle}`, textAlign: 'center' }}>
+                          <Typography sx={{ fontSize: 8.5, color: theme.text.disabled, textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: 'var(--font-ui)' }}>{label}</Typography>
+                          <Typography sx={{ fontSize: 18, fontWeight: 700, color, fontFamily: 'var(--font-mono)' }}>{value}</Typography>
+                          <Typography sx={{ fontSize: 8, color: theme.text.disabled }}>/10</Typography>
+                        </Box>
+                      ))}
+                    </Box>
+
+                    {/* Per-gate details */}
+                    {judgeResult.scores?.map((g: any) => (
+                      <Box key={g.gate} sx={{ mb: 1.5, p: 1.25, bgcolor: theme.background.secondary, borderRadius: 1, border: `1px solid ${theme.border.subtle}` }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+                          <Typography sx={{ fontSize: 11, fontWeight: 700, color: theme.text.primary, fontFamily: 'var(--font-ui)' }}>
+                            G{g.gate} {g.gate_name || g.skill}
+                          </Typography>
+                          {g.overall != null && (
+                            <Typography sx={{ fontSize: 11, fontWeight: 700, color: g.overall >= 7 ? '#4caf50' : g.overall >= 5 ? '#ff9800' : '#f44336', fontFamily: 'var(--font-mono)' }}>
+                              {g.overall}/10
+                            </Typography>
+                          )}
+                        </Box>
+                        {g.summary && (
+                          <Typography sx={{ fontSize: 12, color: theme.text.secondary, fontFamily: 'var(--font-reading)', lineHeight: 1.7, mb: 0.75 }}>
+                            {g.summary}
+                          </Typography>
+                        )}
+                        {g.deductions?.length > 0 && (
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+                            {g.deductions.slice(0, 3).map((d: any, i: number) => (
+                              <Typography key={i} sx={{ fontSize: 10, color: d.severity === 'critical' ? '#f44336' : d.severity === 'major' ? '#ff9800' : theme.text.muted, lineHeight: 1.5 }}>
+                                [{d.severity}] {d.issue}
+                              </Typography>
+                            ))}
+                          </Box>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
               </Box>
             </Box>
           </>
