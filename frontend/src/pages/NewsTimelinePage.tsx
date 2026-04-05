@@ -612,8 +612,8 @@ export default function NewsTimelinePage() {
       {/* Left Calendar Panel */}
       <Box
         sx={{
-          width: '300px',
-          minWidth: '300px',
+          width: '330px',
+          minWidth: '330px',
           bgcolor: theme.background.secondary,
           borderRight: `1px solid ${theme.border.subtle}`,
           display: 'flex',
