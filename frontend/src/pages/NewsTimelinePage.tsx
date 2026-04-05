@@ -1110,7 +1110,17 @@ export default function NewsTimelinePage() {
                       top: 0,
                       bgcolor: theme.background.primary,
                       zIndex: 5,
-                      borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+                      borderTop: `1px solid ${theme.border.subtle}`,
+                      // Extend background upward to cover scrolling content beneath
+                      '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        top: -20,
+                        left: 0,
+                        right: 0,
+                        height: 20,
+                        bgcolor: theme.background.primary,
+                      },
                     }}
                   >
                     <Typography
