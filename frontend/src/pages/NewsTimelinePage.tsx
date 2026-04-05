@@ -612,8 +612,8 @@ export default function NewsTimelinePage() {
       {/* Left Calendar Panel */}
       <Box
         sx={{
-          width: '330px',
-          minWidth: '330px',
+          width: '320px',
+          minWidth: '320px',
           bgcolor: theme.background.secondary,
           borderRight: `1px solid ${theme.border.subtle}`,
           display: 'flex',
@@ -736,14 +736,14 @@ export default function NewsTimelinePage() {
 
         {/* Calendar Grid */}
         <Box sx={{ px: 1, py: 1.5, flexShrink: 0 }}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px', mb: 0.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', mb: 0.5 }}>
             {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((day) => (
               <Box key={day} sx={{ textAlign: 'center', fontSize: 9, color: theme.text.disabled, py: 0.5, fontWeight: 600, letterSpacing: '0.03em', fontFamily: 'var(--font-ui)' }}>
                 {day}
               </Box>
             ))}
           </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px' }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px' }}>
             {calendarDays.map((dayData, index) => {
               const isSelected = dayData.date.toDateString() === selectedDate.toDateString();
               const hasNewsData = hasNews(dayData.dateStr);
@@ -765,7 +765,7 @@ export default function NewsTimelinePage() {
                   key={index}
                   onClick={() => selectDate(dayData.date)}
                   sx={{
-                    aspectRatio: '1',
+                    py: 0.6,
                     bgcolor: isSelected ? `${theme.brand.primary}20` : densityBg,
                     border: `1px solid ${isSelected ? `${theme.brand.primary}40` : hasCritical ? 'rgba(244, 67, 54, 0.5)' : 'transparent'}`,
                     borderRadius: '4px',
@@ -774,13 +774,12 @@ export default function NewsTimelinePage() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     cursor: 'pointer',
-                    transition: 'all 0.2s ease',
+                    transition: 'background-color 0.15s ease, border-color 0.15s ease',
                     position: 'relative',
                     opacity: dayData.isOtherMonth ? 0.3 : 1,
                     '&:hover': {
-                      bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                      bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
                       borderColor: theme.border.hover,
-                      transform: 'scale(1.05)',
                     },
                     // News indicator dot at bottom
                     '&::after': hasNewsData ? {
