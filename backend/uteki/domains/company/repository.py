@@ -13,11 +13,11 @@ from uuid import uuid4
 from sqlalchemy import select, delete as sa_delete, func
 
 from uteki.common.database import db_manager
-from uteki.domains.company.models import CompanyAnalysis
+from uteki.domains.company.models import CompanyAnalysis, CompanyPromptVersion
 
 logger = logging.getLogger(__name__)
 
-# Summary columns (exclude full_report for list queries)
+# Summary columns (exclude full_report and gate_results for list queries)
 _SUMMARY_COLUMNS = [
     CompanyAnalysis.id,
     CompanyAnalysis.symbol,
@@ -25,6 +25,7 @@ _SUMMARY_COLUMNS = [
     CompanyAnalysis.provider,
     CompanyAnalysis.model,
     CompanyAnalysis.status,
+    CompanyAnalysis.current_gate,
     CompanyAnalysis.verdict_action,
     CompanyAnalysis.verdict_conviction,
     CompanyAnalysis.verdict_quality,
@@ -126,3 +127,132 @@ class CompanyAnalysisRepository:
             q = sa_delete(CompanyAnalysis).where(CompanyAnalysis.id == analysis_id)
             result = await session.execute(q)
             return result.rowcount > 0
+
+    @staticmethod
+    async def update_gate(analysis_id: str, gate_num: int, gate_data: dict) -> None:
+        """Atomically update a single gate result and current_gate counter."""
+        async with db_manager.get_postgres_session() as session:
+            q = select(CompanyAnalysis).where(CompanyAnalysis.id == analysis_id)
+            obj = (await session.execute(q)).scalar_one_or_none()
+            if not obj:
+                return
+            existing = obj.gate_results or {}
+            existing[str(gate_num)] = gate_data
+            obj.gate_results = existing
+            obj.current_gate = gate_num
+            obj.updated_at = _now()
+            await session.flush()
+
+    @staticmethod
+    async def list_running(user_id: str) -> List[dict]:
+        """Return all running analyses for a user (for reconnection on page load)."""
+        async with db_manager.get_postgres_session() as session:
+            q = (
+                select(*_SUMMARY_COLUMNS)
+                .where(CompanyAnalysis.user_id == user_id)
+                .where(CompanyAnalysis.status == "running")
+                .order_by(CompanyAnalysis.created_at.desc())
+            )
+            rows = (await session.execute(q)).all()
+            return [dict(r._mapping) for r in rows]
+
+    @staticmethod
+    async def get_gate_results(analysis_id: str) -> Optional[dict]:
+        """Get gate_results JSON for replay on reconnect."""
+        async with db_manager.get_postgres_session() as session:
+            q = select(
+                CompanyAnalysis.id,
+                CompanyAnalysis.status,
+                CompanyAnalysis.current_gate,
+                CompanyAnalysis.gate_results,
+                CompanyAnalysis.symbol,
+                CompanyAnalysis.company_name,
+                CompanyAnalysis.model,
+                CompanyAnalysis.provider,
+            ).where(CompanyAnalysis.id == analysis_id)
+            row = (await session.execute(q)).one_or_none()
+            if row:
+                return dict(row._mapping)
+            return None
+
+    @staticmethod
+    async def get_by_share_token(token: str) -> Optional[dict]:
+        async with db_manager.get_postgres_session() as session:
+            q = select(CompanyAnalysis).where(CompanyAnalysis.share_token == token)
+            obj = (await session.execute(q)).scalar_one_or_none()
+            if obj:
+                return _row_to_dict(obj)
+            return None
+
+
+class CompanyPromptRepository:
+
+    @staticmethod
+    async def list_by_gate(gate_number: Optional[int] = None) -> List[dict]:
+        async with db_manager.get_postgres_session() as session:
+            q = select(CompanyPromptVersion).order_by(
+                CompanyPromptVersion.gate_number,
+                CompanyPromptVersion.version.desc(),
+            )
+            if gate_number is not None:
+                q = q.where(CompanyPromptVersion.gate_number == gate_number)
+            rows = (await session.execute(q)).scalars().all()
+            return [_row_to_dict(r) for r in rows]
+
+    @staticmethod
+    async def get_active_prompts() -> dict[int, str]:
+        """Return {gate_number: system_prompt} for all active versions."""
+        async with db_manager.get_postgres_session() as session:
+            q = select(CompanyPromptVersion).where(
+                CompanyPromptVersion.is_active == True  # noqa: E712
+            )
+            rows = (await session.execute(q)).scalars().all()
+            return {r.gate_number: r.system_prompt for r in rows}
+
+    @staticmethod
+    async def get_by_id(prompt_id: str) -> Optional[dict]:
+        async with db_manager.get_postgres_session() as session:
+            q = select(CompanyPromptVersion).where(CompanyPromptVersion.id == prompt_id)
+            obj = (await session.execute(q)).scalar_one_or_none()
+            return _row_to_dict(obj) if obj else None
+
+    @staticmethod
+    async def create(data: dict) -> dict:
+        _ensure_id(data)
+        async with db_manager.get_postgres_session() as session:
+            # Auto-increment version for this gate
+            max_ver_q = select(func.max(CompanyPromptVersion.version)).where(
+                CompanyPromptVersion.gate_number == data["gate_number"]
+            )
+            max_ver = (await session.execute(max_ver_q)).scalar() or 0
+            data["version"] = max_ver + 1
+
+            obj = CompanyPromptVersion(**{
+                k: v for k, v in data.items() if hasattr(CompanyPromptVersion, k)
+            })
+            session.add(obj)
+            await session.flush()
+            return _row_to_dict(obj)
+
+    @staticmethod
+    async def activate(prompt_id: str) -> Optional[dict]:
+        async with db_manager.get_postgres_session() as session:
+            # Get the prompt to find its gate_number
+            q = select(CompanyPromptVersion).where(CompanyPromptVersion.id == prompt_id)
+            obj = (await session.execute(q)).scalar_one_or_none()
+            if not obj:
+                return None
+
+            # Deactivate all versions for this gate
+            from sqlalchemy import update
+            await session.execute(
+                update(CompanyPromptVersion)
+                .where(CompanyPromptVersion.gate_number == obj.gate_number)
+                .values(is_active=False)
+            )
+
+            # Activate the selected one
+            obj.is_active = True
+            obj.updated_at = _now()
+            await session.flush()
+            return _row_to_dict(obj)
