@@ -167,3 +167,46 @@ class CompanyAnalyzeRequest(BaseModel):
     investment_horizon: str = "5-10yr"
     provider: Optional[str] = None
     model: Optional[str] = None
+
+
+# ── Prompt Management ────────────────────────────────────────────────────
+
+class PromptVersionCreate(BaseModel):
+    gate_number: int = Field(ge=1, le=7)
+    system_prompt: str
+    description: str = ""
+
+
+class PromptVersionResponse(BaseModel):
+    id: str
+    gate_number: int
+    skill_name: str
+    version: int
+    system_prompt: str
+    description: str
+    is_active: bool
+    eval_scores: Optional[dict] = None
+    created_at: str
+
+
+class ABTestRequest(BaseModel):
+    symbol: str
+    gate_number: int = Field(ge=1, le=7)
+    version_a_id: str
+    version_b_id: str
+    runs_per_version: int = Field(default=3, ge=1, le=5)
+    judge_model: str = "deepseek-chat"
+
+
+# ── Cross-Model Comparison ───────────────────────────────────────────────
+
+class CompareRequest(BaseModel):
+    symbol: str
+    models: list[str] = Field(min_length=2, max_length=5)
+
+
+# ── Share ─────────────────────────────────────────────────────────────────
+
+class ShareResponse(BaseModel):
+    share_url: str
+    expires_at: str
