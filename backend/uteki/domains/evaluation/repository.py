@@ -115,3 +115,64 @@ class GateScoreRepository:
             )
             rows = (await session.execute(q)).scalars().all()
             return [_row_to_dict(r) for r in rows]
+
+    @staticmethod
+    async def get_dashboard_data(
+        symbol: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict:
+        """Aggregate gate scores for dashboard: per-gate averages + recent evaluations."""
+        async with db_manager.get_postgres_session() as session:
+            # Per-gate averages
+            avg_q = select(
+                EvaluationGateScore.gate_number,
+                EvaluationGateScore.skill_name,
+                func.avg(EvaluationGateScore.accuracy_score).label("avg_accuracy"),
+                func.avg(EvaluationGateScore.depth_score).label("avg_depth"),
+                func.avg(EvaluationGateScore.consistency_score).label("avg_consistency"),
+                func.avg(EvaluationGateScore.overall_score).label("avg_overall"),
+                func.count().label("count"),
+            ).group_by(
+                EvaluationGateScore.gate_number,
+                EvaluationGateScore.skill_name,
+            ).order_by(EvaluationGateScore.gate_number)
+
+            if symbol:
+                # Join with company_analyses to filter by symbol
+                from uteki.domains.company.models import CompanyAnalysis
+                avg_q = avg_q.join(
+                    CompanyAnalysis,
+                    CompanyAnalysis.id == EvaluationGateScore.analysis_id,
+                ).where(CompanyAnalysis.symbol == symbol.upper())
+
+            avg_rows = (await session.execute(avg_q)).all()
+
+            gate_averages = []
+            for row in avg_rows:
+                gate_averages.append({
+                    "gate_number": row.gate_number,
+                    "skill_name": row.skill_name,
+                    "avg_accuracy": round(float(row.avg_accuracy), 2),
+                    "avg_depth": round(float(row.avg_depth), 2),
+                    "avg_consistency": round(float(row.avg_consistency), 2),
+                    "avg_overall": round(float(row.avg_overall), 2),
+                    "count": row.count,
+                })
+
+            # Recent individual scores
+            recent_q = (
+                select(EvaluationGateScore)
+                .order_by(EvaluationGateScore.created_at.desc())
+                .limit(limit)
+            )
+            recent_rows = (await session.execute(recent_q)).scalars().all()
+
+            # Weakest gate
+            weakest = min(gate_averages, key=lambda g: g["avg_overall"]) if gate_averages else None
+
+            return {
+                "gate_averages": gate_averages,
+                "recent_scores": [_row_to_dict(r) for r in recent_rows],
+                "weakest_gate": weakest,
+                "total_evaluations": sum(g["count"] for g in gate_averages) if gate_averages else 0,
+            }

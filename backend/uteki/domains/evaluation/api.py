@@ -151,3 +151,16 @@ async def get_judge_scores(analysis_id: str):
     """Get saved judge scores for an analysis."""
     scores = await GateScoreRepository.get_by_analysis(analysis_id)
     return {"analysis_id": analysis_id, "scores": scores}
+
+
+@router.get("/company/dashboard")
+async def company_quality_dashboard(
+    symbol: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Aggregate gate quality scores across analyses for dashboard visualization.
+
+    Returns per-gate average scores and recent evaluations.
+    """
+    scores = await GateScoreRepository.get_dashboard_data(symbol=symbol, limit=limit)
+    return scores
