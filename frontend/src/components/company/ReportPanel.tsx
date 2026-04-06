@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Typography } from '@mui/material';
-import { X, FileText, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Box, Typography, Snackbar, Alert, Collapse } from '@mui/material';
+import { X, FileText, Download, Maximize2, Minimize2, Link, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
-import { GATE_NAMES, type GateResult, type PositionHoldingOutput } from '../../api/company';
+import { GATE_NAMES, type GateResult, type PositionHoldingOutput, createShareLink } from '../../api/company';
 import { DataTable } from './ui';
 import VerdictBanner from './VerdictBanner';
 import FormattedText from './FormattedText';
@@ -27,6 +27,7 @@ interface Props {
   scrollToGate?: number | null;
   onScrollToGateConsumed?: () => void;
   embedded?: boolean;  // when true, renders without header/border/width constraints (inline mode)
+  analysisId?: string | null;
 }
 
 const GATE_ORDER = [
@@ -72,10 +73,44 @@ export default function ReportPanel({
   scrollToGate,
   onScrollToGateConsumed,
   embedded = false,
+  analysisId,
   onActiveGateChange,
 }: Props & { onActiveGateChange?: (gate: number | null) => void }) {
   const { theme } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // ── Collapse/expand state ──
+  const [collapsedGates, setCollapsedGates] = useState<Set<string>>(new Set(GATE_ORDER as unknown as string[]));
+  const allCollapsed = collapsedGates.size === GATE_ORDER.length;
+  const toggleGate = (skillName: string) => {
+    setCollapsedGates((prev) => {
+      const next = new Set(prev);
+      if (next.has(skillName)) next.delete(skillName); else next.add(skillName);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    if (allCollapsed) {
+      setCollapsedGates(new Set());
+    } else {
+      setCollapsedGates(new Set(GATE_ORDER as unknown as string[]));
+    }
+  };
+
+  // ── Share state ──
+  const [shareSnackbar, setShareSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false, message: '', severity: 'success',
+  });
+  const handleShare = useCallback(async () => {
+    if (!analysisId) return;
+    try {
+      const { share_url } = await createShareLink(analysisId);
+      await navigator.clipboard.writeText(share_url);
+      setShareSnackbar({ open: true, message: '分享链接已复制到剪贴板', severity: 'success' });
+    } catch {
+      setShareSnackbar({ open: true, message: '创建分享链接失败', severity: 'error' });
+    }
+  }, [analysisId]);
 
   useEffect(() => {
     if (scrollToGate == null || !open) return;
@@ -296,6 +331,26 @@ export default function ReportPanel({
             </Box>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {/* Share link */}
+            {analysisId && (
+              <Box
+                onClick={handleShare}
+                sx={{
+                  cursor: 'pointer',
+                  p: 0.5,
+                  borderRadius: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.5,
+                  color: theme.text.disabled,
+                  transition: 'all 0.15s',
+                  '&:hover': { bgcolor: theme.background.hover, color: theme.text.secondary },
+                }}
+                title="分享报告"
+              >
+                <Link size={15} />
+              </Box>
+            )}
             {/* Export PDF */}
             <Box
               onClick={handleExportPDF}
@@ -376,6 +431,23 @@ export default function ReportPanel({
             <VerdictBanner verdict={verdict!} companyName={companyName} />
           )}
 
+          {/* Expand/Collapse All */}
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Box
+              onClick={toggleAll}
+              data-ui="true"
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 0.4,
+                px: 1, py: 0.3, borderRadius: '6px', cursor: 'pointer',
+                fontSize: 10, fontWeight: 500, color: theme.text.muted,
+                '&:hover': { bgcolor: `${theme.text.primary}06`, color: theme.text.secondary },
+              }}
+            >
+              <ChevronsUpDown size={12} />
+              <span>{allCollapsed ? '全部展开' : '全部折叠'}</span>
+            </Box>
+          </Box>
+
           {/* Gate Sections */}
           {GATE_ORDER.map((skillName) => {
             const result = enhancedSkills[skillName];
@@ -388,10 +460,28 @@ export default function ReportPanel({
             const hasParsed = parsedData && Object.keys(parsedData).length > 0;
             const Component = GATE_COMPONENTS[skillName];
 
+            const isCollapsed = collapsedGates.has(skillName);
+            // Key metric for collapsed view
+            const keyMetric = (() => {
+              if (!hasParsed) return null;
+              if (skillName === 'final_verdict') return parsedData?.action ? `${parsedData.action} ${Math.round((parsedData.conviction || 0) * 100)}%` : null;
+              if (skillName === 'business_analysis') return parsedData?.business_quality || parsedData?.quality || null;
+              if (skillName === 'fisher_qa') return parsedData?.growth_verdict || (parsedData?.total_score != null ? `${parsedData.total_score}/15` : null);
+              if (skillName === 'moat_assessment') return parsedData?.moat_width || null;
+              if (skillName === 'management_assessment') return parsedData?.management_score != null ? `${parsedData.management_score}/10` : null;
+              if (skillName === 'reverse_test') return parsedData?.resilience_score != null ? `${parsedData.resilience_score}/10` : null;
+              if (skillName === 'valuation') return parsedData?.price_assessment || null;
+              return null;
+            })();
+
             return (
               <Box key={skillName} id={`gate-section-${gateNum}`}>
-                {/* Section header — sans-serif UI element */}
-                <Box className="gate-header" sx={{ borderTop: `1px solid ${theme.border.subtle}`, pt: 1.5, mb: 1.5 }}>
+                {/* Section header — sans-serif UI element, clickable for collapse */}
+                <Box
+                  className="gate-header"
+                  onClick={() => toggleGate(skillName)}
+                  sx={{ borderTop: `1px solid ${theme.border.subtle}`, pt: 1.5, mb: isCollapsed ? 0 : 1.5, cursor: 'pointer', '&:hover': { opacity: 0.85 } }}
+                >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography
                       sx={{
@@ -417,27 +507,37 @@ export default function ReportPanel({
                     <Typography sx={{ fontSize: 11, color: theme.text.disabled, fontFamily: "Inter, -apple-system, sans-serif" }}>
                       {GATE_EN_NAMES[skillName] || ''}
                     </Typography>
+                    {isCollapsed && keyMetric && (
+                      <Typography sx={{ fontSize: 11, fontWeight: 600, color: theme.text.muted, fontFamily: "Inter, -apple-system, sans-serif" }}>
+                        {keyMetric}
+                      </Typography>
+                    )}
                     <Box sx={{ flex: 1 }} />
                     {result.latency_ms != null && (
                       <Typography sx={{ fontSize: 11, color: theme.text.disabled, flexShrink: 0, fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontFeatureSettings: '"tnum"' }}>
                         {(result.latency_ms / 1000).toFixed(1)}s
                       </Typography>
                     )}
+                    <Box sx={{ color: theme.text.disabled, display: 'flex', alignItems: 'center' }}>
+                      {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                    </Box>
                   </Box>
                 </Box>
 
-                {/* Content */}
-                <Box sx={{ bgcolor: theme.background.secondary, borderRadius: 1, p: 2, border: `1px solid ${theme.border.subtle}` }}>
-                  {hasParsed && Component ? (
-                    <Component data={parsedData} />
-                  ) : result.raw ? (
-                    <FormattedText text={result.raw} theme={theme} />
-                  ) : (
-                    <Typography sx={{ fontSize: 12, color: theme.text.disabled, fontStyle: 'italic' }}>
-                      无输出数据
-                    </Typography>
-                  )}
-                </Box>
+                {/* Content — collapsible */}
+                <Collapse in={!isCollapsed} timeout={200}>
+                  <Box sx={{ bgcolor: theme.background.secondary, borderRadius: 1, p: 2, border: `1px solid ${theme.border.subtle}`, mb: 0.5 }}>
+                    {hasParsed && Component ? (
+                      <Component data={parsedData} />
+                    ) : result.raw ? (
+                      <FormattedText text={result.raw} theme={theme} />
+                    ) : (
+                      <Typography sx={{ fontSize: 12, color: theme.text.disabled, fontStyle: 'italic' }}>
+                        无输出数据
+                      </Typography>
+                    )}
+                  </Box>
+                </Collapse>
               </Box>
             );
           })}
@@ -458,6 +558,17 @@ export default function ReportPanel({
           </Box>
         </Box>
       </Box>
+
+      <Snackbar
+        open={shareSnackbar.open}
+        autoHideDuration={3000}
+        onClose={() => setShareSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={shareSnackbar.severity} variant="filled" sx={{ fontSize: 12 }}>
+          {shareSnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

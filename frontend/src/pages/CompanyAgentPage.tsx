@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Box, Typography, IconButton } from '@mui/material';
+import { Box, Typography, IconButton, Switch } from '@mui/material';
 import { Loader2, Trash2, Scale } from 'lucide-react';
 import TradingViewChart from '../components/index/TradingViewChart';
 import { ModelLogo } from '../components/index/ModelLogos';
@@ -10,6 +10,7 @@ import CompanyAnalysisForm from '../components/company/CompanyAnalysisForm';
 import { type GateStatus } from '../components/company/GateProgressTracker';
 import ThinkingTimeline from '../components/company/ThinkingTimeline';
 import ReportPanel from '../components/company/ReportPanel';
+import CompareView from '../components/company/CompareView';
 import {
   analyzeCompanyStream,
   listCompanyAnalyses,
@@ -59,6 +60,37 @@ const ACTION_COLORS: Record<string, string> = {
   BUY: '#22c55e', WATCH: '#f59e0b', AVOID: '#ef4444',
 };
 
+interface ChartPoint { date: string; close: number; }
+
+function SvgLineChart({ data, width, height, color }: { data: ChartPoint[]; width: number; height: number; color: string }) {
+  if (data.length < 2) return null;
+  const closes = data.map(d => d.close);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const pad = 4;
+  const w = width;
+  const h = height - pad * 2;
+  const points = closes.map((c, i) => {
+    const x = (i / (closes.length - 1)) * w;
+    const y = pad + h - ((c - min) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const gradId = `areaGrad-${Math.random().toString(36).slice(2, 6)}`;
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={`${points} ${w},${height} 0,${height}`} fill={`url(#${gradId})`} />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function CompanyAgentPage() {
   const { theme } = useTheme();
 
@@ -84,6 +116,58 @@ export default function CompanyAgentPage() {
   // Judge state
   const [judging, setJudging] = useState(false);
   const [judgeResult, setJudgeResult] = useState<any>(null);
+
+  // New feature states
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareState, setCompareState] = useState<{ symbol: string; models: string[] } | null>(null);
+
+  // Delete confirmation
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Left panel tab: watchlist or recommendations
+  const [leftTab, setLeftTab] = useState<'watchlist' | 'recommend'>('watchlist');
+
+  interface Recommendation {
+    id: string; symbol: string; company: string; model: string;
+    date: string; reason: string; status: 'pending' | 'accepted' | 'rejected';
+  }
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([
+    { id: 'r1', symbol: 'PLTR', company: 'Palantir Tech.', model: 'claude-sonnet', date: '04-06', reason: 'AI/defense sector momentum, strong government contract pipeline', status: 'pending' },
+    { id: 'r2', symbol: 'ARM', company: 'ARM Holdings', model: 'deepseek-chat', date: '04-05', reason: 'Mobile chip dominance, AI edge computing growth catalyst', status: 'pending' },
+    { id: 'r3', symbol: 'CRWD', company: 'CrowdStrike', model: 'gpt-4.1', date: '04-05', reason: 'Cybersecurity leader with expanding TAM and net retention >120%', status: 'pending' },
+    { id: 'r4', symbol: 'SNOW', company: 'Snowflake Inc.', model: 'claude-sonnet', date: '04-04', reason: 'Data cloud platform with strong enterprise adoption', status: 'accepted' },
+    { id: 'r5', symbol: 'COIN', company: 'Coinbase Global', model: 'deepseek-chat', date: '04-03', reason: 'Crypto infrastructure leader, regulatory clarity improving', status: 'rejected' },
+  ]);
+  const pendingCount = recommendations.filter(r => r.status === 'pending').length;
+  const handleAcceptRec = (id: string) => setRecommendations(prev => prev.map(r => r.id === id ? { ...r, status: 'accepted' as const } : r));
+  const handleRejectRec = (id: string) => setRecommendations(prev => prev.map(r => r.id === id ? { ...r, status: 'rejected' as const } : r));
+  const handleDeleteRec = (id: string) => setRecommendations(prev => prev.filter(r => r.id !== id));
+
+  // Task scheduler
+  const SCHED_MODELS = ['deepseek-chat', 'claude-sonnet', 'gpt-4.1', 'gemini-2.5-pro', 'qwen-plus'];
+  const [taskOpen, setTaskOpen] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState([
+    { symbol: 'AAPL', company: 'Apple Inc.', enabled: true, models: ['deepseek-chat', 'claude-sonnet'] },
+    { symbol: 'NVDA', company: 'NVIDIA Corp.', enabled: true, models: ['deepseek-chat'] },
+    { symbol: 'TSLA', company: 'Tesla Inc.', enabled: false, models: ['gpt-4.1'] },
+    { symbol: 'GOOGL', company: 'Alphabet Inc.', enabled: true, models: ['claude-sonnet', 'deepseek-chat'] },
+    { symbol: 'MSFT', company: 'Microsoft Corp.', enabled: true, models: ['deepseek-chat'] },
+    { symbol: 'META', company: 'Meta Platforms', enabled: false, models: ['claude-sonnet'] },
+    { symbol: 'TSM', company: 'Taiwan Semi.', enabled: true, models: ['deepseek-chat', 'gpt-4.1'] },
+    { symbol: 'AMZN', company: 'Amazon.com', enabled: false, models: ['deepseek-chat'] },
+  ]);
+  const toggleSchedTask = (sym: string) => setScheduledTasks(prev => prev.map(t => t.symbol === sym ? { ...t, enabled: !t.enabled } : t));
+  const toggleSchedModel = (sym: string, model: string) => setScheduledTasks(prev => prev.map(t => {
+    if (t.symbol !== sym) return t;
+    const has = t.models.includes(model);
+    return { ...t, models: has ? t.models.filter(m => m !== model) : [...t.models, model] };
+  }));
+  const enabledTaskCount = scheduledTasks.filter(t => t.enabled).length;
+
+  // Chart mode + price data for line chart
+  const [chartMode, setChartMode] = useState<'line' | 'kline'>('kline');
+  const [priceData, setPriceData] = useState<ChartPoint[]>([]);
+  const [priceLoading, setPriceLoading] = useState(false);
 
   // ── Data loading ──
   useEffect(() => {
@@ -251,13 +335,16 @@ export default function CompanyAgentPage() {
     setViewingRunId(runId);
   }, []);
 
-  const handleDeleteAnalysis = useCallback(async (id: string) => {
+  const handleConfirmDelete = useCallback(async () => {
+    if (!confirmDeleteId) return;
+    const id = confirmDeleteId;
+    setConfirmDeleteId(null);
     try {
       await deleteCompanyAnalysis(id);
       setAnalyses((prev) => prev.filter((a) => a.id !== id));
       if (selectedId === id) { setSelectedId(null); setSelectedDetail(null); setReportOpen(false); }
     } catch (e) { console.error('Failed to delete analysis:', e); }
-  }, [selectedId]);
+  }, [confirmDeleteId, selectedId]);
 
   const handleJudge = useCallback(async () => {
     if (!selectedId || judging) return;
@@ -279,6 +366,13 @@ export default function CompanyAgentPage() {
 
   // Clear judge when selection changes
   useEffect(() => { setJudgeResult(null); }, [selectedId]);
+
+  const handleCompare = useCallback((symbol: string, models: string[]) => {
+    setCompareState({ symbol, models });
+    setSelectedId(null);
+    setViewingRunId(null);
+    setReportOpen(false);
+  }, []);
 
   // ── Display derivation ──
   const viewingRun = viewingRunId ? runningAnalyses.get(viewingRunId) : null;
@@ -342,12 +436,12 @@ export default function CompanyAgentPage() {
     return (
       <Box
         key={a.id}
-        onClick={() => { setViewingRunId(null); setSelectedId(a.id); }}
+        onClick={() => { setViewingRunId(null); setSelectedId(a.id); setConfirmDeleteId(null); }}
         sx={{
           display: 'grid',
           gridTemplateColumns: compact
-            ? '48px 1fr 44px 36px'
-            : '48px minmax(60px,1fr) 20px 48px 44px 56px 48px 40px',
+            ? '48px 1fr 44px 36px 24px'
+            : '48px minmax(60px,1fr) 20px 48px 44px 56px 48px 40px 30px',
           alignItems: 'center',
           px: compact ? 1 : 1.5,
           minHeight: compact ? 34 : 38,
@@ -447,6 +541,37 @@ export default function CompanyAgentPage() {
             </Typography>
           </>
         )}
+
+        {/* Delete */}
+        {confirmDeleteId === a.id ? (
+          <Box
+            onClick={(e) => { e.stopPropagation(); handleConfirmDelete(); }}
+            sx={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', borderRadius: '4px', px: 0.5, py: 0.15,
+              fontSize: 9, fontWeight: 700, color: '#fff', bgcolor: '#ef4444',
+              whiteSpace: 'nowrap', transition: 'all 0.12s',
+              '&:hover': { bgcolor: '#dc2626' },
+            }}
+          >
+            确认
+          </Box>
+        ) : (
+          <Box
+            className="row-delete"
+            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(a.id); }}
+            sx={{
+              opacity: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', borderRadius: '4px', p: 0.25,
+              color: theme.text.disabled,
+              transition: 'opacity 0.15s, color 0.15s',
+              '&:hover': { color: '#ef4444' },
+            }}
+          >
+            <Trash2 size={11} />
+          </Box>
+        )}
       </Box>
     );
   };
@@ -455,6 +580,30 @@ export default function CompanyAgentPage() {
   const chartSymbol = displayCompanyInfo?.symbol
     || watchlistSymbol
     || (filteredAnalyses.length > 0 ? filteredAnalyses[0].symbol : null);
+
+  // Fetch price data for line chart mode
+  useEffect(() => {
+    if (!chartSymbol || chartMode !== 'line') return;
+    let cancelled = false;
+    setPriceLoading(true);
+    (async () => {
+      try {
+        const now = Math.floor(Date.now() / 1000);
+        const from = now - 365 * 24 * 3600;
+        const res = await fetch(`/api/udf/history?symbol=${chartSymbol}&resolution=D&from=${from}&to=${now}`);
+        const json = await res.json();
+        if (!cancelled && json.s === 'ok' && json.t?.length > 0) {
+          const points: ChartPoint[] = json.t.map((ts: number, i: number) => ({
+            date: new Date(ts * 1000).toISOString().slice(0, 10),
+            close: json.c[i],
+          }));
+          setPriceData(points);
+        }
+      } catch { if (!cancelled) setPriceData([]); }
+      finally { if (!cancelled) setPriceLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [chartSymbol, chartMode]);
 
   // ── Render ──
   return (
@@ -489,7 +638,7 @@ export default function CompanyAgentPage() {
           <>
             <Box sx={{ flex: 1 }} />
             <Box
-              onClick={() => { setSelectedId(null); setSelectedDetail(null); setViewingRunId(null); setReportOpen(false); }}
+              onClick={() => { setSelectedId(null); setSelectedDetail(null); setViewingRunId(null); setReportOpen(false); setCompareState(null); }}
               sx={{
                 display: 'flex', alignItems: 'center', gap: 0.5,
                 px: 1, py: 0.3, borderRadius: '6px', cursor: 'pointer',
@@ -501,7 +650,121 @@ export default function CompanyAgentPage() {
             </Box>
           </>
         )}
+        {!hasSelection && <Box sx={{ flex: 1 }} />}
+        {/* Task scheduler button */}
+        <Box
+          onClick={() => setTaskOpen(!taskOpen)}
+          sx={{
+            display: 'flex', alignItems: 'center', gap: 0.75,
+            px: 1.25, py: 0.35, borderRadius: '6px', cursor: 'pointer',
+            border: `1px solid ${taskOpen ? theme.brand.primary + '40' : theme.border.subtle}`,
+            bgcolor: taskOpen ? `${theme.brand.primary}08` : 'transparent',
+            transition: 'all 0.15s',
+            '&:hover': { borderColor: theme.brand.primary + '60', bgcolor: `${theme.brand.primary}06` },
+          }}
+        >
+          <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, whiteSpace: 'nowrap' }}>
+            下次执行
+          </Typography>
+          <Typography sx={{ fontSize: 11, fontWeight: 700, color: theme.brand.primary, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>
+            08:00
+          </Typography>
+          <Box sx={{
+            fontSize: 9, fontWeight: 700,
+            bgcolor: `${theme.brand.primary}15`, color: theme.brand.primary,
+            px: 0.5, borderRadius: '3px', lineHeight: '16px',
+          }}>
+            {enabledTaskCount}
+          </Box>
+        </Box>
       </PageHeader>
+
+      {/* ── Task Scheduler Drawer ── */}
+      {taskOpen && (
+        <Box sx={{
+          position: 'absolute', top: 44, right: 0, zIndex: 200,
+          width: 380, maxHeight: 'calc(100vh - 60px)',
+          bgcolor: theme.background.secondary,
+          border: `1px solid ${theme.border.default}`,
+          borderRadius: '0 0 0 8px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+        }}>
+          <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.border.subtle}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ fontSize: 13, fontWeight: 700, color: theme.text.primary }}>
+                定时任务
+              </Typography>
+              <Typography sx={{ fontSize: 10, color: theme.text.disabled }}>
+                每日 08:00 自动执行 · {enabledTaskCount} 个活跃
+              </Typography>
+            </Box>
+            <Typography
+              onClick={() => setTaskOpen(false)}
+              sx={{ fontSize: 16, color: theme.text.disabled, cursor: 'pointer', lineHeight: 1, '&:hover': { color: theme.text.primary } }}
+            >
+              ×
+            </Typography>
+          </Box>
+          <Box sx={{
+            flex: 1, overflow: 'auto', py: 0.5,
+            '&::-webkit-scrollbar': { width: 3 },
+            '&::-webkit-scrollbar-thumb': { bgcolor: `${theme.text.muted}18`, borderRadius: 4 },
+          }}>
+            {scheduledTasks.map(task => (
+              <Box key={task.symbol} sx={{
+                px: 2, py: 1, borderBottom: `1px solid ${theme.border.subtle}15`,
+                opacity: task.enabled ? 1 : 0.5,
+                transition: 'opacity 0.15s',
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: theme.text.primary }}>{task.symbol}</Typography>
+                    <Typography sx={{ fontSize: 10, color: theme.text.disabled }}>{task.company}</Typography>
+                  </Box>
+                  <Switch
+                    size="small"
+                    checked={task.enabled}
+                    onChange={() => toggleSchedTask(task.symbol)}
+                    sx={{
+                      width: 28, height: 16, p: 0,
+                      '& .MuiSwitch-switchBase': { p: '2px', '&.Mui-checked': { transform: 'translateX(12px)', color: '#fff' } },
+                      '& .MuiSwitch-thumb': { width: 12, height: 12 },
+                      '& .MuiSwitch-track': { borderRadius: 8, bgcolor: `${theme.text.disabled}30` },
+                      '& .Mui-checked + .MuiSwitch-track': { bgcolor: `${theme.brand.primary}60 !important` },
+                    }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {SCHED_MODELS.map(model => {
+                    const selected = task.models.includes(model);
+                    const shortName = model.split('-')[0];
+                    return (
+                      <Typography
+                        key={model}
+                        onClick={() => toggleSchedModel(task.symbol, model)}
+                        sx={{
+                          fontSize: 9, cursor: 'pointer',
+                          px: 0.75, py: 0.2, borderRadius: '10px',
+                          fontWeight: selected ? 600 : 400,
+                          color: selected ? theme.brand.primary : theme.text.disabled,
+                          bgcolor: selected ? `${theme.brand.primary}12` : 'transparent',
+                          border: `1px solid ${selected ? theme.brand.primary + '30' : theme.border.subtle}`,
+                          transition: 'all 0.15s',
+                          '&:hover': { borderColor: theme.brand.primary + '50' },
+                        }}
+                      >
+                        {shortName}
+                      </Typography>
+                    );
+                  })}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
 
       {/* ── Floating search bar ── */}
       <Box sx={{
@@ -517,7 +780,15 @@ export default function CompanyAgentPage() {
         '&:hover': { opacity: 0.85 },
         '&:focus-within': { opacity: 1, filter: 'drop-shadow(0 4px 20px rgba(0,0,0,0.3))' },
       }}>
-        <CompanyAnalysisForm onAnalyze={handleAnalyze} isRunning={false} runningCount={runningCount} elapsedMs={0} />
+        <CompanyAnalysisForm
+          onAnalyze={handleAnalyze}
+          isRunning={false}
+          runningCount={runningCount}
+          elapsedMs={0}
+          compareMode={compareMode}
+          onCompareModeChange={setCompareMode}
+          onCompare={handleCompare}
+        />
       </Box>
 
       {/* ══════════════════════════════════════════════════════
@@ -526,22 +797,104 @@ export default function CompanyAgentPage() {
           ══════════════════════════════════════════════════════ */}
       <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-        {hasSelection && hasTimeline ? (
+        {compareState ? (
+          /* ═══ LAYOUT C: Compare mode ═══ */
+          <CompareView
+            symbol={compareState.symbol}
+            models={compareState.models}
+            onClose={() => setCompareState(null)}
+          />
+        ) : hasSelection && hasTimeline ? (
           /* ═══ LAYOUT B: Detail mode — Left K-line | Right (progress + report) ═══ */
           <>
-            {/* Left 35%: K-line Chart */}
+            {/* Left 35%: Chart with mode toggle */}
             <Box sx={{
               width: '35%', flexShrink: 0,
               borderRight: `1px solid ${theme.border.subtle}`,
+              display: 'flex', flexDirection: 'column',
               position: 'relative',
             }}>
-              {chartSymbol ? (
-                <TradingViewChart symbol={chartSymbol} />
-              ) : (
-                <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Typography sx={{ fontSize: 13, color: theme.text.disabled }}>Select a symbol</Typography>
+              {/* Chart mode toggle bar */}
+              <Box sx={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                px: 1.5, py: 0.5, borderBottom: `1px solid ${theme.border.subtle}`,
+                flexShrink: 0,
+              }}>
+                <Typography sx={{ fontSize: 12, fontWeight: 700, color: theme.text.primary }}>
+                  {chartSymbol || '—'}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography sx={{ fontSize: 9, color: chartMode === 'line' ? theme.text.primary : theme.text.disabled, fontWeight: 600 }}>
+                    Line
+                  </Typography>
+                  <Switch
+                    size="small"
+                    checked={chartMode === 'kline'}
+                    onChange={(_, checked) => setChartMode(checked ? 'kline' : 'line')}
+                    sx={{
+                      width: 32, height: 18, p: 0,
+                      '& .MuiSwitch-switchBase': { p: '2px', '&.Mui-checked': { transform: 'translateX(14px)', color: '#fff' } },
+                      '& .MuiSwitch-thumb': { width: 14, height: 14 },
+                      '& .MuiSwitch-track': { borderRadius: 9, bgcolor: `${theme.text.disabled}30` },
+                      '& .Mui-checked + .MuiSwitch-track': { bgcolor: `${theme.brand.primary}60 !important` },
+                    }}
+                  />
+                  <Typography sx={{ fontSize: 9, color: chartMode === 'kline' ? theme.text.primary : theme.text.disabled, fontWeight: 600 }}>
+                    K-Line
+                  </Typography>
                 </Box>
-              )}
+              </Box>
+              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                {chartSymbol ? (
+                  chartMode === 'kline' ? (
+                    <TradingViewChart symbol={chartSymbol} />
+                  ) : (
+                    <Box sx={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      bgcolor: theme.background.secondary,
+                    }}>
+                      {priceData.length > 0 && (
+                        <Typography sx={{ fontSize: 24, fontWeight: 600, color: theme.text.primary, mb: 0.25 }}>
+                          ${priceData[priceData.length - 1].close.toFixed(2)}
+                        </Typography>
+                      )}
+                      {priceData.length > 1 && (() => {
+                        const first = priceData[0].close;
+                        const last = priceData[priceData.length - 1].close;
+                        const changePct = ((last - first) / first * 100);
+                        const positive = changePct >= 0;
+                        return (
+                          <Typography sx={{ fontSize: 12, color: positive ? '#22c55e' : '#ef4444', mb: 2 }}>
+                            {positive ? '+' : ''}{changePct.toFixed(2)}%
+                          </Typography>
+                        );
+                      })()}
+                      <Box sx={{ width: '85%', height: '40%', maxHeight: 200 }}>
+                        {priceLoading ? (
+                          <Typography sx={{ fontSize: 11, color: theme.text.disabled, textAlign: 'center', pt: 4 }}>Loading...</Typography>
+                        ) : (
+                          <SvgLineChart
+                            data={priceData}
+                            width={300}
+                            height={140}
+                            color={priceData.length > 1 && priceData[priceData.length - 1].close >= priceData[0].close ? '#22c55e' : '#ef4444'}
+                          />
+                        )}
+                      </Box>
+                      {priceData.length > 0 && (
+                        <Typography sx={{ fontSize: 9, color: theme.text.disabled, mt: 1.5 }}>
+                          {priceData[0].date} — {priceData[priceData.length - 1].date}
+                        </Typography>
+                      )}
+                    </Box>
+                  )
+                ) : (
+                  <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Typography sx={{ fontSize: 13, color: theme.text.disabled }}>Select a symbol</Typography>
+                  </Box>
+                )}
+              </Box>
             </Box>
 
             {/* Right 65%: Top progress + Report below */}
@@ -633,6 +986,7 @@ export default function CompanyAgentPage() {
                   scrollToGate={scrollToGate}
                   onScrollToGateConsumed={() => setScrollToGate(null)}
                   onActiveGateChange={(gate) => setActiveGate(gate)}
+                  analysisId={selectedId || (isViewingRunning ? viewingRun!.analysisId : null)}
                 />
 
                 {/* Judge Results — inline below report */}
@@ -695,80 +1049,265 @@ export default function CompanyAgentPage() {
         ) : (
           /* ═══ LAYOUT A: List mode — Watchlist | Chart | Screener ═══ */
           <>
-            {/* Left 10%: Watchlist */}
+            {/* Left: Watchlist / Recommendations tabs */}
             <Box sx={{
-              width: '10%', flexShrink: 0,
+              width: '15%', minWidth: 150, flexShrink: 0,
               borderRight: `1px solid ${theme.border.subtle}`,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }}>
-              <Box sx={{
-                px: 1.5, py: 0.75, flexShrink: 0,
-                borderBottom: `1px solid ${theme.border.subtle}`,
-              }}>
-                <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.disabled, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Watchlist
-                </Typography>
+              {/* Tab headers */}
+              <Box sx={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${theme.border.subtle}` }}>
+                <Box
+                  onClick={() => setLeftTab('watchlist')}
+                  sx={{
+                    flex: 1, px: 1, py: 0.75, cursor: 'pointer', textAlign: 'center',
+                    borderBottom: leftTab === 'watchlist' ? `2px solid ${theme.brand.primary}` : '2px solid transparent',
+                  }}
+                >
+                  <Typography sx={{ fontSize: 10, fontWeight: 600, color: leftTab === 'watchlist' ? theme.text.primary : theme.text.disabled, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    关注
+                  </Typography>
+                </Box>
+                <Box
+                  onClick={() => setLeftTab('recommend')}
+                  sx={{
+                    flex: 1, px: 1, py: 0.75, cursor: 'pointer', textAlign: 'center', position: 'relative',
+                    borderBottom: leftTab === 'recommend' ? `2px solid ${theme.brand.primary}` : '2px solid transparent',
+                  }}
+                >
+                  <Typography sx={{ fontSize: 10, fontWeight: 600, color: leftTab === 'recommend' ? theme.text.primary : theme.text.disabled, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    推荐
+                    {pendingCount > 0 && (
+                      <Box component="span" sx={{
+                        ml: 0.5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        minWidth: 14, height: 14, borderRadius: '7px', fontSize: 9, fontWeight: 700,
+                        bgcolor: theme.brand.primary, color: '#fff', px: 0.3, verticalAlign: 'middle',
+                      }}>
+                        {pendingCount}
+                      </Box>
+                    )}
+                  </Typography>
+                </Box>
               </Box>
+
               <Box sx={{
                 flex: 1, overflow: 'auto',
                 '&::-webkit-scrollbar': { width: 3 },
                 '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
                 '&::-webkit-scrollbar-thumb': { bgcolor: `${theme.text.muted}18`, borderRadius: 4 },
               }}>
-                {/* Deduplicated symbols */}
-                {(() => {
-                  const seen = new Set<string>();
-                  return filteredAnalyses.filter((a) => {
-                    if (seen.has(a.symbol)) return false;
-                    seen.add(a.symbol);
-                    return true;
-                  }).map((a) => {
-                    const actionColor = ACTION_COLORS[a.verdict_action] || theme.text.muted;
-                    const isActive = chartSymbol === a.symbol;
-                    return (
-                      <Box
-                        key={a.symbol}
-                        onClick={() => setWatchlistSymbol(a.symbol)}
-                        sx={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          px: 1.5, py: 0.75,
-                          cursor: 'pointer',
-                          bgcolor: isActive ? `${theme.brand.primary}08` : 'transparent',
-                          borderLeft: isActive ? `2px solid ${theme.brand.primary}` : '2px solid transparent',
-                          '&:hover': { bgcolor: `${theme.text.primary}05` },
-                        }}
-                      >
-                        <Box>
-                          <Typography sx={{ fontSize: 12, fontWeight: 700, color: theme.text.primary }}>
-                            {a.symbol}
-                          </Typography>
-                          <Typography sx={{ fontSize: 9.5, color: theme.text.disabled, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
-                            {a.company_name || ''}
-                          </Typography>
+                {leftTab === 'watchlist' ? (
+                  /* ── Watchlist tab ── */
+                  (() => {
+                    const seen = new Set<string>();
+                    const items = filteredAnalyses.filter((a) => {
+                      if (seen.has(a.symbol)) return false;
+                      seen.add(a.symbol);
+                      return true;
+                    });
+                    return items.length > 0 ? items.map((a) => {
+                      const actionColor = ACTION_COLORS[a.verdict_action] || theme.text.muted;
+                      const isActive = chartSymbol === a.symbol;
+                      return (
+                        <Box
+                          key={a.symbol}
+                          onClick={() => setWatchlistSymbol(a.symbol)}
+                          sx={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            px: 1.5, py: 1, cursor: 'pointer',
+                            borderBottom: `1px solid ${theme.border.subtle}15`,
+                            bgcolor: isActive ? `${theme.brand.primary}08` : 'transparent',
+                            '&:hover': { bgcolor: `${theme.text.primary}05` },
+                          }}
+                        >
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography sx={{ fontSize: 12, fontWeight: 700, color: theme.text.primary }}>
+                              {a.symbol}
+                            </Typography>
+                            <Typography sx={{ fontSize: 9, color: theme.text.disabled, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {a.company_name || ''}
+                            </Typography>
+                          </Box>
+                          <Box sx={{
+                            px: 0.6, py: 0.15, borderRadius: '4px',
+                            bgcolor: `${actionColor}12`, flexShrink: 0, ml: 0.5,
+                          }}>
+                            <Typography sx={{ fontSize: 9, fontWeight: 800, color: actionColor, lineHeight: 1.4 }}>
+                              {a.verdict_action}
+                            </Typography>
+                          </Box>
                         </Box>
-                        <Typography sx={{ fontSize: 10, fontWeight: 700, color: actionColor }}>
-                          {a.verdict_action}
+                      );
+                    }) : (
+                      <Box sx={{ p: 2, textAlign: 'center' }}>
+                        <Typography sx={{ fontSize: 10, color: theme.text.disabled, lineHeight: 1.6 }}>
+                          暂无关注
+                        </Typography>
+                        <Typography sx={{ fontSize: 9, color: theme.text.disabled, mt: 0.5 }}>
+                          运行分析后自动添加
                         </Typography>
                       </Box>
                     );
-                  });
-                })()}
+                  })()
+                ) : (
+                  /* ── Recommendations tab ── */
+                  recommendations.map(rec => (
+                    <Box
+                      key={rec.id}
+                      sx={{
+                        px: 1.5, py: 1, borderBottom: `1px solid ${theme.border.subtle}15`,
+                        opacity: rec.status === 'rejected' ? 0.45 : 1,
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.25 }}>
+                        <Typography sx={{
+                          fontSize: 12, fontWeight: 700, color: theme.text.primary,
+                          textDecoration: rec.status === 'rejected' ? 'line-through' : 'none',
+                        }}>
+                          {rec.symbol}
+                        </Typography>
+                        <Typography sx={{ fontSize: 9, color: theme.text.disabled }}>
+                          {rec.date}
+                        </Typography>
+                      </Box>
+                      <Typography sx={{ fontSize: 9, color: theme.text.disabled, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {rec.company} · {rec.model}
+                      </Typography>
+                      <Typography sx={{
+                        fontSize: 9.5, color: rec.status === 'rejected' ? theme.text.disabled : theme.text.muted,
+                        lineHeight: 1.5, mt: 0.4, mb: 0.5,
+                        textDecoration: rec.status === 'rejected' ? 'line-through' : 'none',
+                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                      }}>
+                        {rec.reason}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        {rec.status === 'pending' && (
+                          <>
+                            <Typography
+                              onClick={() => { handleAcceptRec(rec.id); handleAnalyze(rec.symbol); }}
+                              sx={{ fontSize: 9.5, fontWeight: 600, color: '#10b981', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+                            >
+                              采纳
+                            </Typography>
+                            <Typography sx={{ fontSize: 9, color: theme.text.disabled }}>·</Typography>
+                            <Typography
+                              onClick={() => handleRejectRec(rec.id)}
+                              sx={{ fontSize: 9.5, fontWeight: 600, color: '#ef4444', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+                            >
+                              拒绝
+                            </Typography>
+                          </>
+                        )}
+                        {rec.status === 'accepted' && (
+                          <Typography sx={{ fontSize: 9.5, fontWeight: 600, color: '#10b981' }}>已采纳</Typography>
+                        )}
+                        {rec.status === 'rejected' && (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography sx={{ fontSize: 9.5, fontWeight: 600, color: theme.text.disabled }}>已拒绝</Typography>
+                            <Typography sx={{ fontSize: 9, color: theme.text.disabled }}>·</Typography>
+                            <Typography
+                              onClick={() => handleDeleteRec(rec.id)}
+                              sx={{ fontSize: 9.5, fontWeight: 600, color: theme.text.disabled, cursor: 'pointer', '&:hover': { color: '#ef4444' } }}
+                            >
+                              删除
+                            </Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  ))
+                )}
               </Box>
             </Box>
 
-            {/* Center 45%: K-line Chart */}
+            {/* Center 45%: Chart with mode toggle */}
             <Box sx={{
               width: '45%', flexShrink: 0,
               borderRight: `1px solid ${theme.border.subtle}`,
-              position: 'relative',
+              display: 'flex', flexDirection: 'column',
             }}>
-              {chartSymbol ? (
-                <TradingViewChart symbol={chartSymbol} />
-              ) : (
-                <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Typography sx={{ fontSize: 13, color: theme.text.disabled }}>输入股票代码查看K线</Typography>
+              {/* Chart mode toggle bar */}
+              <Box sx={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                px: 1.5, py: 0.5, borderBottom: `1px solid ${theme.border.subtle}`,
+                flexShrink: 0,
+              }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 700, color: theme.text.primary }}>
+                  {chartSymbol || '—'}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography sx={{ fontSize: 9, color: chartMode === 'line' ? theme.text.primary : theme.text.disabled, fontWeight: 600 }}>
+                    Line
+                  </Typography>
+                  <Switch
+                    size="small"
+                    checked={chartMode === 'kline'}
+                    onChange={(_, checked) => setChartMode(checked ? 'kline' : 'line')}
+                    sx={{
+                      width: 32, height: 18, p: 0,
+                      '& .MuiSwitch-switchBase': { p: '2px', '&.Mui-checked': { transform: 'translateX(14px)', color: '#fff' } },
+                      '& .MuiSwitch-thumb': { width: 14, height: 14 },
+                      '& .MuiSwitch-track': { borderRadius: 9, bgcolor: `${theme.text.disabled}30` },
+                      '& .Mui-checked + .MuiSwitch-track': { bgcolor: `${theme.brand.primary}60 !important` },
+                    }}
+                  />
+                  <Typography sx={{ fontSize: 9, color: chartMode === 'kline' ? theme.text.primary : theme.text.disabled, fontWeight: 600 }}>
+                    K-Line
+                  </Typography>
                 </Box>
-              )}
+              </Box>
+              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                {chartSymbol ? (
+                  chartMode === 'kline' ? (
+                    <TradingViewChart symbol={chartSymbol} />
+                  ) : (
+                    <Box sx={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      bgcolor: theme.background.secondary,
+                    }}>
+                      {priceData.length > 0 && (
+                        <Typography sx={{ fontSize: 28, fontWeight: 600, color: theme.text.primary, mb: 0.25 }}>
+                          ${priceData[priceData.length - 1].close.toFixed(2)}
+                        </Typography>
+                      )}
+                      {priceData.length > 1 && (() => {
+                        const first = priceData[0].close;
+                        const last = priceData[priceData.length - 1].close;
+                        const changePct = ((last - first) / first * 100);
+                        const positive = changePct >= 0;
+                        return (
+                          <Typography sx={{ fontSize: 13, color: positive ? '#22c55e' : '#ef4444', mb: 2 }}>
+                            {positive ? '+' : ''}{changePct.toFixed(2)}%
+                          </Typography>
+                        );
+                      })()}
+                      <Box sx={{ width: '85%', height: '45%', maxHeight: 220 }}>
+                        {priceLoading ? (
+                          <Typography sx={{ fontSize: 11, color: theme.text.disabled, textAlign: 'center', pt: 4 }}>Loading...</Typography>
+                        ) : (
+                          <SvgLineChart
+                            data={priceData}
+                            width={400}
+                            height={160}
+                            color={priceData.length > 1 && priceData[priceData.length - 1].close >= priceData[0].close ? '#22c55e' : '#ef4444'}
+                          />
+                        )}
+                      </Box>
+                      {priceData.length > 0 && (
+                        <Typography sx={{ fontSize: 9, color: theme.text.disabled, mt: 1.5 }}>
+                          {priceData[0].date} — {priceData[priceData.length - 1].date}
+                        </Typography>
+                      )}
+                    </Box>
+                  )
+                ) : (
+                  <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Typography sx={{ fontSize: 13, color: theme.text.disabled }}>输入股票代码查看K线</Typography>
+                  </Box>
+                )}
+              </Box>
             </Box>
 
             {/* Right 45%: Analysis records */}
@@ -777,13 +1316,13 @@ export default function CompanyAgentPage() {
               {filteredAnalyses.length > 0 && (
                 <Box sx={{
                   display: 'grid',
-                  gridTemplateColumns: '48px minmax(60px,1fr) 20px 48px 44px 56px 48px 40px',
+                  gridTemplateColumns: '48px minmax(60px,1fr) 20px 48px 44px 56px 48px 40px 30px',
                   alignItems: 'center',
                   py: 0.5, px: 1,
                   borderBottom: `1px solid ${theme.border.subtle}`,
                   flexShrink: 0,
                 }}>
-                  {['Sym', 'Company', '', 'Act', 'Conv', 'Quality', 'Time', 'Date'].map((label, i) => (
+                  {['Sym', 'Company', '', 'Act', 'Conv', 'Quality', 'Time', 'Date', ''].map((label, i) => (
                     <Typography key={`${label}-${i}`} sx={{
                       fontSize: 8.5, fontWeight: 600, color: theme.text.disabled,
                       textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -815,6 +1354,7 @@ export default function CompanyAgentPage() {
           </>
         )}
       </Box>
+
     </Box>
   );
 }
