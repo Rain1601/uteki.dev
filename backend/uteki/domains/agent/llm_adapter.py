@@ -52,6 +52,7 @@ class LLMConfig:
     stop_sequences: Optional[List[str]] = None
     thinking: bool = False
     thinking_budget: int = 10000
+    json_mode: bool = False
 
 
 @dataclass
@@ -60,6 +61,14 @@ class LLMTool:
     name: str
     description: str
     parameters: Dict[str, Any]  # JSON Schema
+
+
+@dataclass
+class LLMUsage:
+    """Token usage from the last LLM call."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
 
 
 class BaseLLMAdapter(ABC):
@@ -78,6 +87,7 @@ class BaseLLMAdapter(ABC):
         self.api_key = api_key
         self.model = model
         self.config = config or LLMConfig()
+        self.last_usage: Optional[LLMUsage] = None
 
     @abstractmethod
     async def chat(
@@ -211,9 +221,13 @@ class OpenAIAdapter(BaseLLMAdapter):
             kwargs["temperature"] = self.config.temperature
             kwargs["max_tokens"] = self.config.max_tokens
 
+        if self.config.json_mode and not is_reasoning:
+            kwargs["response_format"] = {"type": "json_object"}
+
         if tools:
             kwargs["tools"] = self.convert_tools(tools)
 
+        self.last_usage = None
         response = await self.client.chat.completions.create(**kwargs)
 
         if stream:
@@ -222,7 +236,21 @@ class OpenAIAdapter(BaseLLMAdapter):
                     delta = chunk.choices[0].delta
                     if hasattr(delta, 'content') and delta.content:
                         yield delta.content
+                # Capture usage from final stream chunk (OpenAI includes it)
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    self.last_usage = LLMUsage(
+                        input_tokens=chunk.usage.prompt_tokens or 0,
+                        output_tokens=chunk.usage.completion_tokens or 0,
+                        total_tokens=chunk.usage.total_tokens or 0,
+                    )
         else:
+            # Capture usage from non-stream response
+            if hasattr(response, 'usage') and response.usage:
+                self.last_usage = LLMUsage(
+                    input_tokens=response.usage.prompt_tokens or 0,
+                    output_tokens=response.usage.completion_tokens or 0,
+                    total_tokens=response.usage.total_tokens or 0,
+                )
             if hasattr(response, 'choices') and len(response.choices) > 0:
                 msg = response.choices[0].message
                 # o-series reasoning models may include reasoning in response
@@ -303,12 +331,28 @@ class AnthropicAdapter(BaseLLMAdapter):
         if tools:
             kwargs["tools"] = self.convert_tools(tools)
 
+        self.last_usage = None
         if stream:
             async with self.client.messages.stream(**kwargs) as stream_response:
                 async for text in stream_response.text_stream:
                     yield text
+                # Capture usage from stream final message
+                final = stream_response.get_final_message()
+                if hasattr(final, 'usage') and final.usage:
+                    self.last_usage = LLMUsage(
+                        input_tokens=final.usage.input_tokens or 0,
+                        output_tokens=final.usage.output_tokens or 0,
+                        total_tokens=(final.usage.input_tokens or 0) + (final.usage.output_tokens or 0),
+                    )
         else:
             response = await self.client.messages.create(**kwargs)
+            # Capture usage
+            if hasattr(response, 'usage') and response.usage:
+                self.last_usage = LLMUsage(
+                    input_tokens=response.usage.input_tokens or 0,
+                    output_tokens=response.usage.output_tokens or 0,
+                    total_tokens=(response.usage.input_tokens or 0) + (response.usage.output_tokens or 0),
+                )
             # Extract thinking + text from response blocks
             thinking_text = ""
             output_text = ""
