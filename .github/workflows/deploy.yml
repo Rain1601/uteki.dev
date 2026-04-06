@@ -14,9 +14,40 @@ env:
   FRONTEND_SERVICE: uteki-frontend
 
 jobs:
+  test-backend:
+    name: Run Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        working-directory: backend
+        run: poetry install --no-interaction --no-root
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          ENVIRONMENT: development
+          DATABASE_TYPE: sqlite
+          SECRET_KEY: ci-test-secret-key
+        run: poetry run pytest --tb=short -q
+
   deploy-backend:
     name: Deploy Backend
     runs-on: ubuntu-latest
+    needs: test-backend
 
     steps:
       - name: Checkout code
