@@ -126,6 +126,8 @@ from uteki.domains.index.api import router as index_router
 from uteki.domains.data.api import router as data_router
 from uteki.domains.data.udf_api import router as udf_router
 from uteki.domains.company.api import router as company_router
+from uteki.domains.evaluation.api import router as evaluation_router
+from uteki.domains.notification.api import router as notification_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
@@ -142,6 +144,8 @@ app.include_router(index_router, prefix="/api/index", tags=["index"])
 app.include_router(data_router, prefix="/api/data", tags=["market-data"])
 app.include_router(udf_router, prefix="/api/udf", tags=["udf-datafeed"])
 app.include_router(company_router, prefix="/api/company", tags=["company"])
+app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])
+app.include_router(notification_router, prefix="/api/notifications", tags=["notifications"])
 
 logger.info("✅ All domain routers registered (auth, admin, agent, news, snb, index, data, company)")
 

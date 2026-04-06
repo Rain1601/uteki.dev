@@ -3,7 +3,7 @@ uteki.open - FastAPI主应用程序
 提供健康检查、数据库状态和基础API端点
 """
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
@@ -19,10 +19,59 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _register_routers(app: FastAPI):
+    """Lazy-load and register all domain routers.
+
+    Called inside lifespan so that heavy module imports don't block
+    Cloud Run startup probe (/healthz).
+    """
+    from uteki.domains.admin.api import router as admin_router
+    from uteki.domains.agent.api import router as agent_router
+    from uteki.domains.auth.api import router as auth_router
+    from uteki.domains.news.api import router as news_router
+    from uteki.domains.news.analysis_api import router as news_analysis_router
+    from uteki.domains.news.bloomberg_api import router as bloomberg_news_router
+    from uteki.domains.macro.api import router as macro_router
+    from uteki.domains.macro.fred_api import router as fred_router
+    from uteki.domains.macro.dashboard_api import router as dashboard_router
+    from uteki.domains.macro.marketcap_api import router as marketcap_router
+    from uteki.domains.snb.api import router as snb_router
+    from uteki.domains.index.api import router as index_router
+    from uteki.domains.data.api import router as data_router
+    from uteki.domains.data.udf_api import router as udf_router
+    from uteki.domains.company.api import router as company_router
+    from uteki.domains.evaluation.api import router as evaluation_router
+    from uteki.domains.notification.api import router as notification_router
+
+    app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+    app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
+    app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+    app.include_router(news_router, prefix="/api/news", tags=["news"])
+    app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
+    app.include_router(bloomberg_news_router, prefix="/api/news", tags=["bloomberg-news"])
+    app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
+    app.include_router(fred_router, prefix="/api/macro/fred", tags=["fred"])
+    app.include_router(dashboard_router, prefix="/api/macro/dashboard", tags=["market-dashboard"])
+    app.include_router(marketcap_router, prefix="/api/macro/marketcap", tags=["marketcap"])
+    app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
+    app.include_router(index_router, prefix="/api/index", tags=["index"])
+    app.include_router(data_router, prefix="/api/data", tags=["market-data"])
+    app.include_router(udf_router, prefix="/api/udf", tags=["udf-datafeed"])
+    app.include_router(company_router, prefix="/api/company", tags=["company"])
+    app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])
+    app.include_router(notification_router, prefix="/api/notifications", tags=["notifications"])
+
+    logger.info("All domain routers registered")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("Application starting...")
+
+    # Register routers lazily — heavy imports happen here, after /healthz is already live
+    _register_routers(app)
+
     # Database initialization happens in background to avoid blocking Cloud Run startup
     import asyncio
     asyncio.create_task(initialize_databases())
@@ -216,9 +265,7 @@ async def api_status():
 
     features = {
         "admin": critical_dbs_ok,
-        "trading": critical_dbs_ok,
         "agent": critical_dbs_ok,
-        "dashboard": critical_dbs_ok,
         "analytics": db_manager.clickhouse_available or db_manager.use_postgres_for_analytics,
         "agent_memory": db_manager.qdrant_available,
         "file_storage": db_manager.minio_available
@@ -235,47 +282,6 @@ async def api_status():
             ] if msg
         ]
     }
-
-
-# 导入domain路由
-from uteki.domains.admin.api import router as admin_router
-from uteki.domains.agent.api import router as agent_router
-from uteki.domains.auth.api import router as auth_router
-from uteki.domains.news.api import router as news_router
-from uteki.domains.news.analysis_api import router as news_analysis_router
-from uteki.domains.news.bloomberg_api import router as bloomberg_news_router
-from uteki.domains.macro.api import router as macro_router
-from uteki.domains.macro.fred_api import router as fred_router
-from uteki.domains.macro.dashboard_api import router as dashboard_router
-from uteki.domains.macro.marketcap_api import router as marketcap_router
-from uteki.domains.snb.api import router as snb_router
-from uteki.domains.index.api import router as index_router
-from uteki.domains.data.api import router as data_router
-from uteki.domains.data.udf_api import router as udf_router
-from uteki.domains.company.api import router as company_router
-# from uteki.domains.trading.api import router as trading_router  # 待实现
-from uteki.domains.evaluation.api import router as evaluation_router
-# from uteki.domains.dashboard.api import router as dashboard_router  # 待实现
-
-# 注册domain路由
-app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
-app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
-app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
-app.include_router(news_router, prefix="/api/news", tags=["news"])
-app.include_router(news_analysis_router, prefix="/api/news-analysis", tags=["news-analysis"])
-app.include_router(bloomberg_news_router, prefix="/api/news", tags=["bloomberg-news"])
-app.include_router(macro_router, prefix="/api/economic-calendar", tags=["economic-calendar"])
-app.include_router(fred_router, prefix="/api/macro/fred", tags=["fred"])
-app.include_router(dashboard_router, prefix="/api/macro/dashboard", tags=["market-dashboard"])
-app.include_router(marketcap_router, prefix="/api/macro/marketcap", tags=["marketcap"])
-app.include_router(snb_router, prefix="/api/snb", tags=["snb"])
-app.include_router(index_router, prefix="/api/index", tags=["index"])
-app.include_router(data_router, prefix="/api/data", tags=["market-data"])
-app.include_router(udf_router, prefix="/api/udf", tags=["udf-datafeed"])
-app.include_router(company_router, prefix="/api/company", tags=["company"])
-# app.include_router(trading_router, prefix="/api/trading", tags=["trading"])  # 待实现
-app.include_router(evaluation_router, prefix="/api/evaluation", tags=["evaluation"])
-# app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])  # 待实现
 
 
 if __name__ == "__main__":
