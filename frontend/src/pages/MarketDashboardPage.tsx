@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Box, Typography, IconButton } from '@mui/material';
 import { RefreshCw as RefreshIcon } from 'lucide-react';
 
-const AssetsTreemap = lazy(() => import('../components/macro/AssetsTreemap'));
 const TradingViewHeatmap = lazy(() => import('../components/macro/TradingViewHeatmap'));
 import {
   ResponsiveContainer,
@@ -46,6 +45,11 @@ const CAT_META: Record<string, { label: string; question: string; hero: string }
 };
 const CAT_ORDER = ['valuation', 'liquidity', 'flow'];
 
+const VIEWS = [
+  { key: 'charts', label: 'Charts' },
+  { key: 'heatmap', label: 'Heatmap' },
+] as const;
+
 const HEATMAP_SOURCES = [
   { key: 'SPX500', label: 'S&P 500' },
   { key: 'NASDAQ100', label: 'NASDAQ 100' },
@@ -69,70 +73,9 @@ function fmtChg(v: number | null | undefined): string {
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
 }
 
-/* ═══════════════════ Left Panel Components ═══════════════════ */
+/* ═══════════════════ Sparkline ═══════════════════ */
 
-function LeftCategoryGroup({ cat, theme, isDark, selected, onSelect }: {
-  cat: CategoryData; theme: any; isDark: boolean; selected: boolean; onSelect: () => void;
-}) {
-  const s = SIG[cat.signal];
-  const meta = CAT_META[cat.category];
-
-  return (
-    <Box sx={{ mb: 0.5 }}>
-      {/* Category header */}
-      <Box
-        onClick={onSelect}
-        sx={{
-          display: 'flex', alignItems: 'center', gap: 0.75,
-          p: '8px 12px', cursor: 'pointer', borderRadius: 1,
-          bgcolor: selected ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
-          '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
-          transition: 'background 0.15s',
-        }}
-      >
-        <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: s.color, flexShrink: 0 }} />
-        <Typography sx={{ fontSize: 11, fontWeight: 700, color: theme.text.primary, textTransform: 'uppercase', letterSpacing: '0.8px', flex: 1 }}>
-          {meta.label}
-        </Typography>
-        <Box sx={{ px: 0.6, py: 0.15, borderRadius: 0.5, bgcolor: s.bg }}>
-          <Typography sx={{ fontSize: 8, fontWeight: 700, color: s.color, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            {cat.signal_label}
-          </Typography>
-        </Box>
-      </Box>
-
-      {/* Indicator rows — only show when selected */}
-      {selected && cat.indicators.map(ind => {
-        const is = SIG[ind.signal];
-        return (
-          <Box key={ind.id} sx={{
-            display: 'flex', alignItems: 'center', gap: 0.75,
-            p: '5px 12px 5px 24px',
-            '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)' },
-          }}>
-            <Box sx={{ width: 3, height: 3, borderRadius: '50%', bgcolor: is.color, flexShrink: 0, opacity: 0.7 }} />
-            <Typography noWrap sx={{ fontSize: 11, color: theme.text.muted, flex: 1, lineHeight: 1.3 }}>
-              {ind.name}
-            </Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 600, color: theme.text.primary, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-              {fmtVal(ind.value, ind.unit)}
-            </Typography>
-            {ind.change_pct != null && (
-              <Typography sx={{ fontSize: 9, fontWeight: 600, color: ind.change_pct >= 0 ? SIG.green.color : SIG.red.color, flexShrink: 0, width: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {fmtChg(ind.change_pct)}
-              </Typography>
-            )}
-          </Box>
-        );
-      })}
-    </Box>
-  );
-}
-
-/* ═══════════════════ Right Panel Components ═══════════════════ */
-
-/* ─── Sparkline area chart ─── */
-function SparkArea({ data, color, height = 120 }: { data: HistoryPoint[]; color: string; height?: number }) {
+function SparkArea({ data, color, height = 100 }: { data: HistoryPoint[]; color: string; height?: number }) {
   if (!data || data.length < 3) return null;
   return (
     <Box sx={{ width: '100%', height }}>
@@ -140,8 +83,8 @@ function SparkArea({ data, color, height = 120 }: { data: HistoryPoint[]; color:
         <AreaChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id={`grad-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.2} />
-              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.03} />
             </linearGradient>
           </defs>
           <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#475569' }} tickFormatter={(v: string) => v.slice(5)} interval="preserveStartEnd" axisLine={false} tickLine={false} />
@@ -151,29 +94,104 @@ function SparkArea({ data, color, height = 120 }: { data: HistoryPoint[]; color:
             labelStyle={{ color: '#94a3b8', fontSize: 10 }}
             formatter={(v: number) => [v.toLocaleString(), '']}
           />
-          <Area type="monotone" dataKey="value" stroke={color} strokeWidth={1.5} fill={`url(#grad-${color.replace('#', '')})`} dot={false} />
+          <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2} fill={`url(#grad-${color.replace('#', '')})`} dot={false} />
         </AreaChart>
       </ResponsiveContainer>
     </Box>
   );
 }
 
-/* ─── Chart card ─── */
+/* ═══════════════════ Signal Card (top row) ═══════════════════ */
+
+function SignalCard({ cat, theme, isDark, active, onClick }: {
+  cat: CategoryData; theme: any; isDark: boolean; active: boolean; onClick: () => void;
+}) {
+  const s = SIG[cat.signal];
+  const meta = CAT_META[cat.category];
+  const hero = cat.indicators.find(i => i.id === meta.hero) || cat.indicators[0];
+
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        flex: 1, minWidth: 0, cursor: 'pointer',
+        p: '12px 16px', borderRadius: '10px',
+        bgcolor: active
+          ? (isDark ? `${s.color}10` : `${s.color}08`)
+          : (isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.015)'),
+        border: `1px solid ${active ? s.color + '30' : isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+        transition: 'all 0.2s',
+        '&:hover': { bgcolor: isDark ? `${s.color}0c` : `${s.color}06`, borderColor: s.color + '20' },
+      }}
+    >
+      {/* Header row */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.75 }}>
+        <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: s.color, flexShrink: 0 }} />
+        <Typography sx={{ fontSize: 10, fontWeight: 700, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+          {meta.label}
+        </Typography>
+        <Box sx={{ ml: 'auto', px: 0.6, py: 0.15, borderRadius: '4px', bgcolor: s.bg }}>
+          <Typography sx={{ fontSize: 8, fontWeight: 700, color: s.color, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+            {cat.signal_label}
+          </Typography>
+        </Box>
+      </Box>
+      {/* Hero value */}
+      {hero && (
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+          <Typography sx={{ fontSize: 20, fontWeight: 700, color: theme.text.primary, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.5px', lineHeight: 1.2 }}>
+            {fmtVal(hero.value, hero.unit)}
+          </Typography>
+          {hero.change_pct != null && (
+            <Typography sx={{ fontSize: 10, fontWeight: 600, color: hero.change_pct >= 0 ? SIG.green.color : SIG.red.color, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtChg(hero.change_pct)}
+            </Typography>
+          )}
+        </Box>
+      )}
+      {/* Sub-indicators (compact) */}
+      <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: '1px' }}>
+        {cat.indicators.slice(0, 4).map(ind => {
+          const ic = SIG[ind.signal];
+          return (
+            <Box key={ind.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Box sx={{ width: 3, height: 3, borderRadius: '50%', bgcolor: ic.color, flexShrink: 0, opacity: 0.6 }} />
+              <Typography noWrap sx={{ fontSize: 10, color: theme.text.muted, flex: 1, lineHeight: 1.5 }}>
+                {ind.name}
+              </Typography>
+              <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.secondary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                {fmtVal(ind.value, ind.unit)}
+              </Typography>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
+/* ═══════════════════ Chart Card ═══════════════════ */
+
 function ChartCard({ ind, theme, isDark }: { ind: Indicator; theme: any; isDark: boolean }) {
   const s = SIG[ind.signal];
   return (
     <Box sx={{
-      p: 1.5, borderRadius: 1.5,
+      p: '12px 14px', borderRadius: '8px',
       bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
       border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
       height: '100%', display: 'flex', flexDirection: 'column',
+      transition: 'border-color 0.15s',
+      '&:hover': { borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)' },
     }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography noWrap sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          {ind.name}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: s.color, flexShrink: 0 }} />
+          <Typography noWrap sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+            {ind.name}
+          </Typography>
+        </Box>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: theme.text.primary, fontVariantNumeric: 'tabular-nums' }}>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: theme.text.primary, fontVariantNumeric: 'tabular-nums' }}>
             {fmtVal(ind.value, ind.unit)}
           </Typography>
           {ind.change_pct != null && (
@@ -185,10 +203,10 @@ function ChartCard({ ind, theme, isDark }: { ind: Indicator; theme: any; isDark:
       </Box>
       <Box sx={{ flex: 1, minHeight: 0 }}>
         {ind.history && ind.history.length > 3 ? (
-          <SparkArea data={ind.history} color={s.color} height={120} />
+          <SparkArea data={ind.history} color={s.color} height={100} />
         ) : (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-            <Typography sx={{ fontSize: 11, color: theme.text.muted }}>No history</Typography>
+            <Typography sx={{ fontSize: 10, color: theme.text.disabled }}>No history</Typography>
           </Box>
         )}
       </Box>
@@ -196,34 +214,35 @@ function ChartCard({ ind, theme, isDark }: { ind: Indicator; theme: any; isDark:
   );
 }
 
-/* ─── Sector bars ─── */
+/* ═══════════════════ Sector Bars ═══════════════════ */
+
 function SectorBars({ sectors, theme, isDark }: { sectors: SectorETF[]; theme: any; isDark: boolean }) {
   if (!sectors?.length) return null;
   const sorted = [...sectors].sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0));
   const maxAbs = Math.max(...sorted.map(s => Math.abs(s.change_pct ?? 0)), 0.01);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
       {sorted.map(s => {
         const pct = s.change_pct ?? 0;
         const positive = pct >= 0;
         const barW = Math.max((Math.abs(pct) / maxAbs) * 50, 2);
         const c = positive ? SIG.green.color : SIG.red.color;
         return (
-          <Box key={s.symbol} sx={{ display: 'flex', alignItems: 'center', height: 18 }}>
-            <Typography sx={{ fontSize: 10, fontWeight: 500, color: theme.text.muted, width: 32, textAlign: 'right', flexShrink: 0 }}>
+          <Box key={s.symbol} sx={{ display: 'flex', alignItems: 'center', height: 20 }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 500, color: theme.text.muted, width: 36, textAlign: 'right', flexShrink: 0 }}>
               {s.symbol}
             </Typography>
-            <Box sx={{ flex: 1, position: 'relative', height: 10, mx: 0.75 }}>
-              <Box sx={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }} />
+            <Box sx={{ flex: 1, position: 'relative', height: 12, mx: 1 }}>
+              <Box sx={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, bgcolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)' }} />
               <Box sx={{
                 position: 'absolute', top: 1, bottom: 1,
                 ...(positive ? { left: '50%', width: `${barW}%` } : { right: '50%', width: `${barW}%` }),
-                borderRadius: positive ? '0 2px 2px 0' : '2px 0 0 2px',
-                bgcolor: `${c}40`, transition: 'width 0.3s',
+                borderRadius: positive ? '0 3px 3px 0' : '3px 0 0 3px',
+                bgcolor: `${c}88`, transition: 'width 0.3s',
               }} />
             </Box>
-            <Typography sx={{ fontSize: 10, fontWeight: 600, color: c, width: 46, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 600, color: c, width: 50, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
               {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
             </Typography>
           </Box>
@@ -233,7 +252,8 @@ function SectorBars({ sectors, theme, isDark }: { sectors: SectorETF[]; theme: a
   );
 }
 
-/* ─── Style comparison ─── */
+/* ═══════════════════ Style Comparison Row ═══════════════════ */
+
 function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; isDark: boolean }) {
   const a = comp.a.change_pct ?? 0;
   const b = comp.b.change_pct ?? 0;
@@ -243,8 +263,8 @@ function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; 
   const bWins = b > a;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, py: 0.4 }}>
-      <Box sx={{ width: 80, textAlign: 'right', flexShrink: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
+      <Box sx={{ width: 90, textAlign: 'right', flexShrink: 0 }}>
         <Typography noWrap sx={{ fontSize: 10, fontWeight: aWins ? 600 : 400, color: aWins ? theme.text.primary : theme.text.muted, lineHeight: 1.2 }}>
           {comp.a.name}
         </Typography>
@@ -252,11 +272,11 @@ function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; 
           {a >= 0 ? '+' : ''}{a.toFixed(2)}%
         </Typography>
       </Box>
-      <Box sx={{ flex: 1, height: 5, borderRadius: 3, display: 'flex', overflow: 'hidden', bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
-        <Box sx={{ width: `${aRatio}%`, height: '100%', bgcolor: aWins ? `${a >= 0 ? SIG.green.color : SIG.red.color}50` : 'transparent', transition: 'width 0.3s' }} />
-        <Box sx={{ width: `${100 - aRatio}%`, height: '100%', bgcolor: bWins ? `${b >= 0 ? SIG.green.color : SIG.red.color}50` : 'transparent', transition: 'width 0.3s' }} />
+      <Box sx={{ flex: 1, height: 8, borderRadius: 4, display: 'flex', overflow: 'hidden', bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }}>
+        <Box sx={{ width: `${aRatio}%`, height: '100%', bgcolor: aWins ? `${a >= 0 ? SIG.green.color : SIG.red.color}70` : 'transparent', transition: 'width 0.3s' }} />
+        <Box sx={{ width: `${100 - aRatio}%`, height: '100%', bgcolor: bWins ? `${b >= 0 ? SIG.green.color : SIG.red.color}70` : 'transparent', transition: 'width 0.3s' }} />
       </Box>
-      <Box sx={{ width: 80, textAlign: 'left', flexShrink: 0 }}>
+      <Box sx={{ width: 90, textAlign: 'left', flexShrink: 0 }}>
         <Typography noWrap sx={{ fontSize: 10, fontWeight: bWins ? 600 : 400, color: bWins ? theme.text.primary : theme.text.muted, lineHeight: 1.2 }}>
           {comp.b.name}
         </Typography>
@@ -268,120 +288,138 @@ function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; 
   );
 }
 
-/* ─── Right panel: Valuation / Liquidity detail ─── */
+/* ═══════════════════ Stat Card (no history) ═══════════════════ */
+
+function StatCard({ ind, theme, isDark }: { ind: Indicator; theme: any; isDark: boolean }) {
+  const s = SIG[ind.signal];
+  return (
+    <Box sx={{
+      p: '12px 14px', borderRadius: '8px',
+      bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
+      border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+      height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+      transition: 'border-color 0.15s',
+      '&:hover': { borderColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)' },
+    }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+        <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: s.color, flexShrink: 0 }} />
+        <Typography noWrap sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+          {ind.name}
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+        <Typography sx={{ fontSize: 22, fontWeight: 700, color: theme.text.primary, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.5px' }}>
+          {fmtVal(ind.value, ind.unit)}
+        </Typography>
+        {ind.change_pct != null && (
+          <Typography sx={{ fontSize: 11, fontWeight: 600, color: ind.change_pct >= 0 ? SIG.green.color : SIG.red.color, fontVariantNumeric: 'tabular-nums' }}>
+            {fmtChg(ind.change_pct)}
+          </Typography>
+        )}
+      </Box>
+      {ind.description && (
+        <Typography sx={{ fontSize: 9, color: theme.text.disabled, mt: 0.5, lineHeight: 1.3 }}>
+          {ind.description}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/* ═══════════════════ Detail Panel: Charts ═══════════════════ */
+
 function DetailChartsPanel({ category, indicators, theme, isDark, loading }: {
   category: string; indicators: Indicator[]; theme: any; isDark: boolean; loading: boolean;
 }) {
   const meta = CAT_META[category];
-  const s = SIG[indicators[0]?.signal || 'neutral'];
 
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
         <LoadingDots text="Loading charts" fontSize={12} />
       </Box>
     );
   }
 
-  const charted = indicators.filter(i => i.history && i.history.length > 3);
-  if (!charted.length) {
+  if (!indicators.length) {
     return (
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Typography sx={{ fontSize: 13, color: theme.text.muted }}>No historical data available</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
+        <Typography sx={{ fontSize: 12, color: theme.text.muted }}>No historical data available</Typography>
       </Box>
     );
   }
 
+  const charted = indicators.filter(i => i.history && i.history.length > 3);
+  const statOnly = indicators.filter(i => !i.history || i.history.length <= 3);
+  const totalCards = charted.length + statOnly.length;
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Title */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
-        <Box sx={{ width: 3, height: 14, borderRadius: 1, bgcolor: s.color }} />
-        <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary }}>
-          {meta.label} — Historical Trends
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+        <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.text.primary }}>
+          {meta.label} Trends
         </Typography>
-        <Typography sx={{ fontSize: 11, color: theme.text.muted, ml: 'auto' }}>
+        <Typography sx={{ fontSize: 10, color: theme.text.disabled, fontStyle: 'italic' }}>
           {meta.question}
         </Typography>
       </Box>
-      {/* Charts grid */}
       <Box sx={{
-        flex: 1, minHeight: 0,
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+        gridTemplateColumns: totalCards <= 2 ? `repeat(${totalCards}, minmax(220px, 340px))` : 'repeat(auto-fill, minmax(220px, 1fr))',
         gap: 1.5,
         alignContent: 'start',
-        overflowY: 'auto',
-        '&::-webkit-scrollbar': { width: 4 },
-        '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', borderRadius: 2 },
       }}>
         {charted.map(ind => (
           <ChartCard key={ind.id} ind={ind} theme={theme} isDark={isDark} />
+        ))}
+        {statOnly.map(ind => (
+          <StatCard key={ind.id} ind={ind} theme={theme} isDark={isDark} />
         ))}
       </Box>
     </Box>
   );
 }
 
-/* ─── Right panel: Flow detail ─── */
-function FlowPanel({ flowData, cat, theme, isDark }: {
-  flowData: FlowData | null; cat: CategoryData; theme: any; isDark: boolean;
+/* ═══════════════════ Detail Panel: Flow ═══════════════════ */
+
+function FlowPanel({ flowData, theme, isDark }: {
+  flowData: FlowData | null; theme: any; isDark: boolean;
 }) {
-  const s = SIG[cat.signal];
-
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Title */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
-        <Box sx={{ width: 3, height: 14, borderRadius: 1, bgcolor: s.color }} />
-        <Typography sx={{ fontSize: 13, fontWeight: 600, color: theme.text.primary }}>
-          Money Flow — Overview
-        </Typography>
-        <Typography sx={{ fontSize: 11, color: theme.text.muted, ml: 'auto' }}>
-          Where is money flowing?
-        </Typography>
-      </Box>
-
-      <Box sx={{
-        flex: 1, minHeight: 0, overflowY: 'auto',
-        display: 'flex', flexDirection: 'column', gap: 2.5,
-        '&::-webkit-scrollbar': { width: 4 },
-        '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', borderRadius: 2 },
-      }}>
-        {/* Sector Performance */}
-        {flowData && flowData.sectors.length > 0 && (
-          <Box>
-            <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.8px', mb: 1 }}>
-              Sector Performance
-            </Typography>
-            <Box sx={{
-              p: 1.5, borderRadius: 1.5,
-              bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
-              border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
-            }}>
-              <SectorBars sectors={flowData.sectors} theme={theme} isDark={isDark} />
-            </Box>
+    <Box sx={{ display: 'grid', gridTemplateColumns: flowData && flowData.style_comparisons.length > 0 ? '1fr 1fr' : '1fr', gap: 2 }}>
+      {/* Sector Performance */}
+      {flowData && flowData.sectors.length > 0 && (
+        <Box>
+          <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.8px', mb: 1 }}>
+            Sector Performance
+          </Typography>
+          <Box sx={{
+            p: 1.5, borderRadius: '8px',
+            bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+          }}>
+            <SectorBars sectors={flowData.sectors} theme={theme} isDark={isDark} />
           </Box>
-        )}
+        </Box>
+      )}
 
-        {/* Style Rotation */}
-        {flowData && flowData.style_comparisons.length > 0 && (
-          <Box>
-            <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.8px', mb: 1 }}>
-              Style Rotation
-            </Typography>
-            <Box sx={{
-              p: 1.5, borderRadius: 1.5,
-              bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
-              border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
-            }}>
-              {flowData.style_comparisons.map(sc => (
-                <StyleRow key={sc.label} comp={sc} theme={theme} isDark={isDark} />
-              ))}
-            </Box>
+      {/* Style Rotation */}
+      {flowData && flowData.style_comparisons.length > 0 && (
+        <Box>
+          <Typography sx={{ fontSize: 10, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.8px', mb: 1 }}>
+            Style Rotation
+          </Typography>
+          <Box sx={{
+            p: 1.5, borderRadius: '8px',
+            bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+          }}>
+            {flowData.style_comparisons.map(sc => (
+              <StyleRow key={sc.label} comp={sc} theme={theme} isDark={isDark} />
+            ))}
           </Box>
-        )}
-      </Box>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -400,7 +438,7 @@ export default function MarketDashboardPage() {
   const [selected, setSelected] = useState<string>('valuation');
   const [detailData, setDetailData] = useState<Record<string, Indicator[]>>({});
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
-  const [activeView, setActiveView] = useState<'charts' | 'treemap' | 'heatmap'>('charts');
+  const [activeView, setActiveView] = useState<'charts' | 'heatmap'>('charts');
   const [heatmapSource, setHeatmapSource] = useState('SPX500');
 
   const fetchAll = useCallback(async () => {
@@ -418,7 +456,6 @@ export default function MarketDashboardPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Auto-fetch detail when selecting a category
   const selectCategory = useCallback(async (cat: string) => {
     setSelected(cat);
     setActiveView('charts');
@@ -434,7 +471,6 @@ export default function MarketDashboardPage() {
     }
   }, [detailData]);
 
-  // Preload first category detail
   useEffect(() => {
     if (!loading && categories.length > 0 && !detailData['valuation']) {
       selectCategory('valuation');
@@ -459,8 +495,6 @@ export default function MarketDashboardPage() {
     );
   }
 
-  const LEFT_W = 280;
-
   return (
     <Box sx={{
       height: isCompact ? 'calc(100vh - 48px)' : '100vh',
@@ -469,154 +503,93 @@ export default function MarketDashboardPage() {
       m: isCompact ? -2 : -3,
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
-      {/* ─── Top bar ─── */}
+      {/* ─── Header ─── */}
       <Box sx={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        px: 2.5, py: 1.5, flexShrink: 0,
+        display: 'grid', gridTemplateColumns: '1fr auto 1fr',
+        alignItems: 'center',
+        px: 2.5, py: 1.25, flexShrink: 0,
         borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
       }}>
-        <Box>
-          <Typography sx={{ fontSize: 16, fontWeight: 700, color: theme.text.primary, letterSpacing: '-0.2px' }}>
-            Market Dashboard
-          </Typography>
+        <Typography sx={{ fontSize: 15, fontWeight: 700, color: theme.text.primary, letterSpacing: '-0.3px' }}>
+          Market Dashboard
+        </Typography>
+
+        {/* View tabs — centered */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          {VIEWS.map(v => (
+            <Box
+              key={v.key}
+              onClick={() => setActiveView(v.key as any)}
+              sx={{
+                px: 1.25, py: 0.4, borderRadius: '6px', cursor: 'pointer',
+                bgcolor: activeView === v.key ? (isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)') : 'transparent',
+                transition: 'all 0.12s',
+                '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)' },
+              }}
+            >
+              <Typography sx={{ fontSize: 11, fontWeight: activeView === v.key ? 700 : 500, color: activeView === v.key ? theme.text.primary : theme.text.muted }}>
+                {v.label}
+              </Typography>
+            </Box>
+          ))}
+
+          {/* Heatmap source pills — inline, only when heatmap active */}
+          {activeView === 'heatmap' && (
+            <>
+              <Box sx={{ width: 1, height: 14, bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', mx: 0.75 }} />
+              {HEATMAP_SOURCES.map(s => (
+                <Box
+                  key={s.key}
+                  onClick={() => setHeatmapSource(s.key)}
+                  sx={{
+                    px: 1, py: 0.3, borderRadius: '6px', cursor: 'pointer',
+                    bgcolor: heatmapSource === s.key ? (isDark ? 'rgba(96,165,250,0.15)' : 'rgba(59,130,246,0.10)') : 'transparent',
+                    transition: 'all 0.12s',
+                    '&:hover': { bgcolor: isDark ? 'rgba(96,165,250,0.08)' : 'rgba(59,130,246,0.06)' },
+                  }}
+                >
+                  <Typography sx={{ fontSize: 10, fontWeight: heatmapSource === s.key ? 600 : 400, color: heatmapSource === s.key ? '#60a5fa' : theme.text.muted }}>
+                    {s.label}
+                  </Typography>
+                </Box>
+              ))}
+            </>
+          )}
         </Box>
 
-        {/* 3 signal pills */}
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-          {sortedCats.map(cat => {
-            const s = SIG[cat.signal];
-            const meta = CAT_META[cat.category];
-            const hero = cat.indicators.find(i => i.id === meta.hero) || cat.indicators[0];
-            const isActive = selected === cat.category;
-            return (
-              <Box
-                key={cat.category}
-                onClick={() => selectCategory(cat.category)}
-                sx={{
-                  display: 'flex', alignItems: 'center', gap: 0.75,
-                  px: 1.5, py: 0.6, borderRadius: 1, cursor: 'pointer',
-                  bgcolor: isActive ? s.bg : 'transparent',
-                  border: `1px solid ${isActive ? s.color + '30' : 'transparent'}`,
-                  transition: 'all 0.15s',
-                  '&:hover': { bgcolor: s.bg },
-                }}
-              >
-                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: s.color, flexShrink: 0 }} />
-                <Typography sx={{ fontSize: 11, fontWeight: 600, color: isActive ? theme.text.primary : theme.text.muted }}>
-                  {meta.label}
-                </Typography>
-                {hero && (
-                  <Typography sx={{ fontSize: 11, fontWeight: 700, color: theme.text.primary, fontVariantNumeric: 'tabular-nums' }}>
-                    {fmtVal(hero.value, hero.unit)}
-                  </Typography>
-                )}
-              </Box>
-            );
-          })}
-
-          <IconButton onClick={fetchAll} size="small" sx={{ color: theme.text.muted, ml: 0.5, '&:hover': { color: theme.text.primary } }}>
-            <RefreshIcon size={16} />
+        {/* Right: refresh button */}
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <IconButton onClick={fetchAll} size="small" sx={{ color: theme.text.muted, '&:hover': { color: theme.text.primary } }}>
+            <RefreshIcon size={15} />
           </IconButton>
         </Box>
       </Box>
 
-      {/* ─── Body: left list + right detail ─── */}
-      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
-
-        {/* LEFT PANEL */}
-        <Box sx={{
-          width: LEFT_W, flexShrink: 0,
-          borderRight: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
-          overflowY: 'auto', py: 0.5,
-          '&::-webkit-scrollbar': { width: 3 },
-          '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', borderRadius: 2 },
-        }}>
-          {/* ── Charts nav ── */}
-          <Box
-            onClick={() => setActiveView('charts')}
-            sx={{
-              display: 'flex', alignItems: 'center',
-              p: '8px 12px', cursor: 'pointer',
-              borderLeft: activeView === 'charts' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
-              bgcolor: activeView === 'charts' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
-              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
-              transition: 'all 0.15s',
-            }}
-          >
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'charts' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Charts
-            </Typography>
-          </Box>
-          {activeView === 'charts' && sortedCats.map(cat => (
-            <LeftCategoryGroup
-              key={cat.category}
-              cat={cat}
-              theme={theme}
-              isDark={isDark}
-              selected={selected === cat.category}
-              onSelect={() => selectCategory(cat.category)}
-            />
-          ))}
-
-          {/* ── Treemap nav ── */}
-          <Box
-            onClick={() => setActiveView('treemap')}
-            sx={{
-              display: 'flex', alignItems: 'center',
-              p: '8px 12px', cursor: 'pointer',
-              borderLeft: activeView === 'treemap' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
-              bgcolor: activeView === 'treemap' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
-              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
-              transition: 'all 0.15s',
-            }}
-          >
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'treemap' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Treemap
-            </Typography>
-          </Box>
-
-          {/* ── Heatmap nav ── */}
-          <Box
-            onClick={() => setActiveView('heatmap')}
-            sx={{
-              display: 'flex', alignItems: 'center',
-              p: '8px 12px', cursor: 'pointer',
-              borderLeft: activeView === 'heatmap' ? `2px solid ${isDark ? '#60a5fa' : '#3b82f6'}` : '2px solid transparent',
-              bgcolor: activeView === 'heatmap' ? (isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.04)') : 'transparent',
-              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' },
-              transition: 'all 0.15s',
-            }}
-          >
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: activeView === 'heatmap' ? theme.text.primary : theme.text.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Heatmap
-            </Typography>
-          </Box>
-          {activeView === 'heatmap' && HEATMAP_SOURCES.map(s => (
-            <Box
-              key={s.key}
-              onClick={() => setHeatmapSource(s.key)}
-              sx={{
-                display: 'flex', alignItems: 'center', gap: 0.75,
-                p: '6px 12px 6px 24px', cursor: 'pointer',
-                bgcolor: heatmapSource === s.key ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
-                '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' },
-                transition: 'background 0.15s',
-              }}
-            >
-              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: heatmapSource === s.key ? (isDark ? '#60a5fa' : '#3b82f6') : theme.text.muted, flexShrink: 0, opacity: heatmapSource === s.key ? 1 : 0.5 }} />
-              <Typography sx={{ fontSize: 11, fontWeight: heatmapSource === s.key ? 600 : 400, color: heatmapSource === s.key ? theme.text.primary : theme.text.muted }}>
-                {s.label}
-              </Typography>
+      {/* ─── Content ─── */}
+      <Box sx={{
+        flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2,
+        '&::-webkit-scrollbar': { width: 4 },
+        '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+        '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)', borderRadius: 4 },
+      }}>
+        {activeView === 'charts' && (
+          <>
+            {/* ── Signal overview cards ── */}
+            <Box sx={{ display: 'flex', gap: 1.5, mb: 2.5 }}>
+              {sortedCats.map(cat => (
+                <SignalCard
+                  key={cat.category}
+                  cat={cat}
+                  theme={theme}
+                  isDark={isDark}
+                  active={selected === cat.category}
+                  onClick={() => selectCategory(cat.category)}
+                />
+              ))}
             </Box>
-          ))}
-        </Box>
 
-        {/* RIGHT PANEL */}
-        <Box sx={{ flex: 1, minWidth: 0, p: 2, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {activeView === 'charts' && (
-            selected === 'flow' && selectedCat ? (
-              <FlowPanel flowData={flowData} cat={selectedCat} theme={theme} isDark={isDark} />
-            ) : (
+            {/* ── Detail charts ── */}
+            {selected !== 'flow' && (
               <DetailChartsPanel
                 category={selected}
                 indicators={detailData[selected] || []}
@@ -624,19 +597,24 @@ export default function MarketDashboardPage() {
                 isDark={isDark}
                 loading={detailLoading[selected] || false}
               />
-            )
-          )}
-          {activeView === 'treemap' && (
-            <Suspense fallback={<LoadingDots text="Loading" fontSize={12} />}>
-              <AssetsTreemap theme={theme} isDark={isDark} />
-            </Suspense>
-          )}
-          {activeView === 'heatmap' && (
-            <Suspense fallback={<LoadingDots text="Loading" fontSize={12} />}>
+            )}
+
+            {/* ── Flow data (sectors + style) — always visible ── */}
+            {flowData && (flowData.sectors.length > 0 || flowData.style_comparisons.length > 0) && (
+              <Box sx={{ mt: selected === 'flow' ? 0 : 2.5 }}>
+                <FlowPanel flowData={flowData} theme={theme} isDark={isDark} />
+              </Box>
+            )}
+          </>
+        )}
+
+        {activeView === 'heatmap' && (
+          <Suspense fallback={<LoadingDots text="Loading" fontSize={12} />}>
+            <Box sx={{ height: 'calc(100vh - 140px)' }}>
               <TradingViewHeatmap theme={theme} isDark={isDark} source={heatmapSource} />
-            </Suspense>
-          )}
-        </Box>
+            </Box>
+          </Suspense>
+        )}
       </Box>
     </Box>
   );
