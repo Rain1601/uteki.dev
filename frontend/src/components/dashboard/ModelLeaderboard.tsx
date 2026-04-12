@@ -1,24 +1,33 @@
 import { Box, Typography, Paper } from '@mui/material';
 import { Trophy } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
-import { modelLeaderboard } from '../../data/mockDashboard';
+import type { LeaderboardEntry } from '../../api/dashboard';
 
-export default function ModelLeaderboard() {
+interface ModelLeaderboardProps {
+  compact?: boolean;
+  leaderboard?: LeaderboardEntry[];
+}
+
+export default function ModelLeaderboard({ compact, leaderboard }: ModelLeaderboardProps) {
   const { theme, isDark } = useTheme();
 
-  const sorted = [...modelLeaderboard].sort((a, b) => b.winRate - a.winRate);
+  const sorted = leaderboard && leaderboard.length > 0
+    ? [...leaderboard].sort((a, b) => b.model_score - a.model_score)
+    : [];
 
   return (
     <Paper
       elevation={0}
       sx={{
-        p: 3,
+        p: compact ? 2 : 3,
         borderRadius: '12px',
         border: `1px solid ${theme.border.default}`,
         bgcolor: theme.background.secondary,
+        height: compact ? '100%' : 'auto',
+        overflow: 'auto',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: compact ? 1 : 2 }}>
         <Trophy size={16} color={theme.brand.primary} />
         <Typography
           sx={{
@@ -32,158 +41,156 @@ export default function ModelLeaderboard() {
         </Typography>
       </Box>
 
-      {/* Header */}
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: '30px 1fr 55px 55px 50px 55px',
-          gap: 1,
-          px: 1,
-          pb: 1,
-          borderBottom: `1px solid ${theme.border.default}`,
-          mb: 0.5,
-        }}
-      >
-        {['#', '模型', '胜率', 'Arena', '公司', '延迟'].map((h) => (
-          <Typography
-            key={h}
-            sx={{
-              fontSize: 10,
-              fontWeight: 600,
-              color: theme.text.disabled,
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              textAlign: h === '#' || h === '模型' ? 'left' : 'right',
-            }}
-          >
-            {h}
-          </Typography>
-        ))}
-      </Box>
-
-      {/* Rows */}
-      {sorted.map((m, idx) => {
-        const isFirst = idx === 0;
-        return (
+      {sorted.length === 0 ? (
+        <Typography sx={{ fontSize: 12, color: theme.text.muted, textAlign: 'center', py: 3 }}>
+          暂无数据
+        </Typography>
+      ) : (
+        <>
+          {/* Header */}
           <Box
-            key={m.model}
             sx={{
               display: 'grid',
-              gridTemplateColumns: '30px 1fr 55px 55px 50px 55px',
+              gridTemplateColumns: '30px 1fr 55px 55px 50px',
               gap: 1,
               px: 1,
-              py: 1,
-              borderRadius: '6px',
-              bgcolor: isFirst
-                ? isDark
-                  ? `${theme.brand.primary}10`
-                  : `${theme.brand.primary}08`
-                : 'transparent',
-              transition: 'background-color 0.15s ease',
-              '&:hover': {
-                bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-              },
+              pb: 1,
+              borderBottom: `1px solid ${theme.border.default}`,
+              mb: 0.5,
             }}
           >
-            <Typography
-              sx={{
-                fontSize: 12,
-                fontWeight: isFirst ? 700 : 500,
-                color: isFirst ? theme.brand.primary : theme.text.muted,
-              }}
-            >
-              {idx + 1}
-            </Typography>
-
-            <Box sx={{ minWidth: 0 }}>
+            {['#', '模型', '采纳率', '得分', '投票'].map((h) => (
               <Typography
-                noWrap
+                key={h}
                 sx={{
-                  fontSize: 12,
+                  fontSize: 10,
                   fontWeight: 600,
-                  color: theme.text.primary,
-                  fontFamily: "'SF Mono', Monaco, monospace",
-                  lineHeight: 1.3,
+                  color: theme.text.disabled,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  textAlign: h === '#' || h === '模型' ? 'left' : 'right',
                 }}
               >
-                {m.model}
+                {h}
               </Typography>
-              <Typography
-                noWrap
-                sx={{ fontSize: 10, color: theme.text.disabled, lineHeight: 1.3 }}
-              >
-                {m.provider}
-              </Typography>
-            </Box>
-
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography
-                sx={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: m.winRate >= 50 ? '#10b981' : theme.text.secondary,
-                }}
-              >
-                {m.winRate}%
-              </Typography>
-              <Box
-                sx={{
-                  mt: 0.3,
-                  height: 3,
-                  borderRadius: 2,
-                  bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                  overflow: 'hidden',
-                }}
-              >
-                <Box
-                  sx={{
-                    width: `${m.winRate}%`,
-                    height: '100%',
-                    borderRadius: 2,
-                    bgcolor:
-                      m.winRate >= 50
-                        ? '#10b981'
-                        : m.winRate >= 30
-                          ? '#f59e0b'
-                          : '#ef4444',
-                  }}
-                />
-              </Box>
-            </Box>
-
-            <Typography
-              sx={{
-                fontSize: 12,
-                color: theme.text.secondary,
-                textAlign: 'right',
-              }}
-            >
-              {m.arenaWins}/{m.arenaRuns}
-            </Typography>
-
-            <Typography
-              sx={{
-                fontSize: 12,
-                color: theme.text.secondary,
-                textAlign: 'right',
-              }}
-            >
-              {m.companyRuns}
-            </Typography>
-
-            <Typography
-              sx={{
-                fontSize: 11,
-                color: theme.text.muted,
-                textAlign: 'right',
-                fontFamily: "'SF Mono', Monaco, monospace",
-              }}
-            >
-              {(m.avgLatencyMs / 1000).toFixed(1)}s
-            </Typography>
+            ))}
           </Box>
-        );
-      })}
+
+          {/* Rows */}
+          {sorted.map((m, idx) => {
+            const isFirst = idx === 0;
+            return (
+              <Box
+                key={m.id}
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: '30px 1fr 55px 55px 50px',
+                  gap: 1,
+                  px: 1,
+                  py: 1,
+                  borderRadius: '6px',
+                  bgcolor: isFirst
+                    ? isDark
+                      ? `${theme.brand.primary}10`
+                      : `${theme.brand.primary}08`
+                    : 'transparent',
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                  },
+                }}
+              >
+                <Typography
+                  sx={{
+                    fontSize: 12,
+                    fontWeight: isFirst ? 700 : 500,
+                    color: isFirst ? theme.brand.primary : theme.text.muted,
+                  }}
+                >
+                  {idx + 1}
+                </Typography>
+
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    noWrap
+                    sx={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: theme.text.primary,
+                      fontFamily: "'SF Mono', Monaco, monospace",
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {m.model_name}
+                  </Typography>
+                  <Typography
+                    noWrap
+                    sx={{ fontSize: 10, color: theme.text.disabled, lineHeight: 1.3 }}
+                  >
+                    {m.model_provider}
+                  </Typography>
+                </Box>
+
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography
+                    sx={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: m.adoption_rate >= 30 ? '#10b981' : theme.text.secondary,
+                    }}
+                  >
+                    {m.adoption_rate.toFixed(0)}%
+                  </Typography>
+                  <Box
+                    sx={{
+                      mt: 0.3,
+                      height: 3,
+                      borderRadius: 2,
+                      bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: `${Math.min(m.adoption_rate, 100)}%`,
+                        height: '100%',
+                        borderRadius: 2,
+                        bgcolor:
+                          m.adoption_rate >= 50
+                            ? '#10b981'
+                            : m.adoption_rate >= 20
+                              ? '#f59e0b'
+                              : '#ef4444',
+                      }}
+                    />
+                  </Box>
+                </Box>
+
+                <Typography
+                  sx={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: m.model_score > 0 ? '#10b981' : m.model_score < 0 ? '#ef4444' : theme.text.secondary,
+                    textAlign: 'right',
+                  }}
+                >
+                  {m.model_score > 0 ? '+' : ''}{m.model_score}
+                </Typography>
+
+                <Typography
+                  sx={{
+                    fontSize: 11,
+                    color: theme.text.muted,
+                    textAlign: 'right',
+                  }}
+                >
+                  {m.approve_vote_count}/{m.approve_vote_count + m.rejection_count}
+                </Typography>
+              </Box>
+            );
+          })}
+        </>
+      )}
     </Paper>
   );
 }

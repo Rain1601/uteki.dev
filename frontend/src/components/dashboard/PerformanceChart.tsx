@@ -14,20 +14,23 @@ import { performanceData } from '../../data/mockDashboard';
 // Show only monthly ticks
 const monthLabels = performanceData.filter((_, i) => i % 30 === 0).map((d) => d.date);
 
-export default function PerformanceChart() {
+export default function PerformanceChart({ compact }: { compact?: boolean }) {
   const { theme, isDark } = useTheme();
 
   return (
     <Paper
       elevation={0}
       sx={{
-        p: 3,
-        borderRadius: '16px',
+        p: compact ? 2 : 3,
+        borderRadius: compact ? '12px' : '16px',
         border: `1px solid ${theme.border.default}`,
         bgcolor: theme.background.secondary,
+        height: compact ? '100%' : 'auto',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: compact ? 1 : 2 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.primary }}>
           收益走势
         </Typography>
@@ -51,7 +54,7 @@ export default function PerformanceChart() {
         </Box>
       </Box>
 
-      <Box sx={{ height: 280 }}>
+      <Box sx={{ flex: compact ? 1 : undefined, height: compact ? undefined : 280, minHeight: compact ? 0 : undefined }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={performanceData} margin={{ top: 5, right: 5, left: 5, bottom: 0 }}>
             <defs>
