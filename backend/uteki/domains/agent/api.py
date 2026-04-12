@@ -408,13 +408,13 @@ async def get_available_models():
         from uteki.domains.index.services.arena_service import load_models_from_db
 
         PROVIDER_ICONS = {
-            "anthropic": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude-color.png",
-            "openai": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/light/openai.png",
-            "deepseek": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/deepseek-color.png",
-            "google": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/gemini-color.png",
-            "qwen": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/qwen-color.png",
-            "minimax": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/minimax-color.png",
-            "doubao": "https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/doubao-color.png",
+            "anthropic": "/icons/models/claude.png",
+            "openai": "/icons/models/openai.png",
+            "deepseek": "/icons/models/deepseek.png",
+            "google": "/icons/models/gemini.png",
+            "qwen": "/icons/models/qwen.png",
+            "minimax": "/icons/models/minimax.png",
+            "doubao": "/icons/models/doubao.png",
         }
         PROVIDER_DISPLAY = {
             "anthropic": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",

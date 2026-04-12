@@ -450,10 +450,9 @@ export default function AgentChatPage() {
           border: `1px solid ${theme.border.default}`,
           borderRadius: '12px',
           overflow: 'hidden',
-          transition: 'border-color 0.2s, box-shadow 0.2s',
+          transition: 'border-color 0.2s',
           '&:focus-within': {
             borderColor: theme.border.active,
-            boxShadow: `0 0 0 1px ${theme.border.active}`,
           },
         }}
       >
@@ -563,9 +562,6 @@ export default function AgentChatPage() {
                 </Tooltip>
               ))}
             </Box>
-
-            {/* Divider */}
-            <Box sx={{ width: '1px', height: 20, bgcolor: theme.border.subtle, mx: 0.5 }} />
 
             {/* Send button */}
             <IconButton
