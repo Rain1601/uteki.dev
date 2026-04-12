@@ -263,12 +263,12 @@ function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; 
   const bWins = b > a;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
-      <Box sx={{ width: 90, textAlign: 'right', flexShrink: 0 }}>
-        <Typography noWrap sx={{ fontSize: 10, fontWeight: aWins ? 600 : 400, color: aWins ? theme.text.primary : theme.text.muted, lineHeight: 1.2 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75 }}>
+      <Box sx={{ width: 100, textAlign: 'right', flexShrink: 0 }}>
+        <Typography noWrap sx={{ fontSize: 10, fontWeight: aWins ? 600 : 400, color: aWins ? theme.text.primary : theme.text.muted, lineHeight: 1.3 }}>
           {comp.a.name}
         </Typography>
-        <Typography sx={{ fontSize: 9, fontWeight: 600, color: a >= 0 ? SIG.green.color : SIG.red.color }}>
+        <Typography sx={{ fontSize: 9, fontWeight: 600, color: a >= 0 ? SIG.green.color : SIG.red.color, lineHeight: 1.3 }}>
           {a >= 0 ? '+' : ''}{a.toFixed(2)}%
         </Typography>
       </Box>
@@ -276,11 +276,11 @@ function StyleRow({ comp, theme, isDark }: { comp: StyleComparison; theme: any; 
         <Box sx={{ width: `${aRatio}%`, height: '100%', bgcolor: aWins ? `${a >= 0 ? SIG.green.color : SIG.red.color}70` : 'transparent', transition: 'width 0.3s' }} />
         <Box sx={{ width: `${100 - aRatio}%`, height: '100%', bgcolor: bWins ? `${b >= 0 ? SIG.green.color : SIG.red.color}70` : 'transparent', transition: 'width 0.3s' }} />
       </Box>
-      <Box sx={{ width: 90, textAlign: 'left', flexShrink: 0 }}>
-        <Typography noWrap sx={{ fontSize: 10, fontWeight: bWins ? 600 : 400, color: bWins ? theme.text.primary : theme.text.muted, lineHeight: 1.2 }}>
+      <Box sx={{ width: 100, textAlign: 'left', flexShrink: 0 }}>
+        <Typography noWrap sx={{ fontSize: 10, fontWeight: bWins ? 600 : 400, color: bWins ? theme.text.primary : theme.text.muted, lineHeight: 1.3 }}>
           {comp.b.name}
         </Typography>
-        <Typography sx={{ fontSize: 9, fontWeight: 600, color: b >= 0 ? SIG.green.color : SIG.red.color }}>
+        <Typography sx={{ fontSize: 9, fontWeight: 600, color: b >= 0 ? SIG.green.color : SIG.red.color, lineHeight: 1.3 }}>
           {b >= 0 ? '+' : ''}{b.toFixed(2)}%
         </Typography>
       </Box>
@@ -386,7 +386,7 @@ function FlowPanel({ flowData, theme, isDark }: {
   flowData: FlowData | null; theme: any; isDark: boolean;
 }) {
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: flowData && flowData.style_comparisons.length > 0 ? '1fr 1fr' : '1fr', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {/* Sector Performance */}
       {flowData && flowData.sectors.length > 0 && (
         <Box>
@@ -413,6 +413,7 @@ function FlowPanel({ flowData, theme, isDark }: {
             p: 1.5, borderRadius: '8px',
             bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.012)',
             border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+            display: 'flex', flexDirection: 'column', gap: '2px',
           }}>
             {flowData.style_comparisons.map(sc => (
               <StyleRow key={sc.label} comp={sc} theme={theme} isDark={isDark} />
