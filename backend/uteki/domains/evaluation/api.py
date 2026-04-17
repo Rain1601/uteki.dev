@@ -170,3 +170,94 @@ async def company_quality_dashboard(
     """
     scores = await GateScoreRepository.get_dashboard_data(symbol=symbol, limit=limit)
     return scores
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v2 Evaluation Framework — runner endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/fixtures/companies", summary="列出可用的公司 fixture")
+async def list_company_fixtures_endpoint(
+    _user: dict = Depends(get_current_user),
+):
+    """Return the sorted list of fixture names loadable by the runners."""
+    from uteki.domains.evaluation.datasets import list_company_fixtures
+    return {"fixtures": list_company_fixtures()}
+
+
+@router.post(
+    "/runners/consistency",
+    summary="运行一致性评测 (Dimension 1)",
+)
+async def run_consistency_endpoint(
+    req: "ConsistencyRunRequest",  # forward ref resolved below
+    user: dict = Depends(get_current_user),
+):
+    """Kick off a consistency evaluation for a fixture + model.
+
+    Streams progress as SSE events and finishes with the full EvalReport.
+    Event types:
+      * `run_start` — single pipeline run begins
+      * `run_complete` — single pipeline run ends (status=success|error)
+      * `done` — all runs finished; metrics computed
+      * `report` — final EvalReport JSON
+      * `error` — fatal error (bad fixture, no key, etc.)
+    """
+    from uteki.domains.evaluation.datasets import (
+        FixtureNotFoundError,
+        load_company_fixture,
+    )
+    from uteki.domains.evaluation.runners.consistency import ConsistencyRunner
+
+    try:
+        fixture = load_company_fixture(req.fixture)
+    except FixtureNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def emit(event: dict):
+        queue.put_nowait(event)
+
+    async def run_task():
+        try:
+            runner = ConsistencyRunner(
+                skill_name=req.skill,
+                fixture=fixture,
+                model=req.model,
+                user_id=user["user_id"],
+                on_progress=emit,
+                num_runs=req.num_runs,
+            )
+            report = await runner.run()
+            queue.put_nowait({"type": "report", "data": report.model_dump(mode="json")})
+        except Exception as e:
+            logger.error(f"[eval] consistency run failed: {e}", exc_info=True)
+            queue.put_nowait({"type": "error", "message": str(e)})
+        finally:
+            queue.put_nowait(None)  # sentinel
+
+    async def event_generator():
+        asyncio.create_task(run_task())
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# Late import to avoid circular refs at module import time.
+from uteki.domains.evaluation.schemas import ConsistencyRunRequest  # noqa: E402
