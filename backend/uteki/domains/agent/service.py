@@ -96,7 +96,12 @@ class SimpleLLMService:
         "dashscope": "qwen",
     }
 
-    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ):
         """
         初始化 LLM 服务
 
@@ -104,7 +109,13 @@ class SimpleLLMService:
             provider: LLM 提供商（openai, anthropic, deepseek, qwen, google, minimax）
                      如果为 None，使用 DB 中第一个可用模型
             model: 模型名称，如果为 None，使用对应 provider 的 DB 配置模型
+            user_id: 当前用户 ID — 用于 user-scoped aggregator/provider key 查询
         """
+        self._user_id = user_id
+        # NOTE: load_models_from_db() 当前不接受 user_id, 返回空列表 + 日志告警。
+        # 这仅用于"DB 有配置模型时自动选第一个"的便利功能。即使为空, 下面的 aggregator
+        # 路径 (create_unified_for_user) 仍然能工作, 因为它会回退到 env / provider-
+        # specific key.
         from uteki.domains.index.services.arena_service import load_models_from_db
         self._db_models = load_models_from_db()
 
@@ -112,27 +123,20 @@ class SimpleLLMService:
         requested_provider = self._PROVIDER_ALIASES.get(requested_provider, requested_provider)
 
         if requested_provider and model:
-            # 指定了 provider + model
             self.provider = requested_provider
             self.model = model
         elif requested_provider:
-            # 指定了 provider，从 DB 找对应模型
             match = next((m for m in self._db_models if m["provider"] == requested_provider), None)
-            if match:
-                self.provider = requested_provider
-                self.model = model or match["model"]
-            else:
-                self.provider = requested_provider
-                self.model = model or requested_provider
+            self.provider = requested_provider
+            self.model = model or (match["model"] if match else requested_provider)
         elif self._db_models:
-            # 未指定，使用 DB 第一个模型
             first = self._db_models[0]
             self.provider = first["provider"]
             self.model = model or first["model"]
         else:
-            raise ValueError(
-                "尚未配置任何 LLM 模型。请前往「Settings → Model Config」页面添加至少一个模型的 API Key。"
-            )
+            # 没指定 provider 且 DB 也空 — 走 aggregator 默认模型兜底。
+            self.provider = "openai"
+            self.model = model or "gpt-4.1"
 
     def _get_api_key(self) -> str:
         """从 DB model_config 获取对应 provider 的 API key"""
@@ -152,9 +156,14 @@ class SimpleLLMService:
             f"未找到 {self.provider} 的 API Key 配置。请前往「Settings → Model Config」页面配置。"
         )
 
-    def _get_adapter(self, config: Optional[LLMConfig] = None) -> BaseLLMAdapter:
-        """创建对应的 LLM Adapter"""
-        return LLMAdapterFactory.create_unified(
+    async def _get_adapter_async(self, config: Optional[LLMConfig] = None) -> BaseLLMAdapter:
+        """创建 LLM Adapter。
+
+        优先使用当前用户存储在 DB 的 aggregator key (AIHubMix/OpenRouter),
+        没有则回退到环境变量 / provider-specific env keys。
+        """
+        return await LLMAdapterFactory.create_unified_for_user(
+            user_id=self._user_id,
             model=self.model,
             config=config or LLMConfig(),
         )
@@ -168,14 +177,12 @@ class SimpleLLMService:
     ) -> AsyncGenerator[str, None]:
         """调用LLM完成对话（使用统一适配器）"""
         try:
-            # 创建配置
             config = LLMConfig(
                 temperature=temperature,
                 max_tokens=max_tokens
             )
 
-            # 获取适配器
-            adapter = self._get_adapter(config)
+            adapter = await self._get_adapter_async(config)
 
             # 转换消息格式为统一格式
             llm_messages = [
@@ -271,22 +278,23 @@ class ChatService:
     async def chat(
         self,
         data: schemas.ChatRequest,
+        user_id: str,
     ) -> AsyncGenerator[schemas.StreamChunk, None]:
         """
         执行聊天（流式返回）
 
-        LLM配置从.env读取，用户可以选择模型
+        LLM key 优先使用当前用户 DB 存储的 aggregator key,
+        否则回退到 env var / provider-specific key。
         """
         # 1. 解析模型信息
         if data.model_id:
             provider, model = parse_model_info(data.model_id)
         else:
-            # 使用 DB 中第一个可用模型（SimpleLLMService 自动选择）
             provider = None
             model = None
 
-        # 2. 创建 LLM 服务实例
-        llm_service = SimpleLLMService(provider=provider, model=model)
+        # 2. 创建 LLM 服务实例（带用户上下文，用于 aggregator key 查询）
+        llm_service = SimpleLLMService(provider=provider, model=model, user_id=user_id)
 
         # 3. 获取或创建会话
         if data.conversation_id:
@@ -294,12 +302,11 @@ class ChatService:
             if not conversation:
                 raise ValueError(f"Conversation {data.conversation_id} not found")
         else:
-            # 创建新会话
             conversation = await self.create_conversation(
                 schemas.ChatConversationCreate(
                     title=data.message[:50] if len(data.message) > 50 else data.message,
                     mode=data.mode,
-                    user_id="default",
+                    user_id=user_id,
                 )
             )
 
@@ -331,14 +338,18 @@ class ChatService:
                     done=False
                 )
         except Exception as e:
-            # 返回错误信息
-            error_msg = f"调用 {provider} 模型失败: {str(e)}"
+            # 返回错误信息给前端（之前只 yield 空 chunk + done, 导致"没有返回"的假象）
+            error_msg = f"调用 {provider or 'llm'} 模型失败: {str(e)}"
+            yield schemas.StreamChunk(
+                conversation_id=conversation["id"],
+                chunk=error_msg,
+                done=False,
+            )
             yield schemas.StreamChunk(
                 conversation_id=conversation["id"],
                 chunk="",
-                done=True
+                done=True,
             )
-            # 保存错误消息
             await self.create_message(
                 conversation_id=conversation["id"],
                 role="assistant",

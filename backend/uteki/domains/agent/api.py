@@ -309,7 +309,10 @@ async def delete_conversation(conversation_id: str):
     "/chat",
     summary="聊天接口（流式返回）",
 )
-async def chat(data: schemas.ChatRequest):
+async def chat(
+    data: schemas.ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
     """
     与Agent进行聊天（支持流式返回）
 
@@ -325,11 +328,12 @@ async def chat(data: schemas.ChatRequest):
     data: {"conversation_id": "xxx", "chunk": "...", "done": false}
     ```
     """
+    user_id = current_user["user_id"]
 
     async def event_generator():
         """SSE事件生成器"""
         try:
-            async for chunk in chat_svc.chat(data):
+            async for chunk in chat_svc.chat(data, user_id=user_id):
                 # 转换为JSON并发送
                 yield f"data: {chunk.model_dump_json()}\n\n"
         except Exception as e:
@@ -342,7 +346,7 @@ async def chat(data: schemas.ChatRequest):
             yield f"data: {json.dumps(error_data)}\n\n"
 
     # Invalidate conversation caches after chat
-    await get_cache_service().delete_pattern("uteki:agent:conversations:")
+    await get_cache_service().delete_pattern(f"uteki:agent:conversations:{user_id}:")
 
     return StreamingResponse(
         event_generator(),
@@ -360,7 +364,10 @@ async def chat(data: schemas.ChatRequest):
     response_model=schemas.ChatResponse,
     summary="聊天接口（非流式）",
 )
-async def chat_sync(data: schemas.ChatRequest):
+async def chat_sync(
+    data: schemas.ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
     """
     与Agent进行聊天（非流式返回，等待完整响应）
 
@@ -368,12 +375,13 @@ async def chat_sync(data: schemas.ChatRequest):
     """
     # 修改为非流式
     data.stream = False
+    user_id = current_user["user_id"]
 
     # 收集完整响应
     conversation_id = None
     full_content = ""
 
-    async for chunk in chat_svc.chat(data):
+    async for chunk in chat_svc.chat(data, user_id=user_id):
         conversation_id = chunk.conversation_id
         if not chunk.done:
             full_content += chunk.chunk
@@ -383,7 +391,7 @@ async def chat_sync(data: schemas.ChatRequest):
             status_code=500, detail="Failed to generate response"
         )
 
-    await get_cache_service().delete_pattern("uteki:agent:conversations:")
+    await get_cache_service().delete_pattern(f"uteki:agent:conversations:{user_id}:")
 
     # 返回完整响应
     return schemas.ChatResponse(
