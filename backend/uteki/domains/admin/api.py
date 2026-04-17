@@ -831,6 +831,175 @@ async def delete_exchange_config(
 
 
 # ============================================================================
+# Aggregator Routes — AIHubMix / OpenRouter unified keys
+# ============================================================================
+
+from uteki.domains.admin.aggregator_service import (
+    SUPPORTED_AGGREGATORS,
+    delete_aggregator_key,
+    list_aggregators,
+    save_aggregator_key,
+    verify_and_balance,
+)
+
+
+def _validate_aggregator(provider: str) -> None:
+    if provider not in SUPPORTED_AGGREGATORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported aggregator: {provider}. Supported: {list(SUPPORTED_AGGREGATORS)}",
+        )
+
+
+@router.post(
+    "/aggregators/verify",
+    response_model=schemas.AggregatorVerifyResponse,
+    summary="验证聚合 Provider 的 API Key（不保存）",
+)
+async def verify_aggregator(
+    data: schemas.AggregatorVerifyRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Validate an aggregator key without persisting it.
+
+    Used before the user clicks 'save' so they get immediate feedback on
+    whether the key they typed is valid (and, when supported, their balance).
+    """
+    _validate_aggregator(data.provider)
+    result = await verify_and_balance(data.provider, data.api_key)
+    balance = None
+    if result.balance:
+        balance = schemas.AggregatorBalanceInfo(
+            credits=result.balance.credits,
+            limit=result.balance.limit,
+            usage=result.balance.usage,
+            currency=result.balance.currency,
+            label=result.balance.label,
+        )
+    return schemas.AggregatorVerifyResponse(
+        valid=result.valid, balance=balance, error=result.error,
+    )
+
+
+@router.get(
+    "/aggregators",
+    response_model=List[schemas.AggregatorConfigResponse],
+    summary="列出当前用户的聚合 Provider 配置",
+)
+async def list_aggregator_configs(user: dict = Depends(get_current_user)):
+    """Return the configured state of each supported aggregator for this user.
+
+    Unconfigured aggregators are included with `configured=false` so the UI
+    can render them as empty cards inviting the user to add a key.
+    """
+    enc = get_encryption_service()
+    items = await list_aggregators(user_id=user["user_id"], encryption=enc)
+    return items
+
+
+@router.post(
+    "/aggregators",
+    response_model=schemas.AggregatorConfigResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="保存聚合 Provider 的 API Key（自动验证后落库）",
+)
+async def save_aggregator(
+    data: schemas.AggregatorSaveRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Verify the key first; on success, encrypt and upsert for this user."""
+    _validate_aggregator(data.provider)
+    user_id = user["user_id"]
+
+    verify = await verify_and_balance(data.provider, data.api_key)
+    if not verify.valid:
+        raise HTTPException(
+            status_code=400,
+            detail=verify.error or "Aggregator rejected the API key",
+        )
+
+    enc = get_encryption_service()
+    await save_aggregator_key(
+        provider=data.provider, api_key=data.api_key, user_id=user_id, encryption=enc,
+    )
+
+    await audit_svc.log_action(
+        action="aggregator.save",
+        resource_type="aggregator",
+        resource_id=data.provider,
+        status="success",
+        user_id=user_id,
+        details={"provider": data.provider, "has_balance": verify.balance is not None},
+    )
+    await get_cache_service().delete_pattern(f"uteki:admin:api_keys:{user_id}:")
+
+    items = await list_aggregators(user_id=user_id, encryption=enc)
+    for item in items:
+        if item["provider"] == data.provider:
+            return item
+    raise HTTPException(status_code=500, detail="Aggregator saved but not retrievable")
+
+
+@router.get(
+    "/aggregators/{provider}/balance",
+    response_model=schemas.AggregatorVerifyResponse,
+    summary="获取已保存聚合 Provider 的余额",
+)
+async def get_aggregator_balance(
+    provider: str,
+    user: dict = Depends(get_current_user),
+):
+    """Fetch balance for the user's stored key (decrypts → calls aggregator)."""
+    _validate_aggregator(provider)
+    enc = get_encryption_service()
+    from uteki.domains.admin.aggregator_service import get_aggregator_key
+    api_key = await get_aggregator_key(provider, user_id=user["user_id"], encryption=enc)
+    if not api_key:
+        raise HTTPException(status_code=404, detail=f"No {provider} key configured")
+
+    result = await verify_and_balance(provider, api_key)
+    balance = None
+    if result.balance:
+        balance = schemas.AggregatorBalanceInfo(
+            credits=result.balance.credits,
+            limit=result.balance.limit,
+            usage=result.balance.usage,
+            currency=result.balance.currency,
+            label=result.balance.label,
+        )
+    return schemas.AggregatorVerifyResponse(
+        valid=result.valid, balance=balance, error=result.error,
+    )
+
+
+@router.delete(
+    "/aggregators/{provider}",
+    response_model=schemas.MessageResponse,
+    summary="删除聚合 Provider 配置",
+)
+async def delete_aggregator(
+    provider: str,
+    user: dict = Depends(get_current_user),
+):
+    _validate_aggregator(provider)
+    user_id = user["user_id"]
+    ok = await delete_aggregator_key(provider, user_id=user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"No {provider} key configured")
+
+    await audit_svc.log_action(
+        action="aggregator.delete",
+        resource_type="aggregator",
+        resource_id=provider,
+        status="success",
+        user_id=user_id,
+        details={"provider": provider},
+    )
+    await get_cache_service().delete_pattern(f"uteki:admin:api_keys:{user_id}:")
+    return schemas.MessageResponse(message=f"{provider} key removed")
+
+
+# ============================================================================
 # Data Source Config Routes
 # ============================================================================
 
