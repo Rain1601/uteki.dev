@@ -2,14 +2,16 @@ import { Box, Typography, Paper } from '@mui/material';
 import { BarChart3, Target, Gauge, Cpu } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import type { EvalOverview, LeaderboardEntry } from '../../api/dashboard';
+import { ShimmerLine, FadeIn } from './SkeletonPrimitives';
 
 interface QuickStatsProps {
   compact?: boolean;
+  loading?: boolean;
   evalOverview?: EvalOverview | null;
   leaderboard?: LeaderboardEntry[];
 }
 
-export default function QuickStats({ compact, evalOverview, leaderboard }: QuickStatsProps) {
+export default function QuickStats({ compact, loading, evalOverview, leaderboard }: QuickStatsProps) {
   const { theme } = useTheme();
 
   const totalAnalyses = evalOverview?.total_arena_runs ?? 0;
@@ -26,26 +28,10 @@ export default function QuickStats({ compact, evalOverview, leaderboard }: Quick
     : 0;
 
   const stats = [
-    {
-      icon: BarChart3,
-      label: '总分析次数',
-      value: totalAnalyses.toString(),
-    },
-    {
-      icon: Target,
-      label: '平均采纳率',
-      value: `${avgAdoptionRate.toFixed(1)}%`,
-    },
-    {
-      icon: Gauge,
-      label: '平均模型得分',
-      value: avgScore.toFixed(0),
-    },
-    {
-      icon: Cpu,
-      label: '使用模型数',
-      value: modelsUsed.toString(),
-    },
+    { icon: BarChart3, label: '总分析次数', value: totalAnalyses.toString() },
+    { icon: Target, label: '平均采纳率', value: `${avgAdoptionRate.toFixed(1)}%` },
+    { icon: Gauge, label: '平均模型得分', value: avgScore.toFixed(0) },
+    { icon: Cpu, label: '使用模型数', value: modelsUsed.toString() },
   ];
 
   return (
@@ -58,7 +44,7 @@ export default function QuickStats({ compact, evalOverview, leaderboard }: Quick
         alignContent: compact ? 'stretch' : 'start',
       }}
     >
-      {stats.map(({ icon: Icon, label, value }) => (
+      {stats.map(({ icon: Icon, label, value }, i) => (
         <Paper
           key={label}
           elevation={0}
@@ -75,21 +61,33 @@ export default function QuickStats({ compact, evalOverview, leaderboard }: Quick
           <Box sx={{ color: theme.brand.primary, mb: compact ? 0.75 : 1.5 }}>
             <Icon size={compact ? 16 : 20} />
           </Box>
-          <Typography
-            sx={{
-              fontSize: compact ? 18 : 22,
-              fontWeight: 700,
-              color: theme.text.primary,
-              fontFamily: 'var(--font-ui)',
-              letterSpacing: '-0.02em',
-              lineHeight: 1.2,
-            }}
-          >
-            {value}
-          </Typography>
-          <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, fontWeight: 500 }}>
-            {label}
-          </Typography>
+          {loading ? (
+            <>
+              <Box sx={{ mb: 0.75 }}>
+                <ShimmerLine width={50} height={compact ? 18 : 22} radius={4} theme={theme} delay={i * 0.06} />
+              </Box>
+              <ShimmerLine width={70} height={10} theme={theme} delay={0.1 + i * 0.06} />
+            </>
+          ) : (
+            <FadeIn show delay={i * 0.04}>
+              <Typography
+                sx={{
+                  fontSize: compact ? 18 : 22,
+                  fontWeight: 700,
+                  color: theme.text.primary,
+                  fontFamily: 'var(--font-ui)',
+                  letterSpacing: '-0.02em',
+                  lineHeight: 1.2,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {value}
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: theme.text.muted, mt: 0.5, fontWeight: 500 }}>
+                {label}
+              </Typography>
+            </FadeIn>
+          )}
         </Paper>
       ))}
     </Box>

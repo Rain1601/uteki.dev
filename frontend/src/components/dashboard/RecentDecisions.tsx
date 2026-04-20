@@ -1,6 +1,7 @@
 import { Box, Typography, Paper, Chip } from '@mui/material';
 import { useTheme } from '../../theme/ThemeProvider';
 import type { DecisionItem, CompanyAnalysis } from '../../api/dashboard';
+import { ShimmerLine, FadeIn } from './SkeletonPrimitives';
 
 const actionColors: Record<string, { bg: string; text: string }> = {
   auto_voted: { bg: '#10b98120', text: '#10b981' },
@@ -25,6 +26,7 @@ const actionLabels: Record<string, string> = {
 
 interface RecentDecisionsProps {
   compact?: boolean;
+  loading?: boolean;
   decisions?: DecisionItem[];
   companyAnalyses?: CompanyAnalysis[];
 }
@@ -37,8 +39,9 @@ interface UnifiedRow {
   model: string;
 }
 
-export default function RecentDecisions({ compact, decisions, companyAnalyses }: RecentDecisionsProps) {
+export default function RecentDecisions({ compact, loading, decisions, companyAnalyses }: RecentDecisionsProps) {
   const { theme, isDark } = useTheme();
+  const COLS = '70px 55px 80px 50px 70px';
 
   // Build unified rows from both index decisions and company analyses
   const rows: UnifiedRow[] = [];
@@ -99,7 +102,7 @@ export default function RecentDecisions({ compact, decisions, companyAnalyses }:
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: '70px 55px 80px 50px 70px',
+          gridTemplateColumns: COLS,
           gap: 1,
           px: 2,
           py: 1,
@@ -115,12 +118,35 @@ export default function RecentDecisions({ compact, decisions, companyAnalyses }:
 
       {/* Rows */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {displayRows.length === 0 ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 4 }}>
-            <Typography sx={{ fontSize: 12, color: theme.text.muted }}>暂无决策记录</Typography>
-          </Box>
+        {loading ? (
+          // 8 shimmer rows matching real row grid
+          Array.from({ length: 8 }).map((_, i) => (
+            <Box
+              key={i}
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: COLS,
+                gap: 1,
+                px: 2,
+                py: 1.25,
+                alignItems: 'center',
+              }}
+            >
+              <ShimmerLine width={42} height={10} theme={theme} delay={i * 0.04} />
+              <ShimmerLine width={36} height={10} theme={theme} delay={i * 0.04 + 0.05} />
+              <ShimmerLine width="70%" height={12} theme={theme} delay={i * 0.04 + 0.1} />
+              <ShimmerLine width={36} height={14} radius={6} theme={theme} delay={i * 0.04 + 0.15} />
+              <ShimmerLine width="60%" height={10} theme={theme} delay={i * 0.04 + 0.2} />
+            </Box>
+          ))
+        ) : displayRows.length === 0 ? (
+          <FadeIn show>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 4 }}>
+              <Typography sx={{ fontSize: 12, color: theme.text.muted }}>暂无决策记录</Typography>
+            </Box>
+          </FadeIn>
         ) : (
-          displayRows.map((d, i) => {
+          <FadeIn show>{displayRows.map((d, i) => {
             const ac = actionColors[d.action] || actionColors.skipped;
             const label = actionLabels[d.action] || d.action;
             return (
@@ -128,7 +154,7 @@ export default function RecentDecisions({ compact, decisions, companyAnalyses }:
                 key={i}
                 sx={{
                   display: 'grid',
-                  gridTemplateColumns: '70px 55px 80px 50px 70px',
+                  gridTemplateColumns: COLS,
                   gap: 1,
                   px: 2,
                   py: 1.25,
@@ -164,7 +190,7 @@ export default function RecentDecisions({ compact, decisions, companyAnalyses }:
                 </Typography>
               </Box>
             );
-          })
+          })}</FadeIn>
         )}
       </Box>
     </Paper>

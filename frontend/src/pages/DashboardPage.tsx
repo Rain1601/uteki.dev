@@ -6,6 +6,7 @@ import QuickStats from '../components/dashboard/QuickStats';
 import PerformanceChart from '../components/dashboard/PerformanceChart';
 import RecentDecisions from '../components/dashboard/RecentDecisions';
 import ModelLeaderboard from '../components/dashboard/ModelLeaderboard';
+import { ShimmerStyles } from '../components/dashboard/SkeletonPrimitives';
 import {
   getEvalOverview,
   getLeaderboard,
@@ -23,15 +24,25 @@ export default function DashboardPage() {
   const [decisions, setDecisions] = useState<DecisionItem[]>([]);
   const [companyAnalyses, setCompanyAnalyses] = useState<CompanyAnalysis[]>([]);
 
+  const [loadingOverview, setLoadingOverview] = useState(true);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(true);
+  const [loadingDecisions, setLoadingDecisions] = useState(true);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+
   useEffect(() => {
-    getEvalOverview().then(setEvalOverview);
-    getLeaderboard().then(setLeaderboard);
-    getDecisions(10).then(setDecisions);
-    getCompanyAnalyses(10).then(setCompanyAnalyses);
+    getEvalOverview().then((d) => setEvalOverview(d)).finally(() => setLoadingOverview(false));
+    getLeaderboard().then((d) => setLeaderboard(d)).finally(() => setLoadingLeaderboard(false));
+    getDecisions(10).then((d) => setDecisions(d)).finally(() => setLoadingDecisions(false));
+    getCompanyAnalyses(10).then((d) => setCompanyAnalyses(d)).finally(() => setLoadingCompanies(false));
   }, []);
+
+  // PortfolioSummary + QuickStats both read from evalOverview/leaderboard.
+  // Wait for both so their skeletons resolve together (avoids half-populated flicker).
+  const statsReady = !loadingOverview && !loadingLeaderboard;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <ShimmerStyles />
       <PageHeader title="Dashboard" />
 
       <Box sx={{ flex: 1, overflow: 'hidden', p: { xs: 1.5, md: 2 } }}>
@@ -46,17 +57,17 @@ export default function DashboardPage() {
         >
           {/* Row 1, Col 1: Portfolio Summary */}
           <Box sx={{ gridRow: { md: '1 / 3' }, gridColumn: { md: '1' }, overflow: 'hidden' }}>
-            <PortfolioSummary compact evalOverview={evalOverview} />
+            <PortfolioSummary compact loading={loadingOverview} evalOverview={evalOverview} />
           </Box>
 
           {/* Row 1, Col 2: Quick Stats */}
           <Box sx={{ gridColumn: { md: '2' }, overflow: 'hidden' }}>
-            <QuickStats compact evalOverview={evalOverview} leaderboard={leaderboard} />
+            <QuickStats compact loading={!statsReady} evalOverview={evalOverview} leaderboard={leaderboard} />
           </Box>
 
           {/* Row 1, Col 3: Model Leaderboard */}
           <Box sx={{ gridColumn: { md: '3' }, overflow: 'hidden' }}>
-            <ModelLeaderboard compact leaderboard={leaderboard} />
+            <ModelLeaderboard compact loading={loadingLeaderboard} leaderboard={leaderboard} />
           </Box>
 
           {/* Row 2, Col 2: Performance Chart */}
@@ -66,7 +77,12 @@ export default function DashboardPage() {
 
           {/* Row 2, Col 3: Recent Decisions */}
           <Box sx={{ gridColumn: { md: '3' }, overflow: 'hidden', minHeight: 0 }}>
-            <RecentDecisions compact decisions={decisions} companyAnalyses={companyAnalyses} />
+            <RecentDecisions
+              compact
+              loading={loadingDecisions || loadingCompanies}
+              decisions={decisions}
+              companyAnalyses={companyAnalyses}
+            />
           </Box>
         </Box>
       </Box>
