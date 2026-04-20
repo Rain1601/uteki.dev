@@ -62,27 +62,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          # cache: pnpm disabled — pnpm-action-setup's store path confuses
-          # setup-node's cache resolution ("Some specified paths were not
-          # resolved"). Cost is ~20s extra install; acceptable for advisory.
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         working-directory: frontend
-        run: pnpm install --frozen-lockfile
+        # Repo ships package-lock.json (no pnpm-lock.yaml), so CI uses npm.
+        # Local dev still uses pnpm — scripts in package.json are runner-agnostic.
+        run: npm ci
 
       - name: ESLint (advisory — does not block deploy)
         working-directory: frontend
         continue-on-error: true
-        run: pnpm lint
+        run: npm run lint
 
   deploy-backend:
     name: Deploy Backend
