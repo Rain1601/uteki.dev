@@ -509,7 +509,7 @@ async def research_stream(request: ResearchRequest):
             llm_adapter = None
             for m in db_models:
                 try:
-                    llm_adapter = LLMAdapterFactory.create_unified(model=m["model"])
+                    llm_adapter = await LLMAdapterFactory.create_unified(model=m["model"])
                     break
                 except Exception:
                     continue

@@ -517,7 +517,7 @@ class ArenaService:
             temperature = model_config.get("temperature", 0)
             max_tokens = model_config.get("max_tokens", 4096)
 
-            adapter = LLMAdapterFactory.create_unified(
+            adapter = await LLMAdapterFactory.create_unified(
                 model=model_name,
                 config=LLMConfig(temperature=temperature, max_tokens=max_tokens),
             )
@@ -708,7 +708,7 @@ class ArenaService:
         )
 
         try:
-            adapter = LLMAdapterFactory.create_unified(
+            adapter = await LLMAdapterFactory.create_unified(
                 model=voter_model,
                 config=LLMConfig(temperature=0, max_tokens=2048),
             )

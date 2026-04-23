@@ -824,7 +824,7 @@ class LLMBacktestService:
         """Single-shot LLM call as fallback when pipeline fails."""
         model_name = model_config["model"]
 
-        adapter = LLMAdapterFactory.create_unified(
+        adapter = await LLMAdapterFactory.create_unified(
             model=model_name,
             config=LLMConfig(temperature=0, max_tokens=4096),
         )

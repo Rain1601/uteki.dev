@@ -128,7 +128,7 @@ class AgentService:
         adapters = []
         for m in db_models:
             try:
-                adapter = LLMAdapterFactory.create_unified(
+                adapter = await LLMAdapterFactory.create_unified(
                     model=m["model"],
                     config=LLMConfig(
                         temperature=m.get("temperature", 0.3),

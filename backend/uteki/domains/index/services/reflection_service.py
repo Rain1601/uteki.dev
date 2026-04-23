@@ -201,7 +201,7 @@ class ReflectionService:
         if db_models:
             m = db_models[0]
             try:
-                return LLMAdapterFactory.create_unified(
+                return await LLMAdapterFactory.create_unified(
                     model=m["model"],
                     config=LLMConfig(temperature=0.5, max_tokens=2048),
                 )

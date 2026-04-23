@@ -416,7 +416,7 @@ async def judge_analysis(
         skill_prompts[skill.skill_name] = skill.system_prompt[:1000]  # truncate
 
     # 4. Create judge adapter
-    adapter = LLMAdapterFactory.create_unified(
+    adapter = await LLMAdapterFactory.create_unified(
         model=judge_model,
         config=LLMConfig(temperature=0, max_tokens=2000),
     )

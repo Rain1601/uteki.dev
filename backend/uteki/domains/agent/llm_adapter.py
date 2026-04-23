@@ -497,34 +497,21 @@ class LLMAdapterFactory:
     """LLM Adapter 工厂类"""
 
     @staticmethod
-    def create_unified(
+    async def create_unified(
         model: str,
         config: Optional[LLMConfig] = None,
     ) -> BaseLLMAdapter:
-        """Sync wrapper kept for legacy callers. Resolves via env only.
+        """Resolve via DB aggregator key (any user) → env fallback.
 
-        Prefer `create_unified_for_user(user_id, model)` in request-scoped code
-        so the user's stored AIHubMix/OpenRouter key is used.
+        Shorthand for ``create_unified_for_user(user_id=None, model, config)``.
+        All callers are async (they await adapter.chat), so making this async
+        lets us use the same DB-first resolver instead of a stale env-only path.
+
+        Prefer `create_unified_for_user(user_id, model)` when a request-scoped
+        user_id is available, so the user's own key is used.
         """
-        from uteki.common.config import settings
-
-        api_key = getattr(settings, "aihubmix_api_key", None)
-        base_url = getattr(settings, "aihubmix_base_url", None) or "https://aihubmix.com/v1"
-
-        if api_key:
-            resolved_model = LLMAdapterFactory._resolve_model_name(model)
-            return OpenAIAdapter(api_key, resolved_model, config, base_url=base_url)
-
-        provider, fallback_key, fallback_url = LLMAdapterFactory._infer_provider(model)
-        if fallback_key:
-            return LLMAdapterFactory.create_adapter(
-                provider=provider, api_key=fallback_key,
-                model=model, config=config, base_url=fallback_url,
-            )
-
-        raise ValueError(
-            f"No API key available for model '{model}'. "
-            f"Configure AIHubMix/OpenRouter in Settings, or set AIHUBMIX_API_KEY env var."
+        return await LLMAdapterFactory.create_unified_for_user(
+            user_id=None, model=model, config=config,
         )
 
     @staticmethod

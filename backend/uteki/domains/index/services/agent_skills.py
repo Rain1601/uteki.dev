@@ -482,7 +482,7 @@ class AgentSkillRunner:
         _use_thinking_config = provider_name == "anthropic"
 
         # Default adapter (no thinking) — used for analysis skills
-        adapter = LLMAdapterFactory.create_unified(
+        adapter = await LLMAdapterFactory.create_unified(
             model=model_name,
             config=LLMConfig(temperature=0, max_tokens=4096),
         )
@@ -490,7 +490,7 @@ class AgentSkillRunner:
         # Thinking adapter — used for make_decision skill (Anthropic extended thinking)
         thinking_adapter = None
         if _use_thinking_config:
-            thinking_adapter = LLMAdapterFactory.create_unified(
+            thinking_adapter = await LLMAdapterFactory.create_unified(
                 model=model_name,
                 config=LLMConfig(
                     temperature=1,  # Required by Anthropic for extended thinking
