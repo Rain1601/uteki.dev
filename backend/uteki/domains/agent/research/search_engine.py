@@ -4,21 +4,54 @@ Supports Google Custom Search API.
 """
 
 import logging
-from abc import ABC, abstractmethod
-from typing import List, Dict
-from urllib.parse import urlparse
 import os
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from .schemas import SearchResult
 
 logger = logging.getLogger(__name__)
 
 
+def _extract_published_at(item: dict) -> Optional[str]:
+    """Pull a publication timestamp out of CSE pagemap metadata if available.
+
+    Google CSE doesn't expose datePublished directly, but many results include
+    OpenGraph or news-article metadata in `pagemap`. We try the common keys
+    in priority order; the first non-empty value wins. Returns ISO string or None.
+    """
+    pagemap = item.get("pagemap") or {}
+    # OpenGraph article:published_time (most common)
+    metatags = pagemap.get("metatags") or []
+    if metatags and isinstance(metatags, list):
+        first = metatags[0] or {}
+        for k in ("article:published_time", "og:article:published_time",
+                  "article:modified_time", "datepublished", "publishdate"):
+            v = first.get(k)
+            if v:
+                return str(v)
+    # NewsArticle / Article schema.org
+    for key in ("newsarticle", "article", "blogposting"):
+        items = pagemap.get(key) or []
+        if items and isinstance(items, list):
+            v = (items[0] or {}).get("datepublished") or (items[0] or {}).get("datemodified")
+            if v:
+                return str(v)
+    return None
+
+
 class SearchStrategy(ABC):
     """Abstract base class for search strategies."""
 
     @abstractmethod
-    async def search(self, query: str, max_results: int, region: str) -> List[SearchResult]:
+    async def search(
+        self,
+        query: str,
+        max_results: int,
+        region: str,
+        date_restrict: Optional[str] = None,
+    ) -> List[SearchResult]:
         """Execute search and return results."""
         pass
 
@@ -32,9 +65,23 @@ class GoogleSearchStrategy(SearchStrategy):
         self.engine_id = engine_id
         logger.info("Initialized Google Custom Search strategy")
 
-    async def search(self, query: str, max_results: int, region: str = "us-en") -> List[SearchResult]:
-        """Search using Google Custom Search API."""
-        logger.debug(f"🔍 Google Search: '{query}' (max_results={max_results}, region={region})")
+    async def search(
+        self,
+        query: str,
+        max_results: int,
+        region: str = "us-en",
+        date_restrict: Optional[str] = None,
+    ) -> List[SearchResult]:
+        """Search using Google Custom Search API.
+
+        Args:
+            date_restrict: Optional Google CSE dateRestrict value (e.g. "d7", "m6", "y2").
+                           When set, only returns pages indexed within that recency window.
+        """
+        logger.debug(
+            f"🔍 Google Search: '{query}' (max_results={max_results}, region={region}, "
+            f"date_restrict={date_restrict})"
+        )
         try:
             from googleapiclient.discovery import build
             from googleapiclient.errors import HttpError
@@ -52,14 +99,17 @@ class GoogleSearchStrategy(SearchStrategy):
             # Google API uses pagination
             start_index = 1
             while len(results) < max_results:
-                response = service.cse().list(
+                kwargs = dict(
                     q=query,
                     cx=self.engine_id,
                     num=num_per_request,
                     start=start_index,
                     lr=f"lang_{region.split('-')[1]}" if "-" in region else None,
                     gl=region.split("-")[0] if "-" in region else region,
-                ).execute()
+                )
+                if date_restrict:
+                    kwargs["dateRestrict"] = date_restrict
+                response = service.cse().list(**kwargs).execute()
 
                 items = response.get("items", [])
                 if not items:
@@ -74,6 +124,7 @@ class GoogleSearchStrategy(SearchStrategy):
                         url=url,
                         snippet=item.get("snippet", ""),
                         source=domain,
+                        published_at=_extract_published_at(item),
                     ))
 
                     if len(results) >= max_results:
@@ -141,7 +192,11 @@ class SearchEngine:
             logger.warning("Google Custom Search API not configured — search disabled")
 
     async def search(
-        self, query: str, max_results: int = 20, region: str = "us-en"
+        self,
+        query: str,
+        max_results: int = 20,
+        region: str = "us-en",
+        date_restrict: Optional[str] = None,
     ) -> List[SearchResult]:
         """
         Execute search with automatic fallback.
@@ -150,18 +205,23 @@ class SearchEngine:
             query: Search query
             max_results: Maximum results to return
             region: Region code (e.g., "us-en")
+            date_restrict: Optional Google CSE dateRestrict (e.g. "d7", "m6", "y2")
+                           to limit results to a recency window. None disables filtering.
 
         Returns:
             List of SearchResult objects
         """
-        logger.info(f"Searching for: {query} (max_results={max_results}, region={region})")
+        logger.info(
+            f"Searching for: {query} (max_results={max_results}, region={region}, "
+            f"date_restrict={date_restrict})"
+        )
 
         if not self._strategy:
             logger.warning("No search engine configured")
             return []
 
         try:
-            results = await self._strategy.search(query, max_results, region)
+            results = await self._strategy.search(query, max_results, region, date_restrict)
             if results:
                 logger.info(f"Google returned {len(results)} results")
                 return self._deduplicate(results)

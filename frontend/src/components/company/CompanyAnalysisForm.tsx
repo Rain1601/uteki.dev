@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, TextField, IconButton, Select, MenuItem, FormControl, Typography, Checkbox } from '@mui/material';
-import { ArrowRight, Trash2, GitCompare } from 'lucide-react';
+import { ArrowRight, Trash2, GitCompare, Clock } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { invalidateCompanyCache } from '../../api/company';
 
 interface Props {
-  onAnalyze: (symbol: string, provider?: string) => void;
+  onAnalyze: (symbol: string, provider?: string, asOf?: string) => void;
   isRunning?: boolean;
   runningCount?: number;
   elapsedMs: number;
@@ -35,6 +35,9 @@ export default function CompanyAnalysisForm({ onAnalyze, runningCount = 0, compa
   const [symbol, setSymbol] = useState('');
   const [provider, setProvider] = useState('');
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  // Backtest mode (Phase γ): when set, restricts analysis to data published on or before this date.
+  const [asOf, setAsOf] = useState('');
+  const [showAsOf, setShowAsOf] = useState(false);
 
   // Suggest list state
   const [suggestions, setSuggestions] = useState<SuggestItem[]>([]);
@@ -85,7 +88,7 @@ export default function CompanyAnalysisForm({ onAnalyze, runningCount = 0, compa
       if (compareMode && onCompare && selectedModels.length >= 2) {
         onCompare(item.symbol, selectedModels);
       } else {
-        onAnalyze(item.symbol, provider || undefined);
+        onAnalyze(item.symbol, provider || undefined, asOf || undefined);
       }
     }, 50);
   };
@@ -97,7 +100,7 @@ export default function CompanyAnalysisForm({ onAnalyze, runningCount = 0, compa
     if (compareMode && onCompare && selectedModels.length >= 2) {
       onCompare(s, selectedModels);
     } else {
-      onAnalyze(s, provider || undefined);
+      onAnalyze(s, provider || undefined, asOf || undefined);
     }
   };
 
@@ -274,6 +277,65 @@ export default function CompanyAnalysisForm({ onAnalyze, runningCount = 0, compa
               >
                 <GitCompare size={11} />
                 <span>对比</span>
+              </Box>
+            )}
+
+            {/* Backtest mode toggle (Phase γ) */}
+            <Box
+              onClick={() => setShowAsOf((v) => !v)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.4,
+                px: 1,
+                py: 0.25,
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '0.7rem',
+                color: (showAsOf || asOf) ? theme.brand.primary : theme.text.disabled,
+                bgcolor: (showAsOf || asOf) ? `${theme.brand.primary}10` : 'transparent',
+                transition: 'all 0.15s',
+                '&:hover': { color: theme.brand.primary, bgcolor: `${theme.brand.primary}10` },
+              }}
+              title="历史回测：限制只用截止日期前的数据"
+            >
+              <Clock size={11} />
+              <span>{asOf ? `回测 ${asOf.slice(5)}` : '回测'}</span>
+            </Box>
+
+            {showAsOf && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                <input
+                  type="date"
+                  value={asOf}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setAsOf(e.target.value)}
+                  style={{
+                    fontSize: '0.7rem',
+                    padding: '2px 6px',
+                    borderRadius: '6px',
+                    border: `1px solid ${theme.border.default}`,
+                    background: 'transparent',
+                    color: theme.text.primary,
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    colorScheme: 'dark',
+                  }}
+                />
+                {asOf && (
+                  <Box
+                    onClick={() => setAsOf('')}
+                    sx={{
+                      cursor: 'pointer',
+                      fontSize: '0.7rem',
+                      color: theme.text.disabled,
+                      px: 0.5,
+                      '&:hover': { color: theme.text.primary },
+                    }}
+                  >
+                    ✕
+                  </Box>
+                )}
               </Box>
             )}
           </Box>

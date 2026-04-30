@@ -14,6 +14,10 @@ class SearchResult(BaseModel):
     url: str = Field(..., description="URL of the page")
     snippet: str = Field(..., description="Short description/snippet")
     source: str = Field(..., description="Domain name (e.g., wikipedia.org)")
+    published_at: Optional[str] = Field(
+        None,
+        description="ISO publication timestamp from page metadata (article:published_time, datepublished). May be None.",
+    )
 
     class Config:
         json_schema_extra = {
@@ -22,6 +26,7 @@ class SearchResult(BaseModel):
                 "url": "https://docs.python.org/3/",
                 "snippet": "Official Python documentation",
                 "source": "docs.python.org",
+                "published_at": "2024-03-15T08:00:00Z",
             }
         }
 

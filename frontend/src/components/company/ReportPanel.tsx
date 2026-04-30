@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Snackbar, Alert, Collapse } from '@mui/material';
-import { X, FileText, Download, Maximize2, Minimize2, Link, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { X, FileText, Download, Maximize2, Minimize2, Link, ChevronDown, ChevronUp, ChevronsUpDown, Search, Loader2 } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { GATE_NAMES, type GateResult, type PositionHoldingOutput, createShareLink } from '../../api/company';
+import type { GateStatus } from './GateProgressTracker';
 import { DataTable } from './ui';
 import VerdictBanner from './VerdictBanner';
 import FormattedText from './FormattedText';
+import SourcesPanel from './SourcesPanel';
+import CitationsRow from './CitationsRow';
 import BusinessAnalysisCard from './gates/BusinessAnalysisCard';
 import FisherQACard from './gates/FisherQACard';
 import MoatAssessmentCard from './gates/MoatAssessmentCard';
@@ -13,6 +16,14 @@ import ManagementCard from './gates/ManagementCard';
 import ReverseTestCard from './gates/ReverseTestCard';
 import ValuationCard from './gates/ValuationCard';
 import PositionHoldingCard from './gates/PositionHoldingCard';
+
+interface LiveToolCall {
+  gate: number;
+  skill: string;
+  tool_name: string;
+  tool_args?: Record<string, any>;
+  ts: number;
+}
 
 interface Props {
   open: boolean;
@@ -28,6 +39,16 @@ interface Props {
   onScrollToGateConsumed?: () => void;
   embedded?: boolean;  // when true, renders without header/border/width constraints (inline mode)
   analysisId?: string | null;
+  /** Provenance catalog (β phase). When provided, [src:N] markers in raw text become chips. */
+  sourceCatalog?: Record<string, import('../../api/company').DataPoint>;
+  // ── Live running state (only meaningful while analysis is in flight) ──
+  isLiveRunning?: boolean;
+  currentGate?: number | null;
+  currentGateStartedAt?: number | null;
+  streamingTexts?: Record<string, string>;
+  liveToolCalls?: LiveToolCall[];
+  gateStatuses?: Record<number, GateStatus>;
+  totalElapsedMs?: number;
 }
 
 const GATE_ORDER = [
@@ -74,10 +95,19 @@ export default function ReportPanel({
   onScrollToGateConsumed,
   embedded = false,
   analysisId,
+  sourceCatalog,
   onActiveGateChange,
+  isLiveRunning = false,
+  currentGate = null,
+  currentGateStartedAt = null,
+  streamingTexts = {},
+  liveToolCalls = [],
+  gateStatuses = {},
+  totalElapsedMs = 0,
 }: Props & { onActiveGateChange?: (gate: number | null) => void }) {
   const { theme } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const streamPreviewRef = useRef<HTMLDivElement>(null);
 
   // ── Collapse/expand state ──
   const [collapsedGates, setCollapsedGates] = useState<Set<string>>(new Set(GATE_ORDER as unknown as string[]));
@@ -128,6 +158,41 @@ export default function ReportPanel({
   const companyName = companyInfo?.name || companyInfo?.symbol || '';
   const [exporting, setExporting] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+
+  // ── Live running derivations ──
+  const currentSkillName = currentGate != null && currentGate >= 1 && currentGate <= GATE_ORDER.length
+    ? GATE_ORDER[currentGate - 1]
+    : null;
+  const currentStreamText = currentSkillName ? (streamingTexts[currentSkillName] || '') : '';
+  const latestToolCall = liveToolCalls.length > 0 ? liveToolCalls[liveToolCalls.length - 1] : null;
+  const showLivePreview = isLiveRunning && currentGate != null;
+
+  // Per-gate elapsed (live, ticks via totalElapsedMs prop bumping)
+  const currentGateElapsedMs = currentGateStartedAt != null && totalElapsedMs > 0
+    ? Math.max(0, Date.now() - currentGateStartedAt)
+    : 0;
+
+  // Auto-scroll streaming preview to bottom as text arrives
+  useEffect(() => {
+    if (showLivePreview && streamPreviewRef.current) {
+      const el = streamPreviewRef.current;
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [currentStreamText, showLivePreview]);
+
+  const formatLiveTime = (ms: number) => {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m${s % 60}s`;
+  };
+
+  // Format tool args concisely (e.g. "TSMC market share 2024")
+  const summarizeToolArgs = (args: Record<string, any> | undefined) => {
+    if (!args) return '';
+    const q = args.query ?? args.q ?? args.search ?? args.symbol ?? args.url ?? '';
+    if (typeof q === 'string') return q.length > 60 ? q.slice(0, 57) + '…' : q;
+    return '';
+  };
 
   // ── Client-side JSON fallback: if Gate 7 raw is JSON but parsed failed ──
   const enhancedSkills = useMemo(() => {
@@ -431,6 +496,171 @@ export default function ReportPanel({
             <VerdictBanner verdict={verdict!} companyName={companyName} />
           )}
 
+          {/* Live running preview — only while analysis is in flight */}
+          {showLivePreview && (
+            <Box
+              data-ui="true"
+              sx={{
+                bgcolor: theme.background.secondary,
+                border: `1px solid ${theme.brand.primary}30`,
+                borderRadius: 1,
+                overflow: 'hidden',
+                boxShadow: `0 0 0 1px ${theme.brand.primary}08, 0 4px 16px rgba(0,0,0,0.12)`,
+              }}
+            >
+              {/* Header strip */}
+              <Box
+                className="gate-header"
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1,
+                  px: 1.5, py: 0.85,
+                  borderBottom: `1px solid ${theme.border.subtle}`,
+                  bgcolor: `${theme.brand.primary}08`,
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* Subtle shimmer line on left edge */}
+                <Box sx={{
+                  position: 'absolute', left: 0, top: 0, bottom: 0, width: 2,
+                  bgcolor: theme.brand.primary,
+                  animation: 'analyzing-pulse 1.5s ease-in-out infinite',
+                }} />
+                <Loader2
+                  size={12}
+                  color={theme.brand.primary}
+                  style={{ animation: 'spin 1.2s linear infinite', flexShrink: 0 }}
+                />
+                <Typography sx={{
+                  fontSize: 11, fontWeight: 700, color: theme.brand.primary,
+                  fontFamily: "Inter, -apple-system, sans-serif", letterSpacing: '0.01em',
+                }}>
+                  正在分析{currentSkillName ? `: ${GATE_NAMES[currentGate!] || ''}` : '…'}
+                </Typography>
+                <Typography sx={{
+                  fontSize: 10, color: theme.text.muted,
+                  fontFamily: "Inter, -apple-system, sans-serif",
+                }}>
+                  Gate {currentGate} / 7
+                </Typography>
+                <Box sx={{ flex: 1 }} />
+                {currentGateElapsedMs > 0 && (
+                  <Typography sx={{
+                    fontSize: 10, color: theme.text.muted,
+                    fontFeatureSettings: '"tnum"',
+                    fontFamily: "'SF Mono', Monaco, Consolas, monospace",
+                  }}>
+                    {formatLiveTime(currentGateElapsedMs)}
+                  </Typography>
+                )}
+              </Box>
+
+              {/* Latest tool call (if any) */}
+              {latestToolCall && (
+                <Box
+                  className="gate-meta"
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 0.6,
+                    px: 1.5, py: 0.6,
+                    borderBottom: `1px solid ${theme.border.subtle}`,
+                    bgcolor: theme.background.primary,
+                  }}
+                >
+                  <Search size={11} color={theme.text.muted} style={{ flexShrink: 0 }} />
+                  <Typography sx={{
+                    fontSize: 10, color: theme.text.muted,
+                    fontFamily: "Inter, -apple-system, sans-serif",
+                    flexShrink: 0,
+                  }}>
+                    {latestToolCall.tool_name}
+                  </Typography>
+                  {summarizeToolArgs(latestToolCall.tool_args) && (
+                    <Typography sx={{
+                      fontSize: 10, color: theme.text.secondary,
+                      fontFamily: "'SF Mono', Monaco, Consolas, monospace",
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      minWidth: 0,
+                    }}>
+                      {summarizeToolArgs(latestToolCall.tool_args)}
+                    </Typography>
+                  )}
+                  {liveToolCalls.length > 1 && (
+                    <Typography sx={{
+                      fontSize: 9, color: theme.text.disabled,
+                      fontFamily: "Inter, -apple-system, sans-serif",
+                      ml: 'auto', flexShrink: 0,
+                    }}>
+                      +{liveToolCalls.length - 1}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              {/* Streaming text body */}
+              <Box
+                ref={streamPreviewRef}
+                sx={{
+                  px: 1.5, py: 1,
+                  maxHeight: 240,
+                  minHeight: currentStreamText ? 80 : 56,
+                  overflowY: 'auto',
+                  fontFamily: "'Times New Roman', 'SimSun', '宋体', Georgia, serif",
+                  lineHeight: 1.7,
+                  '&::-webkit-scrollbar': { width: 3 },
+                  '&::-webkit-scrollbar-thumb': { bgcolor: `${theme.text.muted}18`, borderRadius: 4 },
+                }}
+              >
+                {currentStreamText ? (
+                  <>
+                    <FormattedText text={currentStreamText} theme={theme} streaming />
+                    {/* Blinking caret */}
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-block',
+                        width: 6, height: 13,
+                        bgcolor: theme.brand.primary,
+                        ml: 0.3,
+                        verticalAlign: 'text-bottom',
+                        animation: 'analyzing-pulse 1s step-end infinite',
+                      }}
+                    />
+                  </>
+                ) : (
+                  <Typography
+                    data-ui="true"
+                    sx={{
+                      fontSize: 11, color: theme.text.disabled,
+                      fontFamily: "Inter, -apple-system, sans-serif",
+                      fontStyle: 'italic', py: 1,
+                    }}
+                  >
+                    模型思考中{latestToolCall ? '，正在调用工具…' : '…'}
+                  </Typography>
+                )}
+              </Box>
+
+              {/* Footer: completed gate count */}
+              <Box
+                className="gate-meta"
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1,
+                  px: 1.5, py: 0.5,
+                  borderTop: `1px solid ${theme.border.subtle}`,
+                  bgcolor: theme.background.primary,
+                }}
+              >
+                <Typography sx={{
+                  fontSize: 9.5, color: theme.text.disabled,
+                  fontFamily: "Inter, -apple-system, sans-serif",
+                  letterSpacing: '0.04em', textTransform: 'uppercase',
+                }}>
+                  {Object.values(gateStatuses).filter(s => s === 'complete').length} / 7 gates · {formatLiveTime(totalElapsedMs)}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
           {/* Expand/Collapse All */}
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Box
@@ -530,11 +760,22 @@ export default function ReportPanel({
                     {hasParsed && Component ? (
                       <Component data={parsedData} />
                     ) : result.raw ? (
-                      <FormattedText text={result.raw} theme={theme} />
+                      <FormattedText text={result.raw} theme={theme} catalog={sourceCatalog} />
                     ) : (
                       <Typography sx={{ fontSize: 12, color: theme.text.disabled, fontStyle: 'italic' }}>
                         无输出数据
                       </Typography>
+                    )}
+                    {/* Citations (visible even when structured) */}
+                    {(result as any).citations && (result as any).citations.length > 0 && sourceCatalog && (
+                      <CitationsRow
+                        ids={(result as any).citations}
+                        orphans={(result as any).citation_orphans}
+                        catalog={sourceCatalog}
+                      />
+                    )}
+                    {result.tool_calls && result.tool_calls.length > 0 && (
+                      <SourcesPanel toolCalls={result.tool_calls} />
                     )}
                   </Box>
                 </Collapse>

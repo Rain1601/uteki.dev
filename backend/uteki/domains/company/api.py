@@ -180,6 +180,9 @@ def _build_response(req, company_data, model_config, result):
             "fetched_at": cache_meta.get("fetched_at", ""),
             "cache_ttl_hours": cache_meta.get("cache_ttl_hours", 168),
         },
+        # Provenance — empty/None for legacy runs, populated in β
+        "source_catalog": result.get("source_catalog") or {},
+        "as_of": result.get("as_of"),
     }
 
 
@@ -252,7 +255,7 @@ async def analyze_company(
         f"[company] starting pipeline: symbol={req.symbol} "
         f"model={model_config['provider']}/{model_config['model']}"
     )
-    runner = CompanySkillRunner(model_config, company_data)
+    runner = CompanySkillRunner(model_config, company_data, as_of=req.as_of)
     result = await runner.run_pipeline()
 
     response = _build_response(req, company_data, model_config, result)
@@ -314,8 +317,12 @@ async def analyze_company_stream(
             }
             queue.put_nowait(data_loaded_event)
 
-            # Wrap on_progress to update DB on gate_complete + publish to Redis
+            # Wrap on_progress to update DB on gate_complete + publish to Redis.
+            # Track in-flight DB writes so we can await them before the final
+            # completion update, otherwise a late partial write can clobber the
+            # final mapped result (gates 1-6 lose their structured data).
             accumulated_skills: dict = {}
+            pending_writes: list[asyncio.Task] = []
 
             def tracking_emit(event: dict):
                 emit_progress(event)
@@ -339,19 +346,28 @@ async def analyze_company_stream(
                     accumulated_skills[event["skill"]] = gate_data
 
                     # Persist gate result + update current_gate counter
-                    asyncio.create_task(
+                    pending_writes.append(asyncio.create_task(
                         CompanyAnalysisRepository.update_gate(analysis_id, gate_num, gate_data)
-                    )
+                    ))
                     # Also update full_report for backward compat
                     skills_snapshot = {k: dict(v) for k, v in accumulated_skills.items()}
-                    asyncio.create_task(_update_analysis(analysis_id, {
+                    pending_writes.append(asyncio.create_task(_update_analysis(analysis_id, {
                         "full_report": {"skills": skills_snapshot},
-                    }))
+                    })))
 
-            runner = CompanySkillRunner(model_config, company_data, on_progress=tracking_emit)
+            runner = CompanySkillRunner(
+                model_config, company_data,
+                on_progress=tracking_emit,
+                as_of=req.as_of,
+            )
             result = await runner.run_pipeline()
 
             response_data = _build_response(req, company_data, model_config, result)
+
+            # Drain pending partial writes BEFORE final completion update,
+            # to prevent a late partial write from overwriting the final result.
+            if pending_writes:
+                await asyncio.gather(*pending_writes, return_exceptions=True)
 
             # Final update: completed
             if analysis_id:

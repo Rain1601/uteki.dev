@@ -20,28 +20,43 @@ import json
 import logging
 import re
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
-from uteki.domains.agent.llm_adapter import (
-    LLMAdapterFactory, LLMProvider, LLMConfig, LLMMessage,
-)
-from uteki.domains.agent.core.budget import ToolBudget
-from uteki.domains.agent.core.tool_parser import ToolCallParser, ParsedToolCall
-from uteki.domains.agent.core.context import (
-    GateResult, PipelineContext, ToolAction, Reflection,
-)
 from uteki.common.config import settings
-from .skills import (
-    COMPANY_SKILL_PIPELINE, CompanySkill,
-    REFLECTION_CHECKPOINTS, GATE_TOOLS,
+from uteki.domains.agent.core.budget import ToolBudget
+from uteki.domains.agent.core.context import (
+    GateResult,
+    PipelineContext,
+    Reflection,
+    ToolAction,
 )
-from .schemas import (
-    CompanyFullReport, PositionHoldingOutput,
-    BusinessAnalysisOutput, FisherQAOutput, MoatAssessmentOutput,
-    ManagementAssessmentOutput, ReverseTestOutput, ValuationOutput,
+from uteki.domains.agent.core.tool_parser import ToolCallParser
+from uteki.domains.agent.llm_adapter import (
+    LLMAdapterFactory,
+    LLMConfig,
+    LLMMessage,
+    LLMProvider,
 )
-from .output_parser import parse_skill_output
+
 from .financials import format_company_data_for_prompt
+from .output_parser import parse_skill_output
+from .schemas import (
+    BusinessAnalysisOutput,
+    CompanyFullReport,
+    FisherQAOutput,
+    ManagementAssessmentOutput,
+    MoatAssessmentOutput,
+    PositionHoldingOutput,
+    ReverseTestOutput,
+    ValuationOutput,
+)
+from .skills import (
+    COMPANY_SKILL_PIPELINE,
+    GATE_TOOLS,
+    REFLECTION_CHECKPOINTS,
+    CompanySkill,
+)
 
 # Per-gate schema mapping for instant structuring
 _GATE_SCHEMAS: dict[str, type] = {
@@ -68,6 +83,69 @@ _STRUCTURIZE_PROMPT = """你是一个数据结构化专家。从以下分析文�
 4. 以 {{ 开始，以 }} 结束"""
 
 logger = logging.getLogger(__name__)
+
+_THINKING_RE = re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove <thinking>...</thinking> blocks that DeepSeek/Qwen models emit."""
+    return _THINKING_RE.sub('', text).strip()
+
+
+def _check_gate7_quality(parsed_dict: dict) -> tuple[bool, list[str]]:
+    """Check if Gate 7 structured output meets minimum quality standards.
+
+    Returns (passed, issues) — issues is empty when passed=True.
+    """
+    issues: list[str] = []
+
+    # Fisher QA: must have all 15 questions
+    fisher = parsed_dict.get("fisher_qa", {})
+    q_count = len(fisher.get("questions", []))
+    if q_count < 15:
+        issues.append(f"fisher_qa.questions 只有 {q_count} 题，必须包含完整15题（Q1-Q15）")
+
+    # Reverse test: need meaningful destruction scenarios and red flags
+    reverse = parsed_dict.get("reverse_test", {})
+    scenario_count = len(reverse.get("destruction_scenarios", []))
+    if scenario_count < 2:
+        issues.append(f"reverse_test.destruction_scenarios 只有 {scenario_count} 个，需要至少3个毁灭场景")
+    flag_count = len(reverse.get("red_flags", []))
+    if flag_count < 5:
+        issues.append(f"reverse_test.red_flags 只有 {flag_count} 个，需要至少8个红旗检查项")
+
+    # Business analysis: revenue streams must be non-empty
+    ba = parsed_dict.get("business_analysis", {})
+    if not ba.get("revenue_streams"):
+        issues.append("business_analysis.revenue_streams 为空，需列出主要收入来源")
+
+    # Moat: must have at least one moat type with evidence
+    moat = parsed_dict.get("moat_assessment", {})
+    moat_types = moat.get("moat_types", [])
+    if not moat_types:
+        issues.append("moat_assessment.moat_types 为空，需评估各类护城河")
+
+    # Position holding: action and substance checks
+    pos = parsed_dict.get("position_holding", {})
+    if pos.get("action") not in ("BUY", "WATCH", "AVOID"):
+        issues.append("position_holding.action 缺失或无效，必须是 BUY/WATCH/AVOID")
+    one_sentence = pos.get("one_sentence", "")
+    if len(one_sentence) < 20:
+        issues.append("position_holding.one_sentence 过短，需是有实质内容的一句话结论")
+
+    # Key string fields must have substance
+    checks = [
+        ("business_analysis", "business_description", 30),
+        ("valuation", "price_reasoning", 40),
+        ("moat_assessment", "competitive_position", 20),
+    ]
+    for section, field, min_len in checks:
+        val = parsed_dict.get(section, {}).get(field, "")
+        if len(val) < min_len:
+            issues.append(f"{section}.{field} 内容过短（{len(val)}字），需要更具体的描述")
+
+    return len(issues) == 0, issues
+
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
@@ -98,11 +176,17 @@ _PROVIDER_MAP = {
 # ── Tool Executor ─────────────────────────────────────────────────────────
 
 class CompanyToolExecutor:
-    """Executes tools available to the company analysis pipeline."""
+    """Executes tools available to the company analysis pipeline.
 
-    def __init__(self, company_data: dict | None = None):
+    When a SourceCatalog is provided (Phase β+), every web_search hit is
+    registered as a DataPoint and the LLM-visible result lines carry
+    `[src:N]` markers, enabling citation parsing downstream.
+    """
+
+    def __init__(self, company_data: dict | None = None, catalog=None):
         self._web_search = None
         self._company_data = company_data or {}
+        self._catalog = catalog  # SourceCatalog or None
 
     def _get_web_search(self):
         if self._web_search is None:
@@ -119,6 +203,10 @@ class CompanyToolExecutor:
 
     async def _exec_web_search(self, args: dict) -> str:
         query = args.get("query", "")
+        # Optional: time_window like "d7" (last 7 days), "m6" (6 months), "y2" (2 years).
+        # Maps to Google CSE dateRestrict. Inactive when None — Phase γ will derive
+        # this from the run's as_of date.
+        time_window = args.get("time_window") or args.get("date_restrict")
         if not query:
             return "Error: empty search query"
         try:
@@ -126,20 +214,59 @@ class CompanyToolExecutor:
             if not svc.available:
                 return "Error: web search service not configured (missing API keys)"
             results = await asyncio.wait_for(
-                svc.search(query, max_results=5),
+                svc.search(query, max_results=5, date_restrict=time_window),
                 timeout=TOOL_TIMEOUT,
             )
             if not results:
                 return f"No results found for: {query}"
-            lines = []
-            for r in results:
-                lines.append(f"- {r['title']}: {r['snippet']} ({r['url']})")
-            return "\n".join(lines)
+            return self._format_search_results(query, results)
         except asyncio.TimeoutError:
             return f"Error: search timeout for: {query}"
         except Exception as e:
             logger.warning(f"[company_tools] web_search failed: {e}")
             return f"Error: search failed: {e}"
+
+    def _format_search_results(self, query: str, results: list[dict]) -> str:
+        """Format search hits with optional [src:N] markers from the catalog.
+
+        If a catalog is bound, each hit is registered as a DataPoint and its
+        catalog id is prefixed inline so the LLM can cite it. Without a
+        catalog (legacy path), falls back to plain markdown formatting.
+        """
+        from datetime import datetime, timezone
+        from urllib.parse import urlparse
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        lines = []
+        for r in results:
+            url = r.get("url", "")
+            pub = r.get("published_at")
+            pub_tag = f" [发布: {pub[:10]}]" if pub else ""
+            title = r.get("title", "")
+            snippet = r.get("snippet", "")
+            src_prefix = ""
+            if self._catalog is not None:
+                domain = (r.get("source") or urlparse(url).netloc or "unknown").lower()
+                # Confidence: high for authoritative domains, medium with date, low without
+                _AUTH = {"sec.gov", "data.sec.gov", "reuters.com", "bloomberg.com",
+                         "ft.com", "wsj.com", "abc.xyz"}
+                bare = domain[4:] if domain.startswith("www.") else domain
+                conf = ("high" if bare in _AUTH or bare.endswith(".sec.gov")
+                        else "medium" if pub else "low")
+                sid = self._catalog.add({
+                    "key": f"web_hit:{query[:48]}",
+                    "value": {"title": title, "url": url, "snippet": snippet},
+                    "source_type": "google_cse",
+                    "source_url": url,
+                    "publisher": domain,
+                    "published_at": pub,
+                    "fetched_at": fetched_at,
+                    "confidence": conf,
+                    "excerpt": snippet[:400],
+                })
+                if sid > 0:
+                    src_prefix = f"[src:{sid}] "
+            lines.append(f"- {src_prefix}{title}{pub_tag}: {snippet} ({url})")
+        return "\n".join(lines)
 
     async def _exec_compare_peers(self, args: dict) -> str:
         """Compare the target company with industry peers on key metrics."""
@@ -228,7 +355,7 @@ class CompanyToolExecutor:
                     timeout=TOOL_TIMEOUT,
                 )
                 if search_results:
-                    lines.append(f"\n## 行业竞争对手参考")
+                    lines.append("\n## 行业竞争对手参考")
                     for r in search_results:
                         lines.append(f"- {r['title']}: {r['snippet']}")
 
@@ -286,7 +413,7 @@ class GateExecutor:
         skill: CompanySkill,
         context: PipelineContext,
         budget: ToolBudget,
-        on_progress: Optional[Callable[[dict], Any]] = None,
+        on_progress: Callable[[dict], Any] | None = None,
     ) -> GateResult:
         """Execute a gate with ReAct loop."""
         budget.start()
@@ -302,7 +429,7 @@ class GateExecutor:
         skill: CompanySkill,
         context: PipelineContext,
         budget: ToolBudget,
-        on_progress: Optional[Callable],
+        on_progress: Callable | None,
         start_time: float,
     ) -> GateResult:
         """ReAct loop for gates 1-6."""
@@ -316,6 +443,9 @@ class GateExecutor:
         tool_warnings: list[str] = []
         # Accumulate all non-tool-call text across rounds for richer output
         all_analysis_text: list[str] = []
+        # β.17: track whether we already asked the model to fix orphan citations
+        # so we don't loop indefinitely on stubborn fabrication
+        _citation_retry_done = False
 
         while budget.can_continue_round():
             budget.record_round()
@@ -352,6 +482,51 @@ class GateExecutor:
             # Check for conclusion
             conclusion = self.tool_parser.parse_conclusion(raw)
             if conclusion:
+                # β.17: Before accepting <conclude>, validate citations.
+                # If model fabricated src IDs (typical when it skipped tools and
+                # synthesized blindly), reject and ask it to redo with correct
+                # IDs. Allow at most 1 retry per gate to avoid loops.
+                catalog = getattr(self.tool_executor, "_catalog", None)
+                if catalog is not None and not _citation_retry_done:
+                    from uteki.domains.agent.provenance import extract_citations
+                    valid = {dp.id for dp in catalog}
+                    ext = extract_citations(conclusion.text, valid_ids=valid)
+                    if ext.orphan_ids:
+                        max_id = max(valid) if valid else 0
+                        sample = ext.orphan_ids[:8]
+                        logger.warning(
+                            f"[citation] gate {skill.gate_number} {skill.skill_name}: "
+                            f"conclude rejected — {len(ext.orphan_ids)} orphan IDs "
+                            f"({sample}{'…' if len(ext.orphan_ids) > 8 else ''}). Retrying."
+                        )
+                        if on_progress:
+                            on_progress({
+                                "type": "tool_warning",
+                                "gate": skill.gate_number,
+                                "skill": skill.skill_name,
+                                "tool_name": "citation_check",
+                                "warning": f"模型引用了 {len(ext.orphan_ids)} 个不存在的 src ID，要求重写",
+                                "round": budget.rounds_used,
+                            })
+                        messages.append(LLMMessage(role="assistant", content=raw))
+                        messages.append(LLMMessage(
+                            role="user",
+                            content=(
+                                f"⚠️ 你的结论引用了 {len(ext.orphan_ids)} 个不存在的 src 编号（如 "
+                                f"{sample}），合法 src ID 范围严格限定为 [1..{max_id}]。\n"
+                                f"请基于已有数据来源目录重写结论：\n"
+                                f"- 删除所有 ID > {max_id} 的引用\n"
+                                f"- 没有具体来源支持的判断改用 [src:none] 标注\n"
+                                f"- 保留原始分析逻辑，仅修正引用编号\n"
+                                f"再次用 <conclude> 标签包裹完整输出。"
+                            ),
+                        ))
+                        # Mark retry done so we don't loop forever
+                        _citation_retry_done = True
+                        # Reset raw and let outer loop re-collect
+                        raw = ""
+                        continue
+
                 latency = int((time.time() - start_time) * 1000)
                 eff = round(sum(1 for a in actions if a.result_length > 100) / len(actions), 2) if actions else None
                 return GateResult(
@@ -375,13 +550,14 @@ class GateExecutor:
             if not tool_call:
                 # No tool call and no conclude tag — treat as implicit conclusion
                 # Use the last round's full text as the primary output
-                all_analysis_text.append(raw)
+                all_analysis_text.append(_strip_thinking(raw))
                 break
 
-            # Strip tool_call XML from text before accumulating analysis content
+            # Strip tool_call XML and thinking blocks before accumulating analysis content
             analysis_before_tool = re.sub(
                 r'<tool_call>.*?</tool_call>', '', raw, flags=re.DOTALL
             ).strip()
+            analysis_before_tool = _strip_thinking(analysis_before_tool)
             if analysis_before_tool:
                 all_analysis_text.append(analysis_before_tool)
 
@@ -442,18 +618,29 @@ class GateExecutor:
             actions.append(ToolAction(
                 tool_name=tool_call.name,
                 tool_args=tool_call.arguments,
-                result=tool_result[:500],
+                result=tool_result[:4000],   # increased from 500 — preserves URL+snippet for ~5 results
+                result_full=tool_result,     # un-truncated for provenance / citation extraction
                 round_num=budget.rounds_used,
                 search_query=tool_call.arguments.get("query", ""),
                 result_length=len(tool_result),
             ))
 
-            # Append conversation turn and continue
+            # Append conversation turn and continue.
+            # Remind the model of the current valid src id range so it doesn't
+            # fabricate IDs beyond catalog.len() (β.13 mitigation).
+            try:
+                catalog_len = len(self.tool_executor._catalog) if getattr(self.tool_executor, "_catalog", None) else 0
+            except Exception:
+                catalog_len = 0
+            range_hint = (
+                f"\n\n⚠️ 当前合法 src ID 范围已扩展至 [1..{catalog_len}]。"
+                f"在 [src:N] 中只能使用此范围内的编号，不允许编造更大的 ID。"
+            ) if catalog_len > 0 else ""
             messages.append(LLMMessage(role="assistant", content=raw))
             messages.append(LLMMessage(
                 role="user",
                 content=(
-                    f"工具 {tool_call.name} 的执行结果:\n{tool_result}\n\n"
+                    f"工具 {tool_call.name} 的执行结果:\n{tool_result}{range_hint}\n\n"
                     f"请基于此结果继续分析。如果信息充分，请用 <conclude> 标签包裹最终分析。"
                     f"如果还需要更多信息，继续调用工具。"
                 ),
@@ -505,6 +692,71 @@ class GateExecutor:
                 # Append forced conclusion to accumulated text
                 full_raw = (full_raw + "\n\n" + raw).strip() if full_raw else raw
 
+        # β.17: Final-pass orphan citation check — covers implicit-conclusion
+        # path that the inline check inside the while loop doesn't reach.
+        # If full_raw contains fabricated src IDs, force one corrective rewrite.
+        catalog = getattr(self.tool_executor, "_catalog", None)
+        if catalog is not None and not _citation_retry_done and full_raw:
+            try:
+                from uteki.domains.agent.provenance import extract_citations
+                valid_ids = {dp.id for dp in catalog}
+                ext = extract_citations(full_raw, valid_ids=valid_ids)
+                if ext.orphan_ids and valid_ids:
+                    max_id = max(valid_ids)
+                    sample = ext.orphan_ids[:8]
+                    logger.warning(
+                        f"[citation] gate {skill.gate_number} {skill.skill_name}: "
+                        f"final-pass found {len(ext.orphan_ids)} orphan IDs "
+                        f"({sample}{'…' if len(ext.orphan_ids) > 8 else ''}). "
+                        f"Forcing rewrite."
+                    )
+                    if on_progress:
+                        on_progress({
+                            "type": "tool_warning",
+                            "gate": skill.gate_number,
+                            "skill": skill.skill_name,
+                            "tool_name": "citation_check",
+                            "warning": f"输出含 {len(ext.orphan_ids)} 个伪造 src ID，要求重写",
+                            "round": budget.rounds_used,
+                        })
+                    messages.append(LLMMessage(role="assistant", content=full_raw))
+                    messages.append(LLMMessage(
+                        role="user",
+                        content=(
+                            f"⚠️ 你的输出引用了 {len(ext.orphan_ids)} 个不存在的 src 编号"
+                            f"（如 {sample}）。合法 src ID 范围严格限定为 [1..{max_id}]。\n"
+                            f"请基于已有数据来源目录重写完整结论：\n"
+                            f"- 删除所有 ID > {max_id} 的引用\n"
+                            f"- 没有具体来源支持的判断改用 [src:none]\n"
+                            f"- 保留原始分析逻辑和【关键发现】、【核心结论】、【置信度】结构\n"
+                            f"输出整段重写后的内容（无需 <conclude> 标签包裹）。"
+                        ),
+                    ))
+                    retry_raw = ""
+                    remaining = budget.timeout_seconds - budget.elapsed_seconds
+                    try:
+                        async def _retry_collect():
+                            nonlocal retry_raw
+                            async for chunk in adapter.chat(messages, stream=True):
+                                retry_raw += chunk
+                        await asyncio.wait_for(_retry_collect(), timeout=max(remaining, 30))
+                    except asyncio.TimeoutError:
+                        logger.warning("[citation] retry timed out")
+                        retry_raw = ""
+
+                    if retry_raw:
+                        retry_clean = _strip_thinking(retry_raw)
+                        retry_ext = extract_citations(retry_clean, valid_ids=valid_ids)
+                        if len(retry_ext.orphan_ids) < len(ext.orphan_ids):
+                            logger.info(
+                                f"[citation] retry improved orphans "
+                                f"{len(ext.orphan_ids)} → {len(retry_ext.orphan_ids)}"
+                            )
+                            full_raw = retry_clean
+                    _citation_retry_done = True
+            except Exception as e:
+                logger.debug(f"[citation] final-pass check failed: {e}")
+
         latency = int((time.time() - start_time) * 1000)
         # Extract core conclusion from raw if not from conclude tag
         core_conclusion = self._extract_core_conclusion(full_raw)
@@ -533,18 +785,16 @@ class GateExecutor:
         skill: CompanySkill,
         context: PipelineContext,
         budget: ToolBudget,
-        on_progress: Optional[Callable],
+        on_progress: Callable | None,
     ) -> GateResult:
         """Gate 7: synthesis — no ReAct, just structured JSON output."""
         start_time = time.time()
 
         # Gate 7 max_tokens: model-specific limits
         model_name = self.model_config.get("model", "")
-        gate7_tokens = 8192  # safe default for most providers
-        if "claude" in model_name:
-            gate7_tokens = 16384
-        elif "gpt-4" in model_name or "gpt-5" in model_name:
-            gate7_tokens = 16384
+        gate7_tokens = 16384  # default high — Gate 7 JSON is large, never truncate
+        if "claude-haiku" in model_name:
+            gate7_tokens = 8192  # Haiku has lower practical limit
         adapter = self._get_adapter(max_tokens=gate7_tokens, json_mode=True)
 
         cross_gate_context = context.get_context_for_gate(7)
@@ -596,6 +846,31 @@ class GateExecutor:
             except Exception as e:
                 logger.warning(f"[gate7] JSON repair failed: {e}")
 
+        # Quality check + retry: even if JSON parsed, verify content completeness
+        if parse_status != "raw_only" and parsed:
+            quality_ok, issues = _check_gate7_quality(parsed.model_dump())
+            if not quality_ok:
+                logger.warning(f"[gate7] quality check failed ({len(issues)} issues): {issues}")
+                remaining_timeout = max(
+                    GATE_TIMEOUT_GATE7 - int(time.time() - start_time), 60
+                )
+                retry_raw = await self._gate7_quality_retry(
+                    skill, context, user_msg, issues, remaining_timeout, on_progress
+                )
+                if retry_raw:
+                    retry_parsed, retry_status = parse_skill_output(retry_raw, CompanyFullReport)
+                    if retry_status != "raw_only" and retry_parsed:
+                        retry_ok, retry_issues = _check_gate7_quality(retry_parsed.model_dump())
+                        if retry_ok or len(retry_issues) < len(issues):
+                            logger.info(
+                                f"[gate7] quality retry improved: {len(issues)} → {len(retry_issues)} issues"
+                            )
+                            raw, parsed, parse_status = retry_raw, retry_parsed, retry_status
+                        else:
+                            logger.warning("[gate7] quality retry did not improve, keeping original")
+                    else:
+                        logger.warning("[gate7] quality retry parse failed, keeping original")
+
         latency = int((time.time() - start_time) * 1000)
 
         return GateResult(
@@ -619,9 +894,14 @@ class GateExecutor:
             context.company_data_text,
         ]
 
+        # Provenance: include catalog index (yfinance pre-seed + accumulated tool hits)
+        catalog_block = self._render_catalog_for_prompt(context)
+        if catalog_block:
+            parts.append(catalog_block)
+
         cross_gate = context.get_context_for_gate(skill.gate_number)
         if cross_gate:
-            parts.append(f"\n\n══ 前序分析结论（请在此基础上深化而非重复）══")
+            parts.append("\n\n══ 前序分析结论（请在此基础上深化而非重复）══")
             parts.append(cross_gate)
 
         return "\n".join(parts)
@@ -636,10 +916,48 @@ class GateExecutor:
             "【重要提示】标记为 [数据缺失] 的部分表示无法获取，请基于已有数据分析，"
             "明确标注哪些结论缺乏数据支持。不要对缺失数据进行猜测或编造。\n",
             context.company_data_text,
-            "\n\n",
-            cross_gate_context,
         ]
+        catalog_block = self._render_catalog_for_prompt(context)
+        if catalog_block:
+            parts.append(catalog_block)
+        parts.append("\n\n")
+        parts.append(cross_gate_context)
         return "\n".join(parts)
+
+    def _render_catalog_for_prompt(self, context: PipelineContext) -> str:
+        """Render a compact source catalog summary for the LLM prompt.
+
+        Goal: let the model know which claims it can support with [src:N]
+        markers. Keeps the listing short — only catalog ids + key + value.
+        Tool results in tool_result themselves include richer text per hit.
+
+        β.13/β.14 mitigations:
+        - Prefix the block with the explicit valid id range "[1..N]" so the
+          model has a hard upper bound to clamp against (prevents the
+          "increment past max" fabrication seen in GOOGL/claude β).
+        - Truncate excerpts to 80 chars (down from 120) to reduce token
+          weight as the catalog grows.
+        - Add a hard rule reminder right next to the listing.
+        """
+        try:
+            cat = context.catalog
+        except Exception:
+            return ""
+        n = len(cat)
+        if n == 0:
+            return ""
+        block = cat.to_llm_block(max_excerpt=80)
+        if not block:
+            return ""
+        return (
+            f"\n\n══ 数据来源目录（合法 src ID 范围: [1..{n}]）══\n"
+            "请在你的【关键发现】每条末尾用 [src:N] 引用支持来源。\n"
+            f"⚠️ src ID 必须 ≥1 且 ≤{n}，**不允许**编造任何超出此范围的编号。\n"
+            "⚠️ 不允许在 [src:...] 中使用未在下方目录列出的 ID。\n"
+            "无来源支持的纯推理用 [src:none] 标注。\n\n"
+            f"{block}\n"
+            "══════════════════════════════════════════════════"
+        )
 
     # ── Extraction helpers ────────────────────────────────────────────────
 
@@ -653,7 +971,67 @@ class GateExecutor:
         r'【置信度】[*\s]*\n?\s*([\d.]+)', re.DOTALL
     )
 
-    async def _repair_json(self, broken_json: str) -> Optional[str]:
+    async def _gate7_quality_retry(
+        self,
+        skill: CompanySkill,
+        context: PipelineContext,
+        user_msg: str,
+        issues: list[str],
+        timeout: int,
+        on_progress: Callable | None,
+    ) -> str | None:
+        """Retry Gate 7 once with targeted correction prompts for specific quality issues."""
+        model_name = self.model_config.get("model", "")
+        gate7_tokens = 16384 if ("claude" in model_name or "gpt-4" in model_name) else 8192
+        adapter = self._get_adapter(max_tokens=gate7_tokens, json_mode=True)
+
+        issues_text = "\n".join(f"  - {issue}" for issue in issues)
+        correction_note = (
+            f"\n\n【质量修正要求】上一次输出存在以下问题，本次必须修正：\n{issues_text}\n"
+            "请重新生成完整的 JSON，确保以上所有问题都得到修正。"
+            "特别注意：fisher_qa.questions 必须包含 Q1 到 Q15 完整15题，每题需有实质性答案。"
+        )
+
+        messages = [
+            LLMMessage(role="system", content=skill.system_prompt),
+            LLMMessage(role="user", content=user_msg + correction_note),
+        ]
+
+        retry_raw = ""
+        _pending = ""
+
+        async def _collect_retry():
+            nonlocal retry_raw, _pending
+            async for chunk in adapter.chat(messages, stream=True):
+                retry_raw += chunk
+                _pending += chunk
+                if on_progress and len(_pending) >= _STREAM_CHUNK_SIZE:
+                    on_progress({
+                        "type": "gate_text",
+                        "gate": 7,
+                        "skill": skill.skill_name,
+                        "text": _pending,
+                    })
+                    _pending = ""
+            if on_progress and _pending:
+                on_progress({
+                    "type": "gate_text",
+                    "gate": 7,
+                    "skill": skill.skill_name,
+                    "text": _pending,
+                })
+
+        try:
+            await asyncio.wait_for(_collect_retry(), timeout=timeout)
+            return retry_raw if retry_raw.strip() else None
+        except asyncio.TimeoutError:
+            logger.warning("[gate7] quality retry timed out")
+            return None
+        except Exception as e:
+            logger.warning(f"[gate7] quality retry error: {e}")
+            return None
+
+    async def _repair_json(self, broken_json: str) -> str | None:
         """Use a fast/cheap model to repair malformed JSON from Gate 7.
 
         Reuses the same api_key/base_url already resolved for this pipeline run
@@ -690,7 +1068,7 @@ class GateExecutor:
             logger.warning(f"[gate7] _repair_json error: {e}")
             return None
 
-    def _extract_core_conclusion(self, raw: str) -> Optional[str]:
+    def _extract_core_conclusion(self, raw: str) -> str | None:
         m = self._CORE_CONCLUSION_RE.search(raw)
         return m.group(1).strip() if m else None
 
@@ -704,7 +1082,7 @@ class GateExecutor:
             if line.strip() and line.strip() != "-"
         ]
 
-    def _extract_confidence(self, raw: str) -> Optional[float]:
+    def _extract_confidence(self, raw: str) -> float | None:
         m = self._CONFIDENCE_RE.search(raw)
         if m:
             try:
@@ -730,9 +1108,9 @@ class PipelineOrchestrator:
         self,
         gate_executor: GateExecutor,
         context: PipelineContext,
-        on_progress: Optional[Callable[[dict], Any]] = None,
+        on_progress: Callable[[dict], Any] | None = None,
         model_config: dict | None = None,
-        prompt_overrides: Optional[dict[int, str]] = None,
+        prompt_overrides: dict[int, str] | None = None,
     ):
         self.gate_executor = gate_executor
         self.context = context
@@ -747,7 +1125,7 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.warning(f"[orchestrator] progress emit error: {e}")
 
-    async def _get_gate_cache_key(self, skill: CompanySkill) -> Optional[str]:
+    async def _get_gate_cache_key(self, skill: CompanySkill) -> str | None:
         """Build a cache key for a gate result. None if caching disabled."""
         symbol = self.context.symbol
         if not symbol:
@@ -922,7 +1300,9 @@ class PipelineOrchestrator:
                         "round": a.round_num,
                         "tool_name": a.tool_name,
                         "tool_args": a.tool_args,
-                        "tool_result": a.result,
+                        "tool_result": a.result,           # truncated (4000 chars) — fits in JSON
+                        "tool_result_full": a.result_full, # full untruncated text — provenance source
+                        "result_length": a.result_length,
                     }
                     tool_records.append(record)
                     all_tool_calls.append(record)
@@ -934,6 +1314,32 @@ class PipelineOrchestrator:
                 skill_result["confidence"] = gate_result.confidence
             if gate_result.key_findings:
                 skill_result["key_findings"] = gate_result.key_findings
+
+            # Provenance: extract citation markers from raw output.
+            # When orphan ids (model-fabricated) are detected, scrub them from
+            # the stored raw — replace [src:99] with [src:none] so the UI
+            # doesn't render misleading red chips, while keeping a count of
+            # how many were stripped for audit / quality scoring.
+            try:
+                from uteki.domains.agent.provenance import CitationParser
+                parser = CitationParser(self.context.catalog)
+                ext = parser.parse(gate_result.raw or "")
+                skill_result["citations"] = sorted(ext.all_cited_ids())
+                if ext.orphan_ids:
+                    skill_result["citation_orphans"] = ext.orphan_ids
+                    logger.warning(
+                        f"[citation] {skill.skill_name}: stripped "
+                        f"{len(ext.orphan_ids)} orphan src ids from raw output: "
+                        f"{ext.orphan_ids[:10]}{'…' if len(ext.orphan_ids) > 10 else ''}"
+                    )
+                    # Scrub orphans from raw before storing — the citation parser
+                    # already counted them, but visible report should be clean.
+                    cleaned_raw = ext.cleaned(parser.valid_ids)
+                    skill_result["raw"] = cleaned_raw
+                if ext.no_source_count > 0:
+                    skill_result["citation_no_source"] = ext.no_source_count
+            except Exception as e:
+                logger.debug(f"[citation] parse failed for {skill.skill_name}: {e}")
 
             results[skill.skill_name] = skill_result
 
@@ -1151,12 +1557,21 @@ class PipelineOrchestrator:
                 entry["confidence"] = r["confidence"]
             trace.append(entry)
 
+        # Provenance: serialize catalog (may be empty for legacy/failure cases)
+        try:
+            source_catalog = self.context.catalog.to_dict()
+        except Exception as e:
+            logger.warning(f"[orchestrator] failed to serialize catalog: {e}")
+            source_catalog = {}
+
         return {
             "skills": results,
             "verdict": verdict.model_dump(),
             "total_latency_ms": total_latency_ms,
             "trace": trace,
             "tool_calls": all_tool_calls or None,
+            "source_catalog": source_catalog,
+            "as_of": self.context.as_of,
         }
 
 
@@ -1178,20 +1593,59 @@ class CompanySkillRunner:
         self,
         model_config: dict,
         company_data: dict,
-        on_progress: Optional[Callable[[dict], Any]] = None,
-        prompt_overrides: Optional[dict[int, str]] = None,
+        on_progress: Callable[[dict], Any] | None = None,
+        prompt_overrides: dict[int, str] | None = None,
+        as_of: str | None = None,
     ):
         self.model_config = model_config
         self.company_data = company_data
         self.on_progress = on_progress
         self.prompt_overrides = prompt_overrides
+        self.as_of = as_of
 
     async def run_pipeline(self) -> dict:
         data_text = format_company_data_for_prompt(self.company_data)
         symbol = self.company_data.get("profile", {}).get("symbol", "")
-        context = PipelineContext(company_data_text=data_text, symbol=symbol)
 
-        tool_executor = CompanyToolExecutor(company_data=self.company_data)
+        # ── Provenance: build catalog and seed authoritative sources ──
+        # yfinance gives metric snapshots (no filing date); FMP adds
+        # period-anchored statements (with filing date); EDGAR registers
+        # the actual SEC filings as canonical landmarks.
+        from uteki.domains.agent.provenance.catalog import SourceCatalog
+        from uteki.domains.agent.provenance.fetchers import (
+            seed_from_company_data,
+            seed_from_fmp,
+            seed_from_edgar,
+        )
+        catalog = SourceCatalog(as_of=self.as_of)
+        try:
+            yf_seeded = seed_from_company_data(catalog, self.company_data, as_of=self.as_of)
+            logger.info(f"[runner] seeded {len(yf_seeded)} yfinance DataPoints")
+        except Exception as e:
+            logger.warning(f"[runner] yfinance seed failed: {e}")
+        try:
+            fmp_seeded = await seed_from_fmp(catalog, symbol, as_of=self.as_of)
+            logger.info(f"[runner] seeded {len(fmp_seeded)} FMP DataPoints")
+        except Exception as e:
+            logger.warning(f"[runner] FMP seed failed: {e}")
+        try:
+            edgar_seeded = await seed_from_edgar(catalog, symbol, as_of=self.as_of)
+            logger.info(f"[runner] seeded {len(edgar_seeded)} SEC EDGAR DataPoints")
+        except Exception as e:
+            logger.warning(f"[runner] EDGAR seed failed: {e}")
+
+        context = PipelineContext(
+            company_data_text=data_text,
+            symbol=symbol,
+            catalog=catalog,
+            as_of=self.as_of,
+        )
+
+        # Pass catalog to tool executor so search hits become DataPoints with [src:N] markers
+        tool_executor = CompanyToolExecutor(
+            company_data=self.company_data,
+            catalog=catalog,
+        )
         tool_parser = ToolCallParser()
         gate_executor = GateExecutor(self.model_config, tool_executor, tool_parser)
 

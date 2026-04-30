@@ -128,6 +128,16 @@ export interface PositionHoldingOutput {
   summary: string;
 }
 
+export interface ToolCallRecord {
+  skill: string;
+  round: number;
+  tool_name: string;
+  tool_args: { query?: string; metrics?: string[]; time_window?: string; [k: string]: any };
+  tool_result: string;        // truncated (4000 chars)
+  tool_result_full?: string;  // full untruncated text (provenance)
+  result_length?: number;
+}
+
 export interface GateResult {
   gate: number;
   display_name: string;
@@ -136,7 +146,26 @@ export interface GateResult {
   parse_status: 'structured' | 'partial' | 'raw_only' | 'text' | 'timeout' | 'error';
   latency_ms: number;
   error?: string;
-  tool_calls?: any[];
+  tool_calls?: ToolCallRecord[];
+  // Provenance (β phase) — list of SourceCatalog ids cited by this gate's output
+  citations?: number[];
+  citation_orphans?: number[];
+  citation_no_source?: number;
+}
+
+export interface DataPoint {
+  id: number;
+  key: string;
+  value: any;
+  source_type: 'yfinance' | 'fmp' | 'sec_edgar' | 'google_cse' | 'computed' | 'company_data';
+  source_url: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  as_of: string | null;
+  derived_from: number[];
+  confidence: 'high' | 'medium' | 'low';
+  excerpt: string | null;
 }
 
 export interface CompanyAnalysisResult {
@@ -164,6 +193,9 @@ export interface CompanyAnalysisResult {
     cache_ttl_hours: number;
   };
   analysis_id?: string;
+  // Provenance (β phase) — keyed by DataPoint id
+  source_catalog?: Record<string, DataPoint>;
+  as_of?: string | null;
 }
 
 // ── Persisted analysis types ──
@@ -235,7 +267,7 @@ export const TOTAL_GATES = 7;
 // ── API functions ──
 
 export const analyzeCompanyStream = (
-  params: { symbol: string; provider?: string; model?: string },
+  params: { symbol: string; provider?: string; model?: string; as_of?: string },
   onEvent: (event: CompanyProgressEvent) => void,
 ): { cancel: () => void } => {
   const controller = new AbortController();

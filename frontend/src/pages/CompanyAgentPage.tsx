@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Box, Typography, IconButton, Switch } from '@mui/material';
 import { Loader2, Trash2, Scale, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import TradingViewChart from '../components/index/TradingViewChart';
@@ -8,7 +9,6 @@ import { useTheme } from '../theme/ThemeProvider';
 import { API_BASE } from '../api/client';
 import CompanyAnalysisForm from '../components/company/CompanyAnalysisForm';
 import { type GateStatus } from '../components/company/GateProgressTracker';
-import ThinkingTimeline from '../components/company/ThinkingTimeline';
 import ReportPanel from '../components/company/ReportPanel';
 import CompareView from '../components/company/CompareView';
 import {
@@ -34,6 +34,14 @@ const spinKeyframes = `
   50% { background-color: rgba(59,130,246,0.18); }
 }`;
 
+interface RunningToolCall {
+  gate: number;
+  skill: string;
+  tool_name: string;
+  tool_args?: Record<string, any>;
+  ts: number;
+}
+
 interface RunningAnalysis {
   id: string;
   analysisId: string | null;
@@ -41,9 +49,11 @@ interface RunningAnalysis {
   provider: string;
   cancel: () => void;
   currentGate: number | null;
+  currentGateStartedAt: number | null;
   gateStatuses: Record<number, GateStatus>;
   gateResults: Record<string, any>;
   streamingTexts: Record<string, string>;
+  toolCalls: RunningToolCall[];
   companyInfo: { name: string; symbol: string; sector: string; industry: string; price: number } | null;
   result: CompanyAnalysisResult | null;
   error: string | null;
@@ -93,10 +103,13 @@ function SvgLineChart({ data, width, height, color }: { data: ChartPoint[]; widt
 
 export default function CompanyAgentPage() {
   const { theme } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { id: urlAnalysisId } = useParams<{ id: string }>();
 
   const [analyses, setAnalyses] = useState<CompanyAnalysisSummary[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(urlAnalysisId ?? null);
   const [selectedDetail, setSelectedDetail] = useState<CompanyAnalysisDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [runningAnalyses, setRunningAnalyses] = useState<Map<string, RunningAnalysis>>(new Map());
@@ -282,6 +295,26 @@ export default function CompanyAgentPage() {
 
   useEffect(() => { return () => { runningRef.current.forEach((ra) => ra.cancel()); }; }, []);
 
+  // URL → state: handle direct visits, back/forward
+  useEffect(() => {
+    const fromUrl = urlAnalysisId ?? null;
+    if (fromUrl !== selectedId) {
+      setSelectedId(fromUrl);
+      if (fromUrl) setViewingRunId(null);
+    }
+  }, [urlAnalysisId]);
+
+  // state → URL: keep address bar in sync with the selected analysis
+  useEffect(() => {
+    const fromUrl = urlAnalysisId ?? null;
+    if (selectedId === fromUrl) return;
+    if (selectedId) {
+      navigate(`/company-agent/${selectedId}`, { replace: false });
+    } else if (location.pathname.startsWith('/company-agent/')) {
+      navigate('/company-agent', { replace: false });
+    }
+  }, [selectedId]);
+
   useEffect(() => {
     if (!selectedId) { setSelectedDetail(null); return; }
     let cancelled = false;
@@ -321,13 +354,14 @@ export default function CompanyAgentPage() {
   }, [analyses.filter((a) => a.status === 'running').length, runningAnalyses.size]);
 
   // ── Analyze handler (SSE) ──
-  const handleAnalyze = useCallback((symbol: string, provider?: string) => {
+  const handleAnalyze = useCallback((symbol: string, provider?: string, asOf?: string) => {
     const runId = `run_${++runIdCounter.current}`;
     setReportOpen(false);
     const initial: RunningAnalysis = {
       id: runId, analysisId: null, symbol, provider: provider || 'auto',
-      cancel: () => {}, currentGate: null, gateStatuses: {}, gateResults: {},
-      streamingTexts: {}, companyInfo: null, result: null, error: null,
+      cancel: () => {}, currentGate: null, currentGateStartedAt: null,
+      gateStatuses: {}, gateResults: {},
+      streamingTexts: {}, toolCalls: [], companyInfo: null, result: null, error: null,
       startTime: Date.now(), elapsedMs: 0,
     };
     const updateRun = (updater: (prev: RunningAnalysis) => RunningAnalysis) => {
@@ -339,7 +373,9 @@ export default function CompanyAgentPage() {
         return next;
       });
     };
-    const stream = analyzeCompanyStream({ symbol, provider }, (event: CompanyProgressEvent) => {
+    const streamParams: { symbol: string; provider?: string; as_of?: string } = { symbol, provider };
+    if (asOf) streamParams.as_of = asOf;
+    const stream = analyzeCompanyStream(streamParams, (event: CompanyProgressEvent) => {
       switch (event.type) {
         case 'data_loaded':
           updateRun((ra) => ({
@@ -357,10 +393,20 @@ export default function CompanyAgentPage() {
           }
           break;
         case 'gate_start':
-          if (event.gate) updateRun((ra) => ({ ...ra, currentGate: event.gate!, gateStatuses: { ...ra.gateStatuses, [event.gate!]: 'running' as GateStatus } }));
+          if (event.gate) updateRun((ra) => ({ ...ra, currentGate: event.gate!, currentGateStartedAt: Date.now(), gateStatuses: { ...ra.gateStatuses, [event.gate!]: 'running' as GateStatus } }));
           break;
         case 'gate_text':
           if (event.skill && event.text) updateRun((ra) => ({ ...ra, streamingTexts: { ...ra.streamingTexts, [event.skill!]: (ra.streamingTexts[event.skill!] || '') + event.text! } }));
+          break;
+        case 'tool_call':
+          if (event.tool_name && event.skill && event.gate) {
+            const tc: RunningToolCall = {
+              gate: event.gate, skill: event.skill,
+              tool_name: event.tool_name, tool_args: event.tool_args,
+              ts: Date.now(),
+            };
+            updateRun((ra) => ({ ...ra, toolCalls: [...ra.toolCalls, tc].slice(-12) }));
+          }
           break;
         case 'gate_complete':
           if (event.gate) {
@@ -492,10 +538,12 @@ export default function CompanyAgentPage() {
         return {};
       })();
 
-  const displayGateResults = isViewingRunning ? viewingRun!.gateResults : (selectedDetail?.full_report?.skills || {});
   const displayStreamingTexts = isViewingRunning ? viewingRun!.streamingTexts : {};
+  const displayToolCalls: RunningToolCall[] = isViewingRunning ? viewingRun!.toolCalls : [];
   const displayCurrentGate = isViewingRunning ? viewingRun!.currentGate : isDbRunning ? (Object.entries(displayGateStatuses).find(([, s]) => s === 'running')?.[0] ? Number(Object.entries(displayGateStatuses).find(([, s]) => s === 'running')![0]) : null) : null;
+  const displayCurrentGateStartedAt = isViewingRunning ? viewingRun!.currentGateStartedAt : null;
   const isComplete = isViewingRunning ? !!viewingRun!.result : (!!displayResult && !isDbRunning);
+  const isLiveRunning = (isViewingRunning && !viewingRun!.result && !viewingRun!.error) || isDbRunning;
   const runningCount = runningAnalyses.size;
   const hasTimeline = Object.keys(displayGateStatuses).length > 0 || displayCompanyInfo != null || !!displayError || isDbRunning;
 
@@ -721,6 +769,20 @@ export default function CompanyAgentPage() {
                   bgcolor: `${ACTION_COLORS[displayVerdict.action] || theme.text.muted}15`,
                 }}>
                   {displayVerdict.action}
+                </Typography>
+              )}
+              {displayResult?.as_of && (
+                <Typography
+                  title="历史回测：仅使用截止日期前发布的数据"
+                  sx={{
+                    fontSize: 10, fontWeight: 700, px: 0.75, py: 0.15, borderRadius: '4px',
+                    color: '#a78bfa',
+                    bgcolor: 'rgba(167,139,250,0.12)',
+                    border: '1px solid rgba(167,139,250,0.3)',
+                    fontFamily: "Inter, -apple-system, sans-serif",
+                  }}
+                >
+                  回测 截止 {String(displayResult.as_of).slice(0, 10)}
                 </Typography>
               )}
             </Box>
@@ -996,31 +1058,43 @@ export default function CompanyAgentPage() {
                 flexShrink: 0,
                 borderBottom: `1px solid ${theme.border.subtle}`,
                 px: 2, py: 0.75,
-                display: 'flex', alignItems: 'center', gap: 1,
+                display: 'flex', alignItems: 'center', gap: 0.75,
               }}>
                 {/* Gate step indicators */}
                 {['业务解析', 'Fisher', '护城河', '管理层', '逆向检验', '估值', '裁决'].map((label, i) => {
                   const gateNum = i + 1;
                   const status = displayGateStatuses[gateNum];
+                  const isRunningGate = status === 'running';
+                  const isComplete7 = status === 'complete';
                   return (
                     <Box key={gateNum} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      {i > 0 && <Box sx={{ width: 12, height: 1, bgcolor: status === 'complete' ? '#4caf50' : theme.border.subtle }} />}
+                      {i > 0 && <Box sx={{ width: 8, height: 1, bgcolor: isComplete7 || displayGateStatuses[gateNum - 1] === 'complete' ? '#4caf50' : theme.border.subtle }} />}
                       <Box
                         onClick={() => { setActiveGate(gateNum); setScrollToGate(gateNum); }}
                         sx={{
-                          display: 'flex', alignItems: 'center', gap: 0.3,
-                          cursor: 'pointer', px: 0.75, py: 0.3, borderRadius: '6px',
-                          bgcolor: activeGate === gateNum ? `${theme.brand.primary}15` : 'transparent',
-                          border: activeGate === gateNum ? `1px solid ${theme.brand.primary}30` : '1px solid transparent',
-                          '&:hover': { bgcolor: activeGate === gateNum ? `${theme.brand.primary}15` : `${theme.text.primary}06` },
+                          display: 'flex', alignItems: 'center', gap: 0.4,
+                          cursor: 'pointer', px: isRunningGate ? 0.85 : 0.75, py: 0.3, borderRadius: '6px',
+                          bgcolor: isRunningGate
+                            ? `${theme.brand.primary}18`
+                            : activeGate === gateNum ? `${theme.brand.primary}15` : 'transparent',
+                          border: isRunningGate
+                            ? `1px solid ${theme.brand.primary}40`
+                            : activeGate === gateNum ? `1px solid ${theme.brand.primary}30` : '1px solid transparent',
+                          '&:hover': { bgcolor: isRunningGate ? `${theme.brand.primary}22` : activeGate === gateNum ? `${theme.brand.primary}15` : `${theme.text.primary}06` },
                         }}
                       >
                         <Box sx={{
                           width: 6, height: 6, borderRadius: '50%',
-                          bgcolor: status === 'complete' ? '#4caf50' : status === 'running' ? theme.brand.primary : status === 'error' ? '#f44336' : theme.border.default,
-                          animation: status === 'running' ? 'analyzing-pulse 1.5s ease-in-out infinite' : 'none',
+                          bgcolor: isComplete7 ? '#4caf50' : isRunningGate ? theme.brand.primary : status === 'error' ? '#f44336' : theme.border.default,
+                          animation: isRunningGate ? 'analyzing-pulse 1.5s ease-in-out infinite' : 'none',
                         }} />
-                        <Typography sx={{ fontSize: 9.5, color: status === 'complete' ? theme.text.secondary : theme.text.disabled }}>
+                        <Typography sx={{
+                          fontSize: 9.5,
+                          fontWeight: isRunningGate ? 600 : 400,
+                          color: isRunningGate
+                            ? theme.brand.primary
+                            : isComplete7 ? theme.text.secondary : theme.text.disabled,
+                        }}>
                           {label}
                         </Typography>
                       </Box>
@@ -1029,7 +1103,7 @@ export default function CompanyAgentPage() {
                 })}
                 <Box sx={{ flex: 1 }} />
                 {/* Elapsed time */}
-                <Typography sx={{ fontSize: 10, color: theme.text.muted, fontFeatureSettings: '"tnum"' }}>
+                <Typography sx={{ fontSize: 10, color: theme.text.muted, fontFeatureSettings: '"tnum"', fontFamily: 'var(--font-mono)' }}>
                   {formatTime(isViewingRunning ? viewingRun!.elapsedMs : (displayResult?.total_latency_ms || 0))}
                 </Typography>
                 {/* Judge button — only when analysis is complete */}
@@ -1079,6 +1153,14 @@ export default function CompanyAgentPage() {
                   onScrollToGateConsumed={() => setScrollToGate(null)}
                   onActiveGateChange={(gate) => setActiveGate(gate)}
                   analysisId={selectedId || (isViewingRunning ? viewingRun!.analysisId : null)}
+                  sourceCatalog={displayResult?.source_catalog as any}
+                  isLiveRunning={isLiveRunning}
+                  currentGate={displayCurrentGate}
+                  currentGateStartedAt={displayCurrentGateStartedAt}
+                  streamingTexts={displayStreamingTexts}
+                  liveToolCalls={displayToolCalls}
+                  gateStatuses={displayGateStatuses}
+                  totalElapsedMs={isViewingRunning ? viewingRun!.elapsedMs : 0}
                 />
 
                 {/* Judge Results — inline below report */}

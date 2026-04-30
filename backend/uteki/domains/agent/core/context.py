@@ -9,7 +9,10 @@ Manages cross-gate information flow:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from uteki.domains.agent.provenance.catalog import SourceCatalog
 
 
 @dataclass
@@ -17,11 +20,13 @@ class ToolAction:
     """Record of a single tool invocation."""
     tool_name: str
     tool_args: dict
-    result: str
+    result: str                      # truncated for context-window safety (4000 chars)
     round_num: int
     search_query: str = ""          # actual search query (for web_search)
     result_length: int = 0          # chars returned by tool
     used_in_conclusion: bool = False # can be filled by Judge later
+    result_full: Optional[str] = None  # un-truncated tool output for provenance/citation
+    data_points: list[int] = field(default_factory=list)  # SourceCatalog IDs (β phase)
 
 
 @dataclass
@@ -71,12 +76,28 @@ class PipelineContext:
     - Downstream hints from reflections are injected into subsequent gates
     """
 
-    def __init__(self, company_data_text: str, symbol: str = ""):
+    def __init__(
+        self,
+        company_data_text: str,
+        symbol: str = "",
+        catalog: Optional["SourceCatalog"] = None,
+        as_of: Optional[str] = None,
+    ):
         self.company_data_text = company_data_text
         self.symbol = symbol.upper()
         self.gate_results: dict[int, GateResult] = {}
         self.reflections: list[Reflection] = []
         self.downstream_hints: list[str] = []
+        # Provenance: lazily constructed when first accessed if not provided
+        self._catalog: Optional["SourceCatalog"] = catalog
+        self.as_of: Optional[str] = as_of
+
+    @property
+    def catalog(self) -> "SourceCatalog":
+        if self._catalog is None:
+            from uteki.domains.agent.provenance.catalog import SourceCatalog
+            self._catalog = SourceCatalog(as_of=self.as_of)
+        return self._catalog
 
     def add_gate_result(self, result: GateResult):
         self.gate_results[result.gate_number] = result

@@ -27,15 +27,28 @@ class WebSearchService:
     def available(self) -> bool:
         return self._engine._strategy is not None
 
-    async def search(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        """Search and return JSON-serializable results."""
-        results = await self._engine.search(query, max_results=max_results)
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        date_restrict: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search and return JSON-serializable results.
+
+        Args:
+            date_restrict: Optional CSE dateRestrict (e.g. "d7", "m6", "y2") to limit
+                          results to a recency window. None = no filter.
+        """
+        results = await self._engine.search(
+            query, max_results=max_results, date_restrict=date_restrict
+        )
         return [
             {
                 "title": r.title,
                 "url": r.url,
                 "snippet": r.snippet,
                 "source": r.source,
+                "published_at": r.published_at,
             }
             for r in results
         ]

@@ -167,6 +167,10 @@ class CompanyAnalyzeRequest(BaseModel):
     investment_horizon: str = "5-10yr"
     provider: Optional[str] = None
     model: Optional[str] = None
+    # ISO date (YYYY-MM-DD). When set, future Phase γ will constrain all data
+    # fetchers to publications/filings on or before this date (historical
+    # backtesting). Phase 0/β: persisted but not yet enforced.
+    as_of: Optional[str] = None
 
 
 # ── Prompt Management ────────────────────────────────────────────────────
