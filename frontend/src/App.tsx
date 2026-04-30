@@ -9,6 +9,7 @@ import SnbTradingPage from './pages/SnbTradingPage';
 import IndexAgentPage from './pages/IndexAgentPage';
 import CompanyAgentPage from './pages/CompanyAgentPage';
 import CompanyAgentDemoPage from './pages/CompanyAgentDemoPage';
+import CompanyConversationDemo from './pages/CompanyConversationDemo';
 import CompanyAgentV2DemoPage from './pages/CompanyAgentV2DemoPage';
 import IndexAgentDemoPage from './pages/IndexAgentDemoPage';
 import ApiTestPage from './pages/ApiTestPage';
@@ -31,6 +32,7 @@ function App() {
       <Route path="/demo/reflection" element={<ReflectionDemoPage />} />
       <Route path="/demo/model-selector" element={<ModelSelectorDemoPage />} />
       <Route path="/demo/company-agent" element={<CompanyAgentDemoPage />} />
+      <Route path="/demo/company-conversation" element={<CompanyConversationDemo />} />
       <Route path="/company-v2" element={<CompanyAgentV2DemoPage />} />
       {/* CompanyTaskPage merged into /company-v2 */}
       <Route path="/demo/index-agent" element={<IndexAgentDemoPage />} />
