@@ -145,6 +145,8 @@ class FMPCalendarService:
                     "actual_value": event.get("actual"),
                     "expected_value": event.get("estimate"),
                     "previous_value": event.get("previous"),
+                    "country": event.get("country", ""),
+                    "currency": event.get("currency", ""),
                     "source": "fmp",
                 }
 

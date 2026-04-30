@@ -36,12 +36,15 @@ class SnbClient:
 
         self.client = SnbHttpClient(config)
         self._logged_in = False
-        logger.info(f"SNB客户端初始化 - 账号: {account}, 环境: {env}")
+        # PII guard: mask account in logs — show first 2 + last 2 chars only
+        masked = (account[:2] + "*" * max(0, len(account) - 4) + account[-2:]) if len(account) > 4 else "***"
+        logger.info(f"SNB客户端初始化 - 账号: {masked}, 环境: {env}")
 
     def _sync_login(self):
         result = self.client.login()
         self._logged_in = True
-        logger.info(f"SNB登录成功 - 账号: {self.account}")
+        masked = (self.account[:2] + "*" * max(0, len(self.account) - 4) + self.account[-2:]) if len(self.account) > 4 else "***"
+        logger.info(f"SNB登录成功 - 账号: {masked}")
         return result
 
     async def _ensure_login(self):

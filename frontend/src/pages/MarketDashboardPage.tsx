@@ -484,25 +484,54 @@ export default function MarketDashboardPage() {
 
   const selectedCat = sortedCats.find(c => c.category === selected);
 
+  // Editorial finance shell — shared with /dashboard, /trading/snb
+  const editorialShell = {
+    bgcolor: '#15130F',
+    color: '#F4ECDF',
+    backgroundImage: `
+      radial-gradient(ellipse 1400px 700px at 8% -8%, rgba(168,137,110,0.06), transparent 60%),
+      radial-gradient(ellipse 900px 600px at 96% 108%, rgba(91,123,106,0.05), transparent 65%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.005) 0 1px, transparent 1px 3px)
+    `,
+    fontFamily: "'Newsreader', '宋体', Georgia, serif",
+  };
+
   if (loading) {
     return (
       <Box sx={{
-        height: isCompact ? 'calc(100vh - 48px)' : '100vh', width: '100%',
+        height: '100vh', width: 'calc(100% + 48px)',
         display: 'flex', justifyContent: 'center', alignItems: 'center',
-        bgcolor: theme.background.primary, m: isCompact ? -2 : -3,
+        m: isCompact ? -2 : -3,
+        ...editorialShell,
       }}>
-        <LoadingDots text="Loading dashboard" fontSize={14} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{
+            width: 6, height: 6, borderRadius: '50%', bgcolor: '#A8A097',
+            animation: 'pulse 1.4s ease-in-out infinite',
+            '@keyframes pulse': {
+              '0%, 100%': { opacity: 0.3, transform: 'scale(0.85)' },
+              '50%': { opacity: 1, transform: 'scale(1)' },
+            },
+          }} />
+          <Typography sx={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 10, letterSpacing: '0.32em', textTransform: 'uppercase',
+            color: '#5C5750',
+          }}>
+            正在加载宏观面板
+          </Typography>
+        </Box>
       </Box>
     );
   }
 
   return (
     <Box sx={{
-      height: isCompact ? 'calc(100vh - 48px)' : '100vh',
+      height: '100vh',
       width: isCompact ? 'calc(100% + 32px)' : 'calc(100% + 48px)',
-      bgcolor: theme.background.primary, color: theme.text.primary,
       m: isCompact ? -2 : -3,
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      ...editorialShell,
     }}>
       {/* ─── Header ─── */}
       <Box sx={{

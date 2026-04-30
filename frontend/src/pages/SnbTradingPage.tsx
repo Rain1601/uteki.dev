@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -10,9 +10,6 @@ import {
   TableHead,
   TableRow,
   Chip,
-  Tabs,
-  Tab,
-  Grid,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -31,7 +28,24 @@ import {
 import { RefreshCw as RefreshIcon, Pencil as EditIcon, FilePlus as AddCommentIcon, Plus as AddIcon, X as CloseIcon, Lock as LockIcon, QrCode as QrCodeIcon } from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
 import LoadingDots from '../components/LoadingDots';
+import PortfolioPie from '../components/snb/PortfolioPie';
 import { toast } from 'sonner';
+
+// ── Editorial-finance type stack ──────────────────────────────────────────
+// Display: Fraunces (variable serif w/ optical sizing + SOFT axis)
+// Body:    Newsreader (warm body serif)
+// Numbers: JetBrains Mono (tabular figures)
+const FONT_DISPLAY = "'Fraunces', 'Newsreader', Georgia, 'Times New Roman', serif";
+const FONT_BODY = "'Newsreader', Georgia, serif";
+const FONT_MONO = "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace";
+
+// Refined accents — softer than UI standard greens/reds, magazine-grade
+const COLOR_GAIN = '#6FAF8D';
+const COLOR_LOSS = '#B0524A';
+const COLOR_NEUTRAL = '#C9A97E';   // amber accent — for hold / pending
+const COLOR_INK = '#F4ECDF';      // warm off-white
+const COLOR_INK_MUTED = '#A8A097'; // warm gray
+const COLOR_INK_FAINT = '#5C5750';
 import {
   SnbBalance,
   SnbPosition,
@@ -52,7 +66,38 @@ import {
 } from '../api/snb';
 
 export default function SnbTradingPage() {
-  const { theme, isDark } = useTheme();
+  const { theme: baseTheme, isDark } = useTheme();
+  // Editorial theme override — same shape, warm dark palette so all
+  // `theme.X` references downstream (1389-line page + dialogs) inherit
+  // the editorial-finance look without per-line edits.
+  const theme = {
+    ...baseTheme,
+    mode: 'dark' as const,
+    background: {
+      ...baseTheme.background,
+      primary: '#15130F',
+      secondary: '#1B1814',
+      tertiary: '#221E18',
+    },
+    text: {
+      ...baseTheme.text,
+      primary: COLOR_INK,
+      secondary: '#D8CFBF',
+      muted: COLOR_INK_MUTED,
+      disabled: COLOR_INK_FAINT,
+    },
+    border: {
+      ...baseTheme.border,
+      subtle: '#2A2620',
+      default: '#3A342D',
+      divider: '#2A2620',
+    },
+    brand: {
+      ...baseTheme.brand,
+      primary: COLOR_NEUTRAL,  // amber accent
+      hover: '#D9BB91',
+    },
+  };
 
   // Availability state
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -305,7 +350,8 @@ export default function SnbTradingPage() {
     return v >= 0 ? `+${formatted}` : `-${formatted}`;
   };
 
-  const pnlColor = (v: number) => (v >= 0 ? '#4caf50' : '#f44336');
+  const pnlColor = (v: number) => (v >= 0 ? COLOR_GAIN : COLOR_LOSS);
+  void pnlColor; // retained for transactions table below
 
   const uniqueSymbols = [...new Set(transactions.map((t) => t.symbol))].sort();
 
@@ -320,6 +366,28 @@ export default function SnbTradingPage() {
   const cardBorder = `1px solid ${theme.border.subtle}`;
   const tableCellSx = { color: theme.text.primary, borderBottom: `1px solid ${theme.border.subtle}`, fontSize: 13, py: 1.2 };
   const tableHeadSx = { color: theme.text.muted, borderBottom: `1px solid ${theme.border.default}`, fontSize: 12, fontWeight: 600, py: 1 };
+
+  // Portfolio aggregate stats — derived from current positions only (unrealized P&L on held positions).
+  // Note: this is "持仓收益率" (return on currently held positions), not full account return —
+  // it doesn't account for closed positions, dividends, or interest costs.
+  const portfolioStats = useMemo(() => {
+    if (!positions || positions.length === 0) {
+      return { totalCost: 0, totalMarket: 0, totalPnl: 0, returnPct: 0, count: 0 };
+    }
+    let totalCost = 0;
+    let totalMarket = 0;
+    let totalPnl = 0;
+    for (const p of positions) {
+      const cost = (typeof p.cost === 'number' && p.cost > 0)
+        ? p.cost
+        : (p.quantity || 0) * (p.average_price || 0);
+      totalCost += cost;
+      totalMarket += p.market_value || 0;
+      totalPnl += p.unrealized_pnl || 0;
+    }
+    const returnPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+    return { totalCost, totalMarket, totalPnl, returnPct, count: positions.length };
+  }, [positions]);
 
   // Not configured — show local-only notice
   if (configured === false) {
@@ -357,162 +425,675 @@ export default function SnbTradingPage() {
     );
   }
 
+  // Editorial palette pulled from constants for terse use below
+  const pnlSign = portfolioStats.totalPnl >= 0;
+  const dateLine = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+
   return (
     <Box
       sx={{
-        m: -3, height: 'calc(100vh - 48px)', width: 'calc(100% + 48px)',
-        display: 'flex', flexDirection: 'column',
-        bgcolor: theme.background.primary, color: theme.text.primary, overflow: 'hidden', p: 3,
+        m: -3,
+        minHeight: 'calc(100vh - 48px)',
+        width: 'calc(100% + 48px)',
+        display: 'flex',
+        flexDirection: 'column',
+        bgcolor: '#15130F',
+        color: COLOR_INK,
+        overflow: 'auto',
+        // Subtle paper-grain backdrop and warm ambient glow
+        backgroundImage: `
+          radial-gradient(ellipse 1200px 600px at 12% -10%, rgba(168,137,110,0.06), transparent 60%),
+          radial-gradient(ellipse 800px 500px at 95% 105%, rgba(91,123,106,0.05), transparent 65%),
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.005) 0 1px, transparent 1px 3px)
+        `,
+        px: { xs: 3, md: 5 },
+        py: { xs: 3, md: 4 },
+        fontFamily: FONT_BODY,
       }}
     >
-      {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5, pb: 2, borderBottom: `1px solid ${theme.border.subtle}` }}>
-        <Typography sx={{ fontSize: 24, fontWeight: 600, color: theme.text.primary }}>
-          雪盈证券 · 美股交易
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-          <Button
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={() => setOrderDialogOpen(true)}
+      {/* ── Editorial masthead ────────────────────────────────────────── */}
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-end',
+          mb: 4,
+          pb: 2,
+          borderBottom: `1px solid ${COLOR_INK_FAINT}`,
+        }}
+      >
+        <Box>
+          <Typography
             sx={{
-              bgcolor: theme.brand.primary, color: '#fff', textTransform: 'none',
-              fontWeight: 600, fontSize: 13, borderRadius: 2, px: 2,
-              '&:hover': { bgcolor: theme.brand.hover },
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: '0.3em',
+              textTransform: 'uppercase',
+              color: COLOR_INK_MUTED,
+              mb: 0.5,
             }}
           >
-            创建订单
+            Snowball Securities — US Equities
+          </Typography>
+          <Typography
+            sx={{
+              fontFamily: FONT_DISPLAY,
+              fontWeight: 400,
+              fontStyle: 'italic',
+              fontSize: { xs: 36, md: 52 },
+              letterSpacing: '-0.025em',
+              color: COLOR_INK,
+              lineHeight: 1,
+              fontVariationSettings: '"opsz" 144, "SOFT" 60, "WONK" 1',
+            }}
+          >
+            雪盈证券
+            <Box component="span" sx={{ color: COLOR_INK_FAINT, mx: 1.5, fontStyle: 'normal' }}>·</Box>
+            <Box component="span" sx={{ fontStyle: 'normal', fontWeight: 300 }}>美股</Box>
+          </Typography>
+          <Typography
+            sx={{
+              fontFamily: FONT_BODY,
+              fontStyle: 'italic',
+              fontSize: 13,
+              color: COLOR_INK_MUTED,
+              mt: 1,
+              letterSpacing: '0.01em',
+            }}
+          >
+            {dateLine}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center' }}>
+          <Button
+            onClick={refreshAll}
+            startIcon={<RefreshIcon size={13} />}
+            sx={{
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: '0.15em',
+              textTransform: 'uppercase',
+              color: COLOR_INK_MUTED,
+              border: `1px solid ${COLOR_INK_FAINT}`,
+              borderRadius: 0,
+              px: 2,
+              py: 0.75,
+              '&:hover': {
+                borderColor: COLOR_INK,
+                color: COLOR_INK,
+                bgcolor: 'transparent',
+              },
+            }}
+          >
+            Refresh
           </Button>
           <Button
-            size="small"
-            startIcon={<RefreshIcon />}
-            onClick={refreshAll}
+            onClick={() => setOrderDialogOpen(true)}
+            startIcon={<AddIcon size={13} />}
             sx={{
-              bgcolor: isDark ? 'rgba(100,149,237,0.15)' : 'rgba(100,149,237,0.08)',
-              color: theme.brand.primary,
-              border: `1px solid ${isDark ? 'rgba(100,149,237,0.3)' : 'rgba(100,149,237,0.2)'}`,
-              textTransform: 'none', fontWeight: 600, fontSize: 13, borderRadius: 2, px: 2,
-              '&:hover': { bgcolor: isDark ? 'rgba(100,149,237,0.25)' : 'rgba(100,149,237,0.15)' },
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              letterSpacing: '0.15em',
+              textTransform: 'uppercase',
+              color: '#15130F',
+              bgcolor: COLOR_INK,
+              borderRadius: 0,
+              px: 2,
+              py: 0.75,
+              '&:hover': { bgcolor: '#FFF8EA' },
             }}
           >
-            刷新
+            New Order
           </Button>
         </Box>
       </Box>
 
-      {/* Balance Dashboard */}
-      <Grid container spacing={2} sx={{ mb: 2.5 }}>
-        {[
-          { label: '总资产', value: balance?.total_value, loading: balanceLoading },
-          { label: '现金', value: balance?.cash, loading: balanceLoading },
-          { label: '持仓市值', value: balance?.market_value, loading: balanceLoading },
-          { label: '可用资金', value: balance?.available_funds ?? balance?.cash, loading: balanceLoading },
-        ].map((item) => (
-          <Grid item xs={6} md={3} key={item.label}>
-            <Box sx={{ bgcolor: cardBg, border: cardBorder, borderRadius: 2, p: 2 }}>
-              <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5 }}>{item.label}</Typography>
-              {item.loading ? (
-                <LoadingDots text="" fontSize={14} />
-              ) : (
-                <Typography sx={{ fontSize: 20, fontWeight: 600, color: theme.text.primary }}>
-                  {formatCurrency(item.value)}
-                </Typography>
-              )}
-            </Box>
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* Tabs */}
-      <Tabs
-        value={activeTab}
-        onChange={(_, v) => setActiveTab(v)}
+      {/* ── Hero panel: 总资产 dominant + 3 secondary stacked ─────────── */}
+      <Box
         sx={{
-          minHeight: 36, mb: 2,
-          '& .MuiTab-root': { color: theme.text.muted, textTransform: 'none', fontWeight: 600, fontSize: 14, minHeight: 36, py: 0 },
-          '& .Mui-selected': { color: theme.brand.primary },
-          '& .MuiTabs-indicator': { bgcolor: theme.brand.primary },
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: '1.7fr 1fr' },
+          gap: { xs: 3, md: 5 },
+          mb: 4.5,
         }}
       >
-        <Tab label="持仓与订单" />
-        <Tab label="交易历史" />
-      </Tabs>
+        {/* HERO: total assets */}
+        <Box>
+          <Typography
+            sx={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: '0.28em',
+              textTransform: 'uppercase',
+              color: COLOR_INK_MUTED,
+              mb: 1,
+            }}
+          >
+            总资产 — Total Assets
+          </Typography>
+          {balanceLoading ? (
+            <LoadingDots text="" fontSize={14} />
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                <Typography
+                  sx={{
+                    fontFamily: FONT_DISPLAY,
+                    fontWeight: 300,
+                    fontSize: { xs: 56, md: 84 },
+                    letterSpacing: '-0.04em',
+                    color: COLOR_INK,
+                    fontFeatureSettings: '"tnum", "lnum"',
+                    fontVariationSettings: '"opsz" 144, "SOFT" 30',
+                    lineHeight: 0.95,
+                  }}
+                >
+                  {balance?.total_value !== undefined
+                    ? formatCurrency(balance.total_value)
+                    : '—'}
+                </Typography>
+              </Box>
+              {portfolioStats.count > 0 && (
+                <Typography
+                  sx={{
+                    mt: 1.5,
+                    fontFamily: FONT_BODY,
+                    fontStyle: 'italic',
+                    fontSize: 14,
+                    color: COLOR_INK_MUTED,
+                    maxWidth: 480,
+                    lineHeight: 1.55,
+                  }}
+                >
+                  {portfolioStats.count} positions, with a combined unrealised return of{' '}
+                  <Box
+                    component="span"
+                    sx={{
+                      fontFamily: FONT_DISPLAY,
+                      fontStyle: 'italic',
+                      fontWeight: 600,
+                      color: pnlSign ? COLOR_GAIN : COLOR_LOSS,
+                    }}
+                  >
+                    {pnlSign ? '+' : ''}{portfolioStats.returnPct.toFixed(2)}%
+                  </Box>{' '}
+                  on{' '}
+                  <Box component="span" sx={{ fontFamily: FONT_MONO, fontFeatureSettings: '"tnum"' }}>
+                    {formatCurrency(portfolioStats.totalCost)}
+                  </Box>{' '}
+                  cost basis.
+                </Typography>
+              )}
+            </>
+          )}
+        </Box>
+
+        {/* Secondary stats stacked */}
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: 'repeat(3, 1fr)', md: '1fr' },
+            gap: { xs: 2, md: 0 },
+            alignContent: 'end',
+          }}
+        >
+          {[
+            { label: '现金', en: 'Cash', value: balance?.cash },
+            { label: '持仓市值', en: 'Market Value', value: balance?.market_value },
+            { label: '可用资金', en: 'Available', value: balance?.available_funds ?? balance?.cash },
+          ].map((it, i) => (
+            <Box
+              key={it.label}
+              sx={{
+                py: 1.25,
+                borderTop: { md: i === 0 ? `1px solid ${COLOR_INK_FAINT}` : 'none' },
+                borderBottom: { md: `1px solid ${COLOR_INK_FAINT}` },
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  flexDirection: { xs: 'column', md: 'row' },
+                }}
+              >
+                <Box>
+                  <Typography
+                    sx={{
+                      fontFamily: FONT_BODY,
+                      fontStyle: 'italic',
+                      fontSize: 13,
+                      color: COLOR_INK,
+                    }}
+                  >
+                    {it.label}
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontFamily: FONT_MONO,
+                      fontSize: 9,
+                      letterSpacing: '0.2em',
+                      textTransform: 'uppercase',
+                      color: COLOR_INK_FAINT,
+                    }}
+                  >
+                    {it.en}
+                  </Typography>
+                </Box>
+                <Typography
+                  sx={{
+                    fontFamily: FONT_MONO,
+                    fontSize: { xs: 18, md: 22 },
+                    fontWeight: 400,
+                    color: COLOR_INK,
+                    fontFeatureSettings: '"tnum"',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  {balanceLoading ? '…' : formatCurrency(it.value)}
+                </Typography>
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+
+      {/* ── Performance panel: P&L headline + pie ─────────────────────── */}
+      {portfolioStats.count > 0 && (
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', md: '1fr 1.2fr' },
+            gap: { xs: 3, md: 5 },
+            mb: 5,
+            pt: 3.5,
+            borderTop: `1px solid ${COLOR_INK_FAINT}`,
+          }}
+        >
+          {/* Big P&L headline — newspaper style */}
+          <Box>
+            <Typography
+              sx={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: '0.28em',
+                textTransform: 'uppercase',
+                color: COLOR_INK_MUTED,
+                mb: 1,
+              }}
+            >
+              Unrealised Gain / Loss
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 400,
+                fontStyle: 'italic',
+                fontSize: { xs: 64, md: 96 },
+                letterSpacing: '-0.04em',
+                color: pnlSign ? COLOR_GAIN : COLOR_LOSS,
+                fontFeatureSettings: '"tnum", "lnum"',
+                fontVariationSettings: '"opsz" 144, "SOFT" 80, "WONK" 0',
+                lineHeight: 0.92,
+                mb: 0.5,
+              }}
+            >
+              {pnlSign ? '+' : ''}{portfolioStats.returnPct.toFixed(2)}%
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: FONT_MONO,
+                fontSize: 16,
+                color: COLOR_INK,
+                fontFeatureSettings: '"tnum"',
+                mt: 1.5,
+                letterSpacing: '-0.01em',
+              }}
+            >
+              {pnlSign ? '+' : ''}{formatCurrency(portfolioStats.totalPnl)}
+              <Box component="span" sx={{ color: COLOR_INK_FAINT, mx: 1, fontFamily: FONT_BODY, fontStyle: 'italic' }}>
+                on
+              </Box>
+              {formatCurrency(portfolioStats.totalCost)}
+            </Typography>
+          </Box>
+
+          {/* Pie chart */}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              gap: 1.5,
+            }}
+          >
+            <Typography
+              sx={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: '0.28em',
+                textTransform: 'uppercase',
+                color: COLOR_INK_MUTED,
+              }}
+            >
+              Allocation by Market Value
+            </Typography>
+            <PortfolioPie
+              size={200}
+              totalLabel="Market Value"
+              totalValue={formatCurrency(portfolioStats.totalMarket)}
+              slices={positions.map((p) => ({
+                symbol: p.symbol,
+                value: p.market_value || 0,
+                pct:
+                  portfolioStats.totalMarket > 0
+                    ? ((p.market_value || 0) / portfolioStats.totalMarket) * 100
+                    : 0,
+              }))}
+            />
+          </Box>
+        </Box>
+      )}
+
+      {/* Editorial section nav — pure boxes, no MUI Tabs (avoids stray bg quirks) */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: 4,
+          mb: 2.5,
+          borderBottom: `1px solid ${COLOR_INK_FAINT}`,
+        }}
+      >
+        {[
+          { label: '持仓与订单', en: 'Holdings & Orders' },
+          { label: '交易历史', en: 'Transactions' },
+        ].map((tab, i) => {
+          const active = i === activeTab;
+          return (
+            <Box
+              key={tab.en}
+              onClick={() => setActiveTab(i)}
+              sx={{
+                cursor: 'pointer',
+                position: 'relative',
+                pb: 1.25,
+                pt: 1,
+              }}
+            >
+              <Typography
+                sx={{
+                  fontFamily: FONT_DISPLAY,
+                  fontStyle: 'italic',
+                  fontSize: 18,
+                  color: active ? COLOR_INK : COLOR_INK_MUTED,
+                  fontWeight: active ? 500 : 400,
+                  letterSpacing: '-0.01em',
+                  fontVariationSettings: '"opsz" 36',
+                  transition: 'color 200ms',
+                }}
+              >
+                {tab.label}
+              </Typography>
+              <Typography
+                sx={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 8.5,
+                  letterSpacing: '0.22em',
+                  textTransform: 'uppercase',
+                  color: active ? COLOR_INK_MUTED : COLOR_INK_FAINT,
+                  mt: 0.25,
+                }}
+              >
+                {tab.en}
+              </Typography>
+              {active && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    bottom: -1,
+                    left: 0,
+                    right: 0,
+                    height: 1,
+                    bgcolor: COLOR_INK,
+                  }}
+                />
+              )}
+            </Box>
+          );
+        })}
+      </Box>
 
       {/* Tab Content */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
         {activeTab === 0 ? (
           <Box>
-            {/* Positions Table */}
-            <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary, mb: 1 }}>持仓</Typography>
+            {/* Editorial section header */}
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 2 }}>
+              <Typography
+                sx={{
+                  fontFamily: FONT_DISPLAY,
+                  fontStyle: 'italic',
+                  fontWeight: 500,
+                  fontSize: 22,
+                  color: COLOR_INK,
+                  letterSpacing: '-0.015em',
+                  fontVariationSettings: '"opsz" 36, "SOFT" 50',
+                }}
+              >
+                持仓
+              </Typography>
+              <Typography
+                sx={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9,
+                  letterSpacing: '0.22em',
+                  textTransform: 'uppercase',
+                  color: COLOR_INK_FAINT,
+                  pb: 0.5,
+                }}
+              >
+                Holdings
+              </Typography>
+              <Box sx={{ flex: 1, height: 1, bgcolor: COLOR_INK_FAINT, mb: 0.5 }} />
+            </Box>
             {positionsLoading ? (
               <Box sx={{ p: 3, textAlign: 'center' }}><LoadingDots text="加载持仓" fontSize={14} /></Box>
             ) : positions.length === 0 ? (
-              <Typography sx={{ p: 3, textAlign: 'center', color: theme.text.muted, fontSize: 14 }}>暂无持仓</Typography>
+              <Typography
+                sx={{
+                  p: 3, textAlign: 'center', color: COLOR_INK_MUTED, fontSize: 14,
+                  fontFamily: FONT_BODY, fontStyle: 'italic',
+                }}
+              >
+                no holdings.
+              </Typography>
             ) : (
-              <TableContainer sx={{ mb: 3 }}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      {['代码', '数量', '均价', '现价', '市值', '盈亏', '收益率', '操作'].map((h) => (
-                        <TableCell key={h} sx={tableHeadSx}>{h}</TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {positions.map((pos, i) => {
-                      const returnPct = pos.cost > 0 ? ((pos.unrealized_pnl / pos.cost) * 100) : 0;
-                      return (
-                        <TableRow key={i}>
-                          <TableCell sx={{ ...tableCellSx, fontWeight: 600 }}>{pos.symbol}</TableCell>
-                          <TableCell sx={tableCellSx}>{pos.quantity}</TableCell>
-                          <TableCell sx={tableCellSx}>{formatCurrency(pos.average_price)}</TableCell>
-                          <TableCell sx={tableCellSx}>{formatCurrency(pos.market_price)}</TableCell>
-                          <TableCell sx={tableCellSx}>{formatCurrency(pos.market_value)}</TableCell>
-                          <TableCell sx={{ ...tableCellSx, color: pnlColor(pos.unrealized_pnl), fontWeight: 600 }}>
-                            {formatPnl(pos.unrealized_pnl)}
-                          </TableCell>
-                          <TableCell sx={{ ...tableCellSx, color: pnlColor(returnPct) }}>
-                            {returnPct >= 0 ? '+' : ''}{returnPct.toFixed(2)}%
-                          </TableCell>
-                          <TableCell sx={{ ...tableCellSx, whiteSpace: 'nowrap' }}>
-                            <Box sx={{ display: 'flex', gap: 0.5 }}>
-                              <Button
-                                size="small"
-                                onClick={() => openBuyDialog(pos.symbol)}
-                                sx={{ color: '#4caf50', textTransform: 'none', fontSize: 12, minWidth: 'auto', p: '2px 8px', '&:hover': { bgcolor: 'rgba(76,175,80,0.1)' } }}
-                              >
-                                加仓
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => openStopLossDialog(pos.symbol, pos.quantity)}
-                                sx={{ color: '#ff9800', textTransform: 'none', fontSize: 12, minWidth: 'auto', p: '2px 8px', '&:hover': { bgcolor: 'rgba(255,152,0,0.1)' } }}
-                              >
-                                止损
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => openSellDialog(pos.symbol, pos.quantity)}
-                                sx={{ color: '#f44336', textTransform: 'none', fontSize: 12, minWidth: 'auto', p: '2px 8px', '&:hover': { bgcolor: 'rgba(244,67,54,0.1)' } }}
-                              >
-                                卖出
-                              </Button>
-                            </Box>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+              <Box sx={{ mb: 4 }}>
+                {/* Custom editorial table — no MUI Table */}
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(80px, 1fr) 70px 1fr 1fr 1.1fr 1.1fr 0.9fr 1.4fr',
+                    gap: 0,
+                    pb: 1.25,
+                    borderBottom: `1px solid ${COLOR_INK_FAINT}`,
+                  }}
+                >
+                  {[
+                    ['Symbol', '代码', 'left'],
+                    ['Qty', '数量', 'right'],
+                    ['Avg', '均价', 'right'],
+                    ['Last', '现价', 'right'],
+                    ['Market Value', '市值', 'right'],
+                    ['P&L', '盈亏', 'right'],
+                    ['Return', '收益率', 'right'],
+                    ['', '操作', 'right'],
+                  ].map(([en, , align]) => (
+                    <Typography
+                      key={en || 'actions'}
+                      sx={{
+                        fontFamily: FONT_MONO,
+                        fontSize: 9,
+                        letterSpacing: '0.18em',
+                        textTransform: 'uppercase',
+                        color: COLOR_INK_FAINT,
+                        textAlign: align as 'left' | 'right',
+                        px: 1.25,
+                      }}
+                    >
+                      {en}
+                    </Typography>
+                  ))}
+                </Box>
+
+                {[...positions].sort((a, b) => (b.market_value || 0) - (a.market_value || 0)).map((pos, i) => {
+                  const returnPct = pos.cost > 0 ? ((pos.unrealized_pnl / pos.cost) * 100) : 0;
+                  const pnlSignRow = pos.unrealized_pnl >= 0;
+                  return (
+                    <Box
+                      key={i}
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'minmax(80px, 1fr) 70px 1fr 1fr 1.1fr 1.1fr 0.9fr 1.4fr',
+                        alignItems: 'center',
+                        py: 1.5,
+                        borderBottom: `1px solid ${COLOR_INK_FAINT}40`,
+                        transition: 'background-color 180ms',
+                        '&:hover': { bgcolor: 'rgba(244,236,223,0.025)' },
+                        '& > *': { px: 1.25 },
+                      }}
+                    >
+                      {/* Symbol — serif italic, distinctive */}
+                      <Typography
+                        sx={{
+                          fontFamily: FONT_DISPLAY,
+                          fontStyle: 'italic',
+                          fontWeight: 600,
+                          fontSize: 18,
+                          color: COLOR_INK,
+                          letterSpacing: '-0.01em',
+                          fontVariationSettings: '"opsz" 36',
+                        }}
+                      >
+                        {pos.symbol}
+                      </Typography>
+                      <Typography sx={{ fontFamily: FONT_MONO, fontSize: 13, color: COLOR_INK_MUTED, textAlign: 'right', fontFeatureSettings: '"tnum"' }}>
+                        {pos.quantity}
+                      </Typography>
+                      <Typography sx={{ fontFamily: FONT_MONO, fontSize: 13, color: COLOR_INK_MUTED, textAlign: 'right', fontFeatureSettings: '"tnum"' }}>
+                        {formatCurrency(pos.average_price)}
+                      </Typography>
+                      <Typography sx={{ fontFamily: FONT_MONO, fontSize: 13, color: COLOR_INK, textAlign: 'right', fontFeatureSettings: '"tnum"' }}>
+                        {formatCurrency(pos.market_price)}
+                      </Typography>
+                      <Typography sx={{ fontFamily: FONT_MONO, fontSize: 14, color: COLOR_INK, textAlign: 'right', fontFeatureSettings: '"tnum"', fontWeight: 500 }}>
+                        {formatCurrency(pos.market_value)}
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontFamily: FONT_MONO,
+                          fontSize: 13,
+                          color: pnlSignRow ? COLOR_GAIN : COLOR_LOSS,
+                          textAlign: 'right',
+                          fontFeatureSettings: '"tnum"',
+                        }}
+                      >
+                        {formatPnl(pos.unrealized_pnl)}
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontFamily: FONT_DISPLAY,
+                          fontStyle: 'italic',
+                          fontWeight: 500,
+                          fontSize: 16,
+                          color: returnPct >= 0 ? COLOR_GAIN : COLOR_LOSS,
+                          textAlign: 'right',
+                          fontFeatureSettings: '"tnum"',
+                          fontVariationSettings: '"opsz" 36',
+                        }}
+                      >
+                        {returnPct >= 0 ? '+' : ''}{returnPct.toFixed(2)}%
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'flex-end' }}>
+                        {[
+                          { label: '加仓', en: 'Buy', onClick: () => openBuyDialog(pos.symbol), tone: COLOR_GAIN },
+                          { label: '止损', en: 'Stop', onClick: () => openStopLossDialog(pos.symbol, pos.quantity), tone: '#C9A97E' },
+                          { label: '卖出', en: 'Sell', onClick: () => openSellDialog(pos.symbol, pos.quantity), tone: COLOR_LOSS },
+                        ].map((btn) => (
+                          <Box
+                            key={btn.label}
+                            onClick={btn.onClick}
+                            sx={{
+                              fontFamily: FONT_MONO,
+                              fontSize: 9.5,
+                              letterSpacing: '0.18em',
+                              textTransform: 'uppercase',
+                              color: btn.tone,
+                              border: `1px solid ${btn.tone}40`,
+                              px: 1,
+                              py: 0.4,
+                              cursor: 'pointer',
+                              transition: 'all 150ms',
+                              '&:hover': {
+                                borderColor: btn.tone,
+                                bgcolor: `${btn.tone}15`,
+                              },
+                            }}
+                          >
+                            {btn.en}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
             )}
 
-            {/* Orders Table */}
-            <Typography sx={{ fontSize: 14, fontWeight: 600, color: theme.text.secondary, mb: 1 }}>订单</Typography>
+            {/* Orders section header — editorial */}
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 2, mt: 1 }}>
+              <Typography
+                sx={{
+                  fontFamily: FONT_DISPLAY,
+                  fontStyle: 'italic',
+                  fontWeight: 500,
+                  fontSize: 22,
+                  color: COLOR_INK,
+                  letterSpacing: '-0.015em',
+                  fontVariationSettings: '"opsz" 36, "SOFT" 50',
+                }}
+              >
+                订单
+              </Typography>
+              <Typography
+                sx={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9,
+                  letterSpacing: '0.22em',
+                  textTransform: 'uppercase',
+                  color: COLOR_INK_FAINT,
+                  pb: 0.5,
+                }}
+              >
+                Orders
+              </Typography>
+              <Box sx={{ flex: 1, height: 1, bgcolor: COLOR_INK_FAINT, mb: 0.5 }} />
+            </Box>
             {ordersLoading ? (
               <Box sx={{ p: 3, textAlign: 'center' }}><LoadingDots text="加载订单" fontSize={14} /></Box>
             ) : orders.length === 0 ? (
-              <Typography sx={{ p: 3, textAlign: 'center', color: theme.text.muted, fontSize: 14 }}>暂无订单</Typography>
+              <Typography
+                sx={{
+                  p: 3, textAlign: 'center', color: COLOR_INK_MUTED, fontSize: 14,
+                  fontFamily: FONT_BODY, fontStyle: 'italic',
+                }}
+              >
+                no open orders.
+              </Typography>
             ) : (
               <TableContainer>
                 <Table size="small">

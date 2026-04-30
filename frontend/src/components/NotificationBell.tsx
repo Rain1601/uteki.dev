@@ -11,6 +11,12 @@ interface Notification {
   title: string;
   created_at: string;
   is_read: boolean;
+  extra_data?: {
+    analysis_id?: string;
+    harness_id?: string;
+    symbol?: string;
+    [key: string]: unknown;
+  } | null;
 }
 
 function getIcon(type: string) {
@@ -24,12 +30,14 @@ function getIcon(type: string) {
   }
 }
 
-function getRoute(type: string) {
-  switch (type) {
+function getRoute(item: Notification) {
+  switch (item.type) {
     case 'arena':
       return '/index-agent';
-    case 'company':
-      return '/company-agent';
+    case 'company': {
+      const id = item.extra_data?.analysis_id;
+      return id ? `/company-agent/${id}` : '/company-agent';
+    }
     default:
       return null;
   }
@@ -75,7 +83,7 @@ export default function NotificationBell() {
       if (!item.is_read) {
         markRead.mutate([item.id]);
       }
-      const route = getRoute(item.type);
+      const route = getRoute(item);
       if (route) {
         navigate(route);
       }

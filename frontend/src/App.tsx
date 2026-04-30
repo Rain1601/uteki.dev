@@ -5,7 +5,6 @@ import AdminPage from './pages/AdminPage';
 import AgentChatPage from './pages/AgentChatPage';
 import LoginPage from './pages/LoginPage';
 import NewsTimelinePage from './pages/NewsTimelinePage';
-import FOMCCalendarPage from './pages/FOMCCalendarPage';
 import SnbTradingPage from './pages/SnbTradingPage';
 import IndexAgentPage from './pages/IndexAgentPage';
 import CompanyAgentPage from './pages/CompanyAgentPage';
@@ -15,6 +14,7 @@ import IndexAgentDemoPage from './pages/IndexAgentDemoPage';
 import ApiTestPage from './pages/ApiTestPage';
 import DashboardPage from './pages/DashboardPage';
 
+import NewsHubPage from './pages/NewsHubPage';
 import MarketDashboardPage from './pages/MarketDashboardPage';
 import VotingDemoPage from './pages/VotingDemoPage';
 import ReflectionDemoPage from './pages/ReflectionDemoPage';
@@ -49,12 +49,13 @@ function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="agent" element={<AgentChatPage />} />
         <Route path="news-timeline" element={<NewsTimelinePage />} />
-        <Route path="macro/fomc-calendar" element={<FOMCCalendarPage />} />
+        <Route path="news-hub" element={<NewsHubPage />} />
         <Route path="macro/market-dashboard" element={<MarketDashboardPage />} />
         <Route path="trading/snb" element={<SnbTradingPage />} />
 <Route path="index-agent" element={<IndexAgentPage />} />
         <Route path="index-agent-demo" element={<IndexAgentDemoPage />} />
         <Route path="company-agent" element={<CompanyAgentPage />} />
+        <Route path="company-agent/:id" element={<CompanyAgentPage />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

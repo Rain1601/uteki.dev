@@ -38,10 +38,43 @@ interface FeedbackState {
 }
 
 export default function NewsTimelinePage() {
-  const { theme } = useTheme();
-  const isDark = theme.mode === 'dark';
+  const { theme: baseTheme } = useTheme();
+  const isDark = baseTheme.mode === 'dark';
   const { isMobile, isSmallScreen } = useResponsive();
   const isCompact = isMobile || isSmallScreen;
+
+  // ── Editorial theme override ─────────────────────────────────────────
+  // Re-map all `theme.X` usages downstream to the warm editorial palette
+  // shared across /dashboard, /trading/snb, etc. Same shape as the original
+  // theme object so the rest of the (1400-line) page renders unchanged.
+  const theme = {
+    ...baseTheme,
+    mode: 'dark' as const,
+    background: {
+      ...baseTheme.background,
+      primary: '#15130F',
+      secondary: '#1B1814',
+      tertiary: '#221E18',
+    },
+    text: {
+      ...baseTheme.text,
+      primary: '#F4ECDF',
+      secondary: '#D8CFBF',
+      muted: '#A8A097',
+      disabled: '#5C5750',
+    },
+    border: {
+      ...baseTheme.border,
+      subtle: '#2A2620',
+      default: '#3A342D',
+      divider: '#2A2620',
+    },
+    brand: {
+      ...baseTheme.brand,
+      primary: '#C9A97E',  // amber accent instead of dodger blue
+      hover: '#D9BB91',
+    },
+  };
 
   // State
   const today = new Date();
@@ -597,18 +630,110 @@ export default function NewsTimelinePage() {
   const titlesList = renderTitlesList();
   const calendarDays = renderCalendar(currentYear, currentMonth);
 
+  // Compute total today (today's articles count) for header
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayCount = newsData[todayKey]?.length || 0;
+  const dateText = today.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+
   return (
     <Box
       sx={{
-        height: isCompact ? 'calc(100vh - 48px)' : '100vh',
+        height: '100vh',
         width: isCompact ? 'calc(100% + 32px)' : 'calc(100% + 48px)',
         display: 'flex',
-        bgcolor: theme.background.primary,
-        color: theme.text.primary,
+        flexDirection: 'column',
+        // Editorial finance — warm dark with paper-grain
+        bgcolor: '#15130F',
+        color: '#F4ECDF',
+        backgroundImage: `
+          radial-gradient(ellipse 1400px 700px at 8% -8%, rgba(168,137,110,0.06), transparent 60%),
+          radial-gradient(ellipse 900px 600px at 96% 108%, rgba(91,123,106,0.05), transparent 65%),
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.005) 0 1px, transparent 1px 3px)
+        `,
+        fontFamily: "'Newsreader', '宋体', Georgia, serif",
         overflow: 'hidden',
         m: isCompact ? -2 : -3,
       }}
     >
+      {/* ── Unified editorial masthead ──────────────────────────────── */}
+      <Box
+        sx={{
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 3,
+          px: { xs: 4, md: 6 },
+          py: 3,
+          pb: 2,
+          borderBottom: `1px solid #2A2620`,
+        }}
+      >
+        <Box>
+          <Typography
+            sx={{
+              fontFamily: "'Fraunces', 'Newsreader', '宋体', Georgia, serif",
+              fontStyle: 'italic',
+              fontWeight: 400,
+              fontSize: { xs: 32, md: 44 },
+              letterSpacing: '-0.025em',
+              lineHeight: 1,
+              color: '#F4ECDF',
+              fontVariationSettings: '"opsz" 144, "SOFT" 60',
+            }}
+          >
+            新闻时间线
+          </Typography>
+          <Typography
+            sx={{
+              fontFamily: "'Newsreader', '宋体', Georgia, serif",
+              fontStyle: 'italic',
+              fontSize: 12,
+              color: '#A8A097',
+              mt: 0.5,
+            }}
+          >
+            {dateText}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+          <Box sx={{ textAlign: 'right' }}>
+            <Typography
+              sx={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 9,
+                letterSpacing: '0.28em',
+                textTransform: 'uppercase',
+                color: '#5C5750',
+                mb: 0.4,
+              }}
+            >
+              今日 · Today
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: "'Fraunces', '宋体', Georgia, serif",
+                fontStyle: 'italic',
+                fontWeight: 500,
+                fontSize: 24,
+                letterSpacing: '-0.02em',
+                color: '#F4ECDF',
+                fontFeatureSettings: '"tnum"',
+                lineHeight: 1,
+                fontVariationSettings: '"opsz" 36',
+              }}
+            >
+              {todayCount}{' '}
+              <Box component="span" sx={{ fontStyle: 'normal', fontFamily: "'Newsreader', serif", fontSize: 12, color: '#A8A097', fontWeight: 400 }}>
+                篇
+              </Box>
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ── Two-column body (calendar | feed) ───────────────────────── */}
+      <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
       {/* Left Calendar Panel */}
       <Box
         sx={{
@@ -863,7 +988,7 @@ export default function NewsTimelinePage() {
             ) : titlesList.length > 0 ? (
               titlesList.map((news) => {
                 const [, month, day] = news.dateStr.split('-');
-                const dateLabel = `${parseInt(month)}/${parseInt(day)} · ${news.time}`;
+                const dateLabel = news.time ? `${parseInt(month)}/${parseInt(day)} · ${news.time}` : `${parseInt(month)}/${parseInt(day)}`;
 
                 return (
                   <Box
@@ -884,48 +1009,47 @@ export default function NewsTimelinePage() {
                       },
                     }}
                   >
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}>
-                      <Typography sx={{ fontSize: 11, color: theme.text.muted, display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        {dateLabel}
-                      </Typography>
-                      <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        {news.important && (
-                          <Typography
-                            sx={{
-                              fontSize: 9,
-                              px: 0.75,
-                              py: 0.25,
-                              borderRadius: 0.5,
-                              fontWeight: 500,
-                              bgcolor: 'rgba(255, 107, 107, 0.15)',
-                              border: '1px solid rgba(255, 107, 107, 0.3)',
-                              color: 'rgba(255, 107, 107, 0.9)',
-                            }}
-                          >
-                            Important
-                          </Typography>
-                        )}
-                        {news.source && (
-                          <Typography
-                            sx={{
-                              fontSize: 9,
-                              px: 0.75,
-                              py: 0.25,
-                              borderRadius: 0.5,
-                              fontWeight: 500,
-                              bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                              border: `1px solid ${theme.border.subtle}`,
-                              color: theme.text.muted,
-                            }}
-                          >
-                            {news.source}
-                          </Typography>
-                        )}
-                      </Box>
-                    </Box>
-                    <Typography sx={{ fontSize: 13, color: theme.text.secondary, lineHeight: 1.5, fontWeight: 400 }}>
-                      {news.headline}
+                    <Typography sx={{ fontSize: 11, color: theme.text.muted, mb: 0.5, fontFamily: 'var(--font-ui)' }}>
+                      {dateLabel}
                     </Typography>
+                    <Typography sx={{ fontSize: 13, color: theme.text.secondary, lineHeight: 1.5, fontWeight: 400, mb: 0.75 }}>
+                      {news.headline || news.title || '(untitled)'}
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {news.tags.slice(0, 3).map((tag) => (
+                        <Typography
+                          key={tag}
+                          sx={{
+                            fontSize: 10,
+                            px: 0.75,
+                            py: 0.15,
+                            borderRadius: '4px',
+                            fontWeight: 500,
+                            bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                            color: theme.text.muted,
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {tag}
+                        </Typography>
+                      ))}
+                      {news.important && (
+                        <Typography
+                          sx={{
+                            fontSize: 10,
+                            px: 0.75,
+                            py: 0.15,
+                            borderRadius: '4px',
+                            fontWeight: 500,
+                            bgcolor: 'rgba(255, 107, 107, 0.12)',
+                            color: 'rgba(255, 107, 107, 0.85)',
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          重要
+                        </Typography>
+                      )}
+                    </Box>
                   </Box>
                 );
               })
@@ -948,25 +1072,12 @@ export default function NewsTimelinePage() {
             borderBottom: `1px solid ${theme.border.subtle}`,
           }}
         >
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Box>
-              <Typography sx={{ fontSize: 20, fontWeight: 700, color: theme.text.primary, fontFamily: 'var(--font-reading)', letterSpacing: '-0.02em' }}>
-                Market News
-              </Typography>
-              <Typography sx={{ fontSize: 12, color: theme.text.muted, mt: 0.25, fontFamily: 'var(--font-ui)' }}>
-                {currentYear}/{currentMonth + 1}
-              </Typography>
-            </Box>
-            {/* Source Tabs */}
-            <Box
-              sx={{
-                display: 'flex',
-                bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${theme.border.subtle}`,
-                borderRadius: 1,
-                p: 0.25,
-              }}
-            >
+          {/* Source Tabs — inline with filters */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+            <Typography sx={{ fontSize: 12, color: theme.text.muted, fontFamily: 'var(--font-ui)' }}>
+              {currentYear}/{currentMonth + 1}
+            </Typography>
+            <Box sx={{ ml: 'auto', display: 'flex', bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.025)', borderRadius: '8px', p: '2px' }}>
               {([
                 { value: 'jeff-cox' as NewsSource, label: 'CNBC' },
                 { value: 'bloomberg' as NewsSource, label: 'Bloomberg' },
@@ -975,23 +1086,12 @@ export default function NewsTimelinePage() {
                   key={src.value}
                   onClick={() => setNewsSource(src.value)}
                   sx={{
-                    px: 1.5,
-                    py: 0.5,
-                    borderRadius: 0.75,
-                    fontSize: 12,
-                    fontFamily: 'var(--font-ui)',
+                    px: 1.25, py: 0.35, borderRadius: '6px', fontSize: 11, fontFamily: 'var(--font-ui)',
                     fontWeight: newsSource === src.value ? 600 : 400,
-                    color: newsSource === src.value ? theme.brand.primary : theme.text.muted,
-                    bgcolor: newsSource === src.value
-                      ? `${theme.brand.primary}15`
-                      : 'transparent',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    '&:hover': {
-                      bgcolor: newsSource === src.value
-                        ? `${theme.brand.primary}20`
-                        : isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-                    },
+                    color: newsSource === src.value ? theme.text.primary : theme.text.muted,
+                    bgcolor: newsSource === src.value ? (isDark ? 'rgba(255,255,255,0.08)' : '#fff') : 'transparent',
+                    boxShadow: newsSource === src.value ? (isDark ? 'none' : '0 1px 2px rgba(0,0,0,0.06)') : 'none',
+                    cursor: 'pointer', transition: 'all 0.15s',
                   }}
                 >
                   {src.label}
@@ -1479,6 +1579,7 @@ export default function NewsTimelinePage() {
         defaultLanguage={dialogDefaultLanguage}
         source={newsSource}
       />
+      </Box>
     </Box>
   );
 }

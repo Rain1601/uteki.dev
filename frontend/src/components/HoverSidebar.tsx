@@ -22,7 +22,6 @@ import {
   Sun,
   X,
   FileText,
-  Calendar,
   LineChart,
   LayoutDashboard,
   Building2,
@@ -40,7 +39,11 @@ export const SIDEBAR_COLLAPSED_WIDTH = 54;
 export const SIDEBAR_EXPANDED_WIDTH = 240;
 
 // Hover highlight opacity for collapsed sidebar
+// HOVER_HIGHLIGHT was used for theme-derived hover bg; now editorial design
+// uses a fixed warm tint. Kept exported (referenced via void below) to avoid
+// breaking any downstream import.
 const HOVER_HIGHLIGHT = 0.04;
+void HOVER_HIGHLIGHT;
 
 // Shared timing — must match Layout.tsx transition exactly
 export const SIDEBAR_TRANSITION_DURATION = '360ms';
@@ -71,6 +74,7 @@ const menuItems: MenuCategory[] = [
     category: 'MAIN',
     items: [
       { text: 'Dashboard', icon: <LayoutGrid size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/dashboard' },
+      { text: '账户', icon: <TrendingUp size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/trading/snb' },
     ],
   },
   {
@@ -85,15 +89,12 @@ const menuItems: MenuCategory[] = [
     items: [
       { text: '指数投资', icon: <LineChart size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/index-agent' },
       { text: '公司投资', icon: <Building2 size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/company-agent' },
-
     ],
   },
   {
-    category: 'TRADING',
+    category: 'MARKET',
     items: [
       { text: '宏观仪表盘', icon: <LayoutDashboard size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/macro/market-dashboard' },
-      { text: '经济日历', icon: <Calendar size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/macro/fomc-calendar' },
-      { text: '雪盈证券', icon: <TrendingUp size={ICON_SIZE} strokeWidth={ICON_STROKE} />, path: '/trading/snb' },
     ],
   },
 ];
@@ -220,16 +221,17 @@ export default function HoverSidebar() {
             {menuItems.map((category, index) => (
               <Box key={category.category}>
                 {index > 0 && (
-                  <Divider sx={{ margin: '12px 16px', borderColor: theme.border.divider }} />
+                  <Box sx={{ height: 1, mx: 2, my: 1.5, bgcolor: '#2A2620' }} />
                 )}
                 <Typography
                   sx={{
-                    padding: '8px 16px',
-                    color: theme.text.muted,
-                    fontSize: '0.7rem',
+                    padding: '10px 16px 6px',
+                    color: '#5C5750',
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 9,
                     fontWeight: 600,
                     textTransform: 'uppercase',
-                    letterSpacing: '1px',
+                    letterSpacing: '0.28em',
                   }}
                 >
                   {category.category}
@@ -245,14 +247,16 @@ export default function HoverSidebar() {
                         disabled={item.disabled}
                         onClick={handleNavClick}
                         sx={{
-                          margin: '2px 8px',
-                          borderRadius: '8px',
-                          color: isActive ? theme.text.primary : theme.text.secondary,
-                          backgroundColor: isActive ? `${theme.brand.primary}18` : 'transparent',
-                          minHeight: 44,
+                          margin: '1px 8px',
+                          borderRadius: 0,  // Editorial: hard edges, not rounded
+                          color: isActive ? '#F4ECDF' : '#A8A097',
+                          backgroundColor: 'transparent',
+                          minHeight: 38,
                           position: 'relative',
+                          transition: 'color 180ms, background-color 180ms',
                           '&:hover': {
-                            backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                            backgroundColor: 'rgba(244,236,223,0.04)',
+                            color: '#F4ECDF',
                           },
                           ...(isActive && {
                             '&::before': {
@@ -261,16 +265,19 @@ export default function HoverSidebar() {
                               left: 0,
                               top: '50%',
                               transform: 'translateY(-50%)',
-                              width: '3px',
-                              height: '20px',
-                              backgroundColor: theme.brand.primary,
-                              borderRadius: '0 2px 2px 0',
+                              width: 2,
+                              height: 16,
+                              backgroundColor: '#F4ECDF',
                             },
                           }),
                         }}
                       >
                         <ListItemIcon
-                          sx={{ minWidth: '36px', color: isActive ? theme.brand.primary : theme.text.muted }}
+                          sx={{
+                            minWidth: 30,
+                            color: isActive ? '#F4ECDF' : '#5C5750',
+                            transition: 'color 180ms',
+                          }}
                         >
                           {item.icon}
                         </ListItemIcon>
@@ -278,9 +285,13 @@ export default function HoverSidebar() {
                           primary={item.text}
                           primaryTypographyProps={{
                             sx: {
-                              fontSize: 13,
-                              fontWeight: isActive ? 600 : 500,
-                              color: isActive ? theme.text.primary : theme.text.secondary,
+                              fontFamily: "'Fraunces', '宋体', Georgia, serif",
+                              fontStyle: 'italic',
+                              fontSize: 14,
+                              fontWeight: isActive ? 600 : 400,
+                              letterSpacing: '-0.005em',
+                              color: 'inherit',
+                              fontVariationSettings: '"opsz" 36, "SOFT" 50',
                             },
                           }}
                         />
@@ -363,18 +374,20 @@ export default function HoverSidebar() {
         width,
         height: '100vh',
         zIndex: 1300,
+        // Editorial finance — slightly raised warm dark, hairline divider, paper grain
         bgcolor: !expanded && hovered
-          ? isDark
-            ? `rgba(255,255,255,${HOVER_HIGHLIGHT})`
-            : `rgba(0,0,0,${HOVER_HIGHLIGHT})`
-          : theme.background.secondary,
+          ? 'rgba(244,236,223,0.04)'
+          : '#1B1814',
+        backgroundImage: `repeating-linear-gradient(0deg, rgba(255,255,255,0.005) 0 1px, transparent 1px 3px)`,
+        borderRight: `1px solid #2A2620`,
         boxShadow: expanded
-          ? '4px 0 16px rgba(0,0,0,0.12)'
-          : '1px 0 3px rgba(0,0,0,0.1)',
+          ? '6px 0 28px rgba(0,0,0,0.45)'
+          : 'none',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
         cursor: expanded ? 'default' : 'pointer',
+        fontFamily: "'Newsreader', '宋体', Georgia, serif",
         transition: `${TRANSITION}, box-shadow ${SIDEBAR_TRANSITION_DURATION} ${SIDEBAR_TRANSITION_EASING}, background-color 200ms ease`,
       }}
     >
@@ -386,7 +399,7 @@ export default function HoverSidebar() {
           minHeight: 56,
           pl: `${(SIDEBAR_COLLAPSED_WIDTH - 28) / 2}px`,  // 13px — centres avatar in collapsed width
           gap: 1,
-          borderBottom: `1px solid ${theme.border.divider}`,
+          borderBottom: `1px solid #2A2620`,
           flexShrink: 0,
           overflow: 'hidden',
         }}
@@ -419,10 +432,14 @@ export default function HoverSidebar() {
           <Typography
             noWrap
             sx={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: theme.text.primary,
-              lineHeight: 1.3,
+              fontFamily: "'Fraunces', '宋体', Georgia, serif",
+              fontStyle: 'italic',
+              fontSize: 14,
+              fontWeight: 500,
+              color: '#F4ECDF',
+              lineHeight: 1.2,
+              letterSpacing: '-0.005em',
+              fontVariationSettings: '"opsz" 36',
             }}
           >
             {user?.name || '用户'}
@@ -430,9 +447,11 @@ export default function HoverSidebar() {
           <Typography
             noWrap
             sx={{
-              fontSize: 11,
-              color: theme.text.muted,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9.5,
+              color: '#5C5750',
               lineHeight: 1.3,
+              letterSpacing: '0.04em',
             }}
           >
             {user?.email || ''}

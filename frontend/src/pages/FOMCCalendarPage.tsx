@@ -1,20 +1,246 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { Box, Typography, CircularProgress } from '@mui/material';
 import {
-  Box,
-  Typography,
-  Grid,
-  Chip,
-  IconButton,
-  Button,
-  Divider,
-} from '@mui/material';
-import { ChevronLeft as ChevronLeftIcon, ChevronRight as ChevronRightIcon, Calendar as EventIcon, TrendingUp as TrendingUpIcon, BarChart3 as AssessmentIcon, Star as StarIcon, Lightbulb as AIIcon } from 'lucide-react';
+  ChevronLeft,
+  ChevronRight,
+  Calendar,
+  TrendingUp,
+  Briefcase,
+  DollarSign,
+  BarChart3,
+  Activity,
+  Landmark,
+  Filter,
+} from 'lucide-react';
 import { useTheme } from '../theme/ThemeProvider';
-import LoadingDots from '../components/LoadingDots';
-import { getMonthlyEventsEnriched, getEventStatistics } from '../api/economicCalendar';
-import { analyzeEventStream } from '../api/news';
-import { EconomicEvent, EventsByDate, EventStatistics, EventFilterType, EventAnalysisResult } from '../types/economicCalendar';
+import { getWeeklyEvents } from '../api/economicCalendar';
+import { EconomicEvent, EventsByDate } from '../types/economicCalendar';
 import { useResponsive } from '../hooks/useResponsive';
+
+/* ─── Constants ─── */
+
+const IMPORTANCE_COLORS: Record<string, string> = {
+  critical: '#ef4444',
+  high: '#f59e0b',
+  medium: '#60a5fa',
+  low: '#475569',
+};
+
+const TYPE_CONFIG: Record<string, { icon: typeof Activity; label: string; color: string }> = {
+  fomc: { icon: Landmark, label: 'FOMC', color: '#a78bfa' },
+  inflation: { icon: TrendingUp, label: '通胀', color: '#f87171' },
+  employment: { icon: Briefcase, label: '就业', color: '#60a5fa' },
+  consumption: { icon: DollarSign, label: '消费', color: '#34d399' },
+  gdp: { icon: BarChart3, label: 'GDP', color: '#fbbf24' },
+  economic_data: { icon: Activity, label: '经济', color: '#94a3b8' },
+};
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const MONTHS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+
+const FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'fomc', label: 'FOMC' },
+  { key: 'inflation', label: '通胀' },
+  { key: 'employment', label: '就业' },
+  { key: 'consumption,gdp', label: '消费/GDP' },
+];
+
+const IMPORTANCE_FILTERS = [
+  { key: 'high', label: '重要' },
+  { key: 'medium', label: '中等+' },
+  { key: 'low', label: '全部' },
+];
+
+/* ─── Helpers ─── */
+
+function getWeeksInMonth(year: number, month: number) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const weeks: Array<{ start: Date; end: Date; label: string }> = [];
+  let current = new Date(firstDay);
+  const dow = current.getDay();
+  current.setDate(current.getDate() + (dow === 0 ? -6 : 1 - dow));
+
+  while (current <= lastDay || weeks.length === 0) {
+    const ws = new Date(current);
+    const we = new Date(current);
+    we.setDate(we.getDate() + 6);
+    const s = ws.getDate();
+    const e = we.getDate();
+    const label =
+      ws.getMonth() === month && we.getMonth() === month
+        ? `${MONTHS[month]} ${s}–${e}日`
+        : ws.getMonth() !== month
+          ? `${MONTHS[month]} 1–${e}日`
+          : `${MONTHS[month]} ${s}–${lastDay.getDate()}日`;
+    weeks.push({ start: ws, end: we, label });
+    current.setDate(current.getDate() + 7);
+    if (current.getMonth() > month && current.getFullYear() >= year) break;
+    if (current.getFullYear() > year) break;
+  }
+  return weeks;
+}
+
+function fmtDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/* ─── Timeline layout ─── */
+const TL_LEFT = 52; // px from left edge to center of timeline line
+
+/* ─── Event Row ─── */
+
+function EventRow({ event, theme, isDark }: { event: EconomicEvent; theme: any; isDark: boolean }) {
+  const impColor = IMPORTANCE_COLORS[event.importance || 'medium'];
+  const typeConf = TYPE_CONFIG[event.event_type] || TYPE_CONFIG.economic_data;
+  const Icon = typeConf.icon;
+  const isCritical = event.importance === 'critical' || event.importance === 'high';
+
+  const actual = event.actual_value ?? event.actual;
+  const forecast = (event as any).expected_value ?? event.forecast_value ?? event.forecast;
+  const previous = event.previous_value ?? event.previous;
+  const hasData = actual != null || forecast != null || previous != null;
+
+  return (
+    <Box sx={{ display: 'flex', position: 'relative', mb: 0.5 }}>
+      {/* Node on the timeline */}
+      <Box sx={{ width: TL_LEFT, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: '10px' }}>
+        <Box
+          sx={{
+            width: isCritical ? 10 : 6,
+            height: isCritical ? 10 : 6,
+            borderRadius: '50%',
+            bgcolor: impColor,
+            boxShadow: isCritical ? `0 0 8px ${impColor}60` : 'none',
+            zIndex: 2,
+          }}
+        />
+      </Box>
+
+      {/* Event card */}
+      <Box
+        sx={{
+          flex: 1, minWidth: 0,
+          py: 0.75, px: 1.5,
+          ml: 1.5,
+          borderRadius: '10px',
+          bgcolor: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.015)',
+          border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+          transition: 'all 0.15s',
+          '&:hover': {
+            bgcolor: isDark ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.025)',
+            borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+          },
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <Icon size={13} color={typeConf.color} style={{ flexShrink: 0 }} />
+          <Typography
+            noWrap
+            sx={{ fontSize: 12.5, fontWeight: isCritical ? 700 : 500, color: theme.text.primary, flex: 1, lineHeight: 1.5 }}
+          >
+            {event.title}
+          </Typography>
+          <Box
+            sx={{
+              px: 0.75, py: 0.15, borderRadius: '4px',
+              bgcolor: `${typeConf.color}15`,
+              flexShrink: 0,
+            }}
+          >
+            <Typography sx={{ fontSize: 9, fontWeight: 600, color: typeConf.color, letterSpacing: '0.2px' }}>
+              {typeConf.label}
+            </Typography>
+          </Box>
+        </Box>
+        {hasData && (
+          <Box sx={{ display: 'flex', gap: 2, mt: 0.25, pl: 2.5 }}>
+            {actual != null && (
+              <Typography sx={{ fontSize: 11, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ color: theme.text.disabled }}>实际</span>{' '}
+                <span style={{ color: theme.text.primary }}>{actual}</span>
+              </Typography>
+            )}
+            {forecast != null && (
+              <Typography sx={{ fontSize: 11, color: theme.text.muted, fontVariantNumeric: 'tabular-nums' }}>
+                预期 {forecast}
+              </Typography>
+            )}
+            {previous != null && (
+              <Typography sx={{ fontSize: 11, color: theme.text.disabled, fontVariantNumeric: 'tabular-nums' }}>
+                前值 {previous}
+              </Typography>
+            )}
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+/* ─── Day Section ─── */
+
+function DaySection({ date, events, theme, isDark }: { date: string; events: EconomicEvent[]; theme: any; isDark: boolean }) {
+  const d = new Date(date + 'T00:00:00');
+  const dayOfWeek = WEEKDAYS[d.getDay()];
+  const dayNum = d.getDate();
+  const monthStr = MONTHS[d.getMonth()];
+  const isToday = fmtDate(new Date()) === date;
+
+  return (
+    <Box sx={{ mb: 2.5 }}>
+      {/* Day header */}
+      <Box sx={{ display: 'flex', position: 'relative', mb: 1 }}>
+        {/* Date circle on the line */}
+        <Box sx={{ width: TL_LEFT, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+          <Box
+            sx={{
+              width: 36, height: 36,
+              borderRadius: '50%',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center',
+              bgcolor: isToday ? theme.brand.primary : isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+              color: isToday ? '#fff' : theme.text.primary,
+              zIndex: 2,
+              border: isToday ? `2px solid ${theme.brand.primary}40` : 'none',
+              boxShadow: isToday ? `0 0 12px ${theme.brand.primary}30` : 'none',
+            }}
+          >
+            <Typography sx={{ fontSize: 13, fontWeight: 800, lineHeight: 1 }}>{dayNum}</Typography>
+          </Box>
+        </Box>
+
+        {/* Day label */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1.5 }}>
+          <Typography sx={{ fontSize: 15, fontWeight: 700, color: isToday ? theme.brand.primary : theme.text.primary }}>
+            周{dayOfWeek}
+          </Typography>
+          <Typography sx={{ fontSize: 11, color: theme.text.disabled, fontWeight: 500 }}>
+            {monthStr}{dayNum}日
+          </Typography>
+          <Box
+            sx={{
+              px: 0.75, py: 0.15, borderRadius: '10px',
+              bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+            }}
+          >
+            <Typography sx={{ fontSize: 9, fontWeight: 600, color: theme.text.muted }}>
+              {events.length}
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* Events */}
+      {events.map((e, i) => (
+        <EventRow key={e.id || `${date}-${i}`} event={e} theme={theme} isDark={isDark} />
+      ))}
+    </Box>
+  );
+}
+
+/* ═══════════════════ Main Page ═══════════════════ */
 
 export default function FOMCCalendarPage() {
   const { theme } = useTheme();
@@ -22,698 +248,225 @@ export default function FOMCCalendarPage() {
   const { isMobile, isSmallScreen } = useResponsive();
   const isCompact = isMobile || isSmallScreen;
 
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [events, setEvents] = useState<EventsByDate>({});
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<EventStatistics | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState<EventFilterType>('all');
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const timelineRef = useRef<HTMLDivElement>(null);
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [activeWeekIdx, setActiveWeekIdx] = useState(-1);
+  const [eventFilter, setEventFilter] = useState('all');
+  const [minImportance, setMinImportance] = useState('medium');
+  const [weekData, setWeekData] = useState<Record<string, { events: EventsByDate; total: number; loading: boolean }>>({});
 
-  // AI analysis state
-  const [analysisResults, setAnalysisResults] = useState<{ [eventId: string]: EventAnalysisResult }>({});
-  const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
+  const weeks = getWeeksInMonth(year, month);
 
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth() + 1;
-
-  // Fetch monthly events
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        const [response, statsResponse] = await Promise.all([
-          getMonthlyEventsEnriched(year, month, selectedFilter),
-          getEventStatistics(),
-        ]);
-        if (response.success) {
-          setEvents(response.data);
-          if (response.fmp_status === 'success') {
-            console.log(`FMP data synced: ${response.enriched_count} events`);
-          }
-        }
-        if (statsResponse.success) {
-          setStats(statsResponse.data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch events:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
+    const today = fmtDate(now);
+    const idx = weeks.findIndex((w) => fmtDate(w.start) <= today && today <= fmtDate(w.end));
+    setActiveWeekIdx(idx >= 0 ? idx : 0);
+  }, [year, month]);
 
-    fetchData();
-  }, [year, month, selectedFilter]);
+  const activeWeek = weeks[activeWeekIdx] || weeks[0];
 
-  // Navigation
-  const goToPreviousMonth = () => {
-    const newDate = new Date(currentDate);
-    newDate.setMonth(newDate.getMonth() - 1);
-    setCurrentDate(newDate);
-  };
-
-  const goToNextMonth = () => {
-    const newDate = new Date(currentDate);
-    newDate.setMonth(newDate.getMonth() + 1);
-    setCurrentDate(newDate);
-  };
-
-  const handleDateClick = (dateStr: string) => {
-    setSelectedDate(dateStr);
-    setTimeout(() => {
-      const dateElement = document.getElementById(`date-group-${dateStr}`);
-      if (dateElement && timelineRef.current) {
-        dateElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
-  };
-
-  // AI Analysis
-  const analyzeEvent = async (event: EconomicEvent, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-
-    const eventId = event.id || `${event.title}_${event.start_date}`;
-
-    if (expandedAnalysis === eventId) {
-      setExpandedAnalysis(null);
-      return;
-    }
-
-    if (analysisResults[eventId]?.analysis) {
-      setExpandedAnalysis(eventId);
-      return;
-    }
-
-    setAnalysisResults((prev) => ({
-      ...prev,
-      [eventId]: { loading: true, error: null, streamContent: '' },
-    }));
-    setExpandedAnalysis(eventId);
-
-    analyzeEventStream(
-      event.title,
-      event.start_date,
-      event.event_type || 'economic_data',
-      event.description,
-      event.actual?.toString() || event.actual_value?.toString(),
-      event.forecast?.toString() || event.forecast_value?.toString(),
-      event.previous?.toString() || event.previous_value?.toString(),
-      (chunk) => {
-        setAnalysisResults((prev) => ({
-          ...prev,
-          [eventId]: { ...prev[eventId], streamContent: (prev[eventId]?.streamContent || '') + chunk },
-        }));
-      },
-      (impact, analysis) => {
-        setAnalysisResults((prev) => ({
-          ...prev,
-          [eventId]: {
-            loading: false,
-            impact: impact as 'positive' | 'negative' | 'neutral',
-            analysis,
-            streamContent: '',
-            error: null,
-          },
-        }));
-      },
-      (error) => {
-        setAnalysisResults((prev) => ({
-          ...prev,
-          [eventId]: { loading: false, error, streamContent: '' },
-        }));
-      }
-    );
-  };
-
-  // Calendar grid rendering
-  const renderCalendar = () => {
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    const daysInMonth = lastDay.getDate();
-    const startDayOfWeek = firstDay.getDay();
-
-    const weeks: (number | null)[][] = [];
-    let currentWeek: (number | null)[] = new Array(7).fill(null);
-    let dayCounter = 1;
-
-    for (let i = startDayOfWeek; i < 7 && dayCounter <= daysInMonth; i++) {
-      currentWeek[i] = dayCounter++;
-    }
-    weeks.push(currentWeek);
-
-    while (dayCounter <= daysInMonth) {
-      currentWeek = new Array(7).fill(null);
-      for (let i = 0; i < 7 && dayCounter <= daysInMonth; i++) {
-        currentWeek[i] = dayCounter++;
-      }
-      weeks.push(currentWeek);
-    }
-
-    const today = new Date();
-    const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
-    const todayDate = today.getDate();
-
-    return (
-      <Box sx={{ p: 1.5 }}>
-        <Grid container spacing={0.5}>
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-            <Grid item xs={12/7} key={day}>
-              <Box sx={{ textAlign: 'center', p: '8px 4px', fontSize: 12, color: theme.text.muted, fontWeight: 600 }}>
-                {day}
-              </Box>
-            </Grid>
-          ))}
-          {weeks.map((week, weekIdx) =>
-            week.map((day, dayIdx) => {
-              if (day === null) {
-                return <Grid item xs={12/7} key={`${weekIdx}-${dayIdx}`}><Box sx={{ p: 1 }} /></Grid>;
-              }
-
-              const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-              const hasEvent = events[dateStr] && events[dateStr].length > 0;
-              const isToday = isCurrentMonth && day === todayDate;
-              const isSelected = selectedDate === dateStr;
-
-              return (
-                <Grid item xs={12/7} key={`${weekIdx}-${dayIdx}`}>
-                  <Box
-                    onClick={() => hasEvent && handleDateClick(dateStr)}
-                    sx={{
-                      textAlign: 'center',
-                      p: '8px 4px',
-                      fontSize: 13,
-                      color: hasEvent ? theme.brand.primary : theme.text.secondary,
-                      fontWeight: hasEvent ? 600 : 400,
-                      position: 'relative',
-                      cursor: hasEvent ? 'pointer' : 'default',
-                      borderRadius: 1,
-                      transition: 'all 0.2s',
-                      bgcolor: isSelected ? `${theme.brand.primary}40` : isToday ? `${theme.brand.primary}20` : 'transparent',
-                      '&:hover': hasEvent ? { bgcolor: `${theme.brand.primary}15`, color: theme.brand.primary } : {},
-                      '&::after': hasEvent ? {
-                        content: '""',
-                        position: 'absolute',
-                        bottom: 4,
-                        left: '50%',
-                        transform: 'translateX(-50%)',
-                        width: 4,
-                        height: 4,
-                        borderRadius: '50%',
-                        bgcolor: theme.brand.primary,
-                      } : undefined,
-                    }}
-                  >
-                    {day}
-                  </Box>
-                </Grid>
-              );
-            })
-          )}
-        </Grid>
-      </Box>
-    );
-  };
-
-  // Event list (left panel)
-  const renderEventList = () => {
-    const sortedDates = Object.keys(events).sort();
-    if (sortedDates.length === 0) {
-      return (
-        <Typography sx={{ textAlign: 'center', p: 2.5, color: theme.text.muted, fontSize: 14 }}>
-          No events this month
-        </Typography>
+  const loadWeek = useCallback(
+    async (weekStart: Date, weekEnd: Date, force = false) => {
+      const key = `${fmtDate(weekStart)}_${fmtDate(weekEnd)}_${minImportance}_${eventFilter}`;
+      if (!force && weekData[key] && !weekData[key].loading) return;
+      setWeekData((prev) => ({ ...prev, [key]: { events: {}, total: 0, loading: true } }));
+      const result = await getWeeklyEvents(
+        fmtDate(weekStart), fmtDate(weekEnd), minImportance, 'US',
+        eventFilter === 'all' ? undefined : eventFilter,
       );
-    }
+      setWeekData((prev) => ({
+        ...prev,
+        [key]: { events: result.success ? result.data : {}, total: (result as any).total ?? 0, loading: false },
+      }));
+    },
+    [minImportance, eventFilter, weekData],
+  );
 
-    return sortedDates.map((dateStr) => {
-      const dayEvents = events[dateStr];
-      return dayEvents.map((event, idx) => (
-        <Box
-          key={`${dateStr}-${idx}`}
-          onClick={() => handleDateClick(dateStr)}
-          sx={{
-            p: '10px 12px',
-            mb: 0.75,
-            bgcolor: selectedDate === dateStr ? `${theme.brand.primary}20` : isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-            border: `1px solid ${theme.border.subtle}`,
-            borderRadius: 1,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-            '&:hover': {
-              bgcolor: `${theme.brand.primary}15`,
-              borderColor: `${theme.brand.primary}30`,
-              transform: 'translateX(4px)',
-            },
-          }}
-        >
-          <Typography sx={{ fontSize: 11, color: theme.text.muted, mb: 0.5 }}>
-            {new Date(event.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: theme.text.primary, fontWeight: 500 }}>{event.title}</Typography>
-        </Box>
-      ));
-    });
+  useEffect(() => {
+    if (activeWeek) loadWeek(activeWeek.start, activeWeek.end);
+  }, [activeWeekIdx, year, month, minImportance, eventFilter]);
+
+  useEffect(() => { setWeekData({}); }, [minImportance, eventFilter]);
+
+  const currentKey = activeWeek
+    ? `${fmtDate(activeWeek.start)}_${fmtDate(activeWeek.end)}_${minImportance}_${eventFilter}`
+    : '';
+  const currentData = weekData[currentKey];
+  const isLoading = !currentData || currentData.loading;
+  const eventsByDate = currentData?.events || {};
+  const sortedDates = Object.keys(eventsByDate).sort();
+
+  const goWeek = (dir: number) => {
+    const nextIdx = activeWeekIdx + dir;
+    if (nextIdx < 0) {
+      let m = month - 1, y = year;
+      if (m < 0) { m = 11; y--; }
+      setMonth(m); setYear(y); setActiveWeekIdx(-1); setWeekData({});
+    } else if (nextIdx >= weeks.length) {
+      let m = month + 1, y = year;
+      if (m > 11) { m = 0; y++; }
+      setMonth(m); setYear(y); setActiveWeekIdx(0); setWeekData({});
+    } else {
+      setActiveWeekIdx(nextIdx);
+    }
   };
 
-  // Timeline (right panel)
-  const renderTimeline = () => {
-    const sortedDates = Object.keys(events).sort().reverse();
-
-    if (sortedDates.length === 0) {
-      return (
-        <Box sx={{ textAlign: 'center', p: 7.5, color: theme.text.muted }}>
-          <EventIcon size={64} style={{ marginBottom: 16, opacity: 0.3 }} />
-          <Typography variant="h6">No events found</Typography>
-          <Typography variant="body2">Try selecting a different month or filter</Typography>
-        </Box>
-      );
-    }
-
-    return sortedDates.map((dateStr) => {
-      const dayEvents = events[dateStr];
-      const dateObj = new Date(dateStr);
-      const formattedDate = dateObj.toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-
-      const isSelectedDateGroup = selectedDate === dateStr;
-
-      return (
-        <Box
-          key={dateStr}
-          id={`date-group-${dateStr}`}
-          sx={{
-            mb: 3,
-            bgcolor: isSelectedDateGroup ? `${theme.brand.primary}08` : 'transparent',
-            borderRadius: isSelectedDateGroup ? 1.5 : 0,
-            p: isSelectedDateGroup ? 2 : 0,
-          }}
-        >
-          <Typography
-            sx={{
-              fontSize: 16,
-              fontWeight: 600,
-              color: theme.brand.primary,
-              mb: 1.5,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-            }}
-          >
-            <EventIcon size={18} />
-            {formattedDate}
-          </Typography>
-
-          {dayEvents.map((event, idx) => {
-            const eventId = event.id || `${event.title}_${event.start_date}`;
-
-            return (
-              <Box
-                key={idx}
-                sx={{
-                  mb: 1.5,
-                  p: 2,
-                  bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                  border: `1px solid ${theme.border.subtle}`,
-                  borderRadius: 1.5,
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  cursor: 'pointer',
-                  '&:hover': {
-                    bgcolor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                    borderColor: `${theme.brand.primary}30`,
-                    transform: 'translateX(4px)',
-                    boxShadow: `0 4px 12px ${theme.brand.primary}25`,
-                  },
-                }}
-              >
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                  <Typography sx={{ fontSize: 16, fontWeight: 600, color: theme.text.primary, flex: 1 }}>{event.title}</Typography>
-                  <Box
-                    sx={{
-                      fontSize: 11,
-                      px: 1.25,
-                      py: 0.5,
-                      borderRadius: 1.5,
-                      fontWeight: 500,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.5,
-                      ...(event.event_type === 'fomc' && {
-                        bgcolor: `${theme.brand.primary}30`,
-                        color: theme.brand.primary,
-                        border: `1px solid ${theme.brand.primary}50`,
-                      }),
-                      ...(event.event_type === 'earnings' && {
-                        bgcolor: 'rgba(76, 175, 80, 0.2)',
-                        color: '#4caf50',
-                        border: '1px solid rgba(76, 175, 80, 0.3)',
-                      }),
-                      ...(event.event_type !== 'fomc' && event.event_type !== 'earnings' && {
-                        bgcolor: 'rgba(255, 152, 0, 0.2)',
-                        color: '#ff9800',
-                        border: '1px solid rgba(255, 152, 0, 0.3)',
-                      }),
-                    }}
-                  >
-                    {event.event_type === 'fomc' ? 'FOMC' :
-                     event.event_type === 'earnings' ? 'Earnings' : 'Economic Data'}
-                  </Box>
-                </Box>
-
-                {event.description && (
-                  <Typography sx={{ fontSize: 13, color: theme.text.secondary, mb: 1 }}>{event.description}</Typography>
-                )}
-
-                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                  {event.importance && (
-                    <Box
-                      sx={{
-                        fontSize: 10,
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: 1.25,
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        ...(event.importance === 'critical' && { bgcolor: 'rgba(244, 67, 54, 0.2)', color: '#f44336' }),
-                        ...(event.importance === 'high' && { bgcolor: 'rgba(255, 152, 0, 0.2)', color: '#ff9800' }),
-                        ...(event.importance === 'medium' && { bgcolor: 'rgba(255, 235, 59, 0.2)', color: '#ffc107' }),
-                      }}
-                    >
-                      {event.importance}
-                    </Box>
-                  )}
-
-                  {event.status && (
-                    <Typography sx={{ fontSize: 12, color: theme.text.muted, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      {event.status === 'past' ? '✅' : event.status === 'ongoing' ? '🔴' : '🔜'} {event.status === 'past' ? 'Past' : event.status === 'ongoing' ? 'Live' : 'Upcoming'}
-                    </Typography>
-                  )}
-
-                  {event.event_type === 'fomc' && (
-                    <>
-                      {event.has_press_conference && (
-                        <Typography sx={{ fontSize: 12, color: theme.text.muted, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          Press Conference
-                        </Typography>
-                      )}
-                      {event.has_economic_projections && (
-                        <Typography sx={{ fontSize: 12, color: theme.text.muted, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          Economic Projections
-                        </Typography>
-                      )}
-                    </>
-                  )}
-                </Box>
-
-                {/* Economic Data Display */}
-                {event.status === 'past' && event.event_type !== 'fomc' &&
-                 (event.actual !== null || event.forecast !== null || event.previous !== null) && (
-                  <Box
-                    sx={{
-                      mt: 1.5,
-                      p: 1.5,
-                      bgcolor: `${theme.brand.primary}12`,
-                      borderRadius: 1,
-                      border: `1px solid ${theme.brand.primary}30`,
-                    }}
-                  >
-                    <Typography sx={{ fontSize: 12, fontWeight: 600, color: theme.brand.primary, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                      经济数据 ECONOMIC DATA
-                    </Typography>
-                    <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {event.forecast !== null && (
-                        <Box>
-                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>预测值 Forecast</Typography>
-                          <Typography sx={{ fontSize: 16, fontWeight: 600, color: '#ff9800' }}>{event.forecast}</Typography>
-                        </Box>
-                      )}
-                      {event.previous !== null && (
-                        <Box>
-                          <Typography sx={{ fontSize: 11, color: theme.text.muted }}>前值 Previous</Typography>
-                          <Typography sx={{ fontSize: 16, fontWeight: 600, color: theme.text.secondary }}>{event.previous}</Typography>
-                        </Box>
-                      )}
-                    </Box>
-                  </Box>
-                )}
-
-                {/* AI Button */}
-                <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
-                  <Button
-                    size="small"
-                    onClick={(e) => analyzeEvent(event, e)}
-                    startIcon={<AIIcon size={14} />}
-                    sx={{
-                      px: 2,
-                      py: 0.75,
-                      fontSize: 12,
-                      background: 'linear-gradient(135deg, rgba(138, 43, 226, 0.1) 0%, rgba(75, 0, 130, 0.1) 100%)',
-                      border: '1px solid rgba(138, 43, 226, 0.2)',
-                      borderRadius: 1,
-                      color: '#c8a2ff',
-                      textTransform: 'none',
-                      '&:hover': {
-                        background: 'linear-gradient(135deg, rgba(138, 43, 226, 0.2) 0%, rgba(75, 0, 130, 0.15) 100%)',
-                        borderColor: 'rgba(138, 43, 226, 0.4)',
-                      },
-                    }}
-                  >
-                    AI解读
-                  </Button>
-                </Box>
-
-                {/* AI Analysis Card */}
-                {expandedAnalysis === eventId && (
-                  <Box
-                    sx={{
-                      mt: 2,
-                      background: 'linear-gradient(135deg, rgba(138, 43, 226, 0.08) 0%, rgba(75, 0, 130, 0.08) 100%)',
-                      border: '1px solid rgba(138, 43, 226, 0.2)',
-                      borderRadius: 1.5,
-                      p: 2.5,
-                      animation: 'fadeIn 0.3s ease-in-out',
-                      '@keyframes fadeIn': {
-                        from: { opacity: 0, transform: 'translateY(-10px)' },
-                        to: { opacity: 1, transform: 'translateY(0)' },
-                      },
-                    }}
-                  >
-                    {analysisResults[eventId]?.loading ? (
-                      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', p: '30px 20px', gap: 2 }}>
-                        <LoadingDots text="AI analyzing" fontSize={14} color="#c8a2ff" />
-                        {analysisResults[eventId]?.streamContent && (
-                          <Typography sx={{ color: theme.text.primary, fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
-                            {analysisResults[eventId].streamContent}
-                          </Typography>
-                        )}
-                      </Box>
-                    ) : analysisResults[eventId]?.error ? (
-                      <Typography sx={{ p: 2.5, textAlign: 'center', color: '#f44336', fontSize: 14 }}>
-                        {analysisResults[eventId].error}
-                      </Typography>
-                    ) : analysisResults[eventId]?.analysis ? (
-                      <Box>
-                        <Box
-                          sx={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1.5,
-                            mb: 2,
-                            pb: 1.5,
-                            borderBottom: '1px solid rgba(200, 162, 255, 0.15)',
-                          }}
-                        >
-                          <Typography sx={{ fontSize: 14, color: theme.text.muted, fontWeight: 500 }}>
-                            Impact:
-                          </Typography>
-                          <Chip
-                            label={
-                              analysisResults[eventId].impact === 'positive' ? 'Positive' :
-                              analysisResults[eventId].impact === 'negative' ? 'Negative' : 'Neutral'
-                            }
-                            size="small"
-                            sx={{
-                              bgcolor:
-                                analysisResults[eventId].impact === 'positive' ? 'rgba(76, 175, 80, 0.2)' :
-                                analysisResults[eventId].impact === 'negative' ? 'rgba(244, 67, 54, 0.2)' :
-                                'rgba(158, 158, 158, 0.2)',
-                              color:
-                                analysisResults[eventId].impact === 'positive' ? '#4caf50' :
-                                analysisResults[eventId].impact === 'negative' ? '#f44336' : '#9e9e9e',
-                              border: `1px solid ${
-                                analysisResults[eventId].impact === 'positive' ? 'rgba(76, 175, 80, 0.4)' :
-                                analysisResults[eventId].impact === 'negative' ? 'rgba(244, 67, 54, 0.4)' :
-                                'rgba(158, 158, 158, 0.4)'
-                              }`,
-                              fontSize: 13,
-                              fontWeight: 600,
-                            }}
-                          />
-                        </Box>
-                        <Typography sx={{ color: theme.text.primary, fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
-                          {analysisResults[eventId].analysis}
-                        </Typography>
-                      </Box>
-                    ) : null}
-                  </Box>
-                )}
-              </Box>
-            );
-          })}
-        </Box>
-      );
-    });
-  };
-
-  if (loading) {
-    return (
-      <Box
-        sx={{
-          height: isCompact ? 'calc(100vh - 48px)' : '100vh',
-          width: '100%',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          flexDirection: 'column',
-          gap: 2,
-          bgcolor: theme.background.primary,
-          m: isCompact ? -2 : -3,
-        }}
-      >
-        <LoadingDots text="Loading events" fontSize={16} />
-      </Box>
-    );
-  }
+  const weekLabel = activeWeek ? `${year} ${activeWeek.label}` : '';
+  const lineColor = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
 
   return (
     <Box
       sx={{
         height: isCompact ? 'calc(100vh - 48px)' : '100vh',
         width: isCompact ? 'calc(100% + 32px)' : 'calc(100% + 48px)',
-        display: 'flex',
-        flexDirection: 'row',
+        m: isCompact ? -2 : -3,
         bgcolor: theme.background.primary,
         color: theme.text.primary,
-        overflow: 'hidden',
-        m: isCompact ? -2 : -3,
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}
     >
-      {/* Left Panel: Calendar */}
+      {/* ─── Header ─── */}
       <Box
         sx={{
-          width: '340px',
-          minWidth: '340px',
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRight: `1px solid ${theme.border.default}`,
-          bgcolor: theme.background.secondary,
+          px: 2.5, py: 1.25, flexShrink: 0,
+          borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+          display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
         }}
       >
-        <Box sx={{ p: 2.5, borderBottom: `1px solid ${theme.border.default}` }}>
-          <Typography sx={{ fontSize: 20, fontWeight: 600, color: theme.text.primary }}>
-            Economic Calendar
+        {/* Week nav */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box
+            onClick={() => goWeek(-1)}
+            sx={{
+              cursor: 'pointer', p: 0.5, borderRadius: '6px',
+              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
+            }}
+          >
+            <ChevronLeft size={16} color={theme.text.muted} />
+          </Box>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: theme.text.primary, minWidth: 170, textAlign: 'center', letterSpacing: '-0.2px' }}>
+            {weekLabel}
           </Typography>
+          <Box
+            onClick={() => goWeek(1)}
+            sx={{
+              cursor: 'pointer', p: 0.5, borderRadius: '6px',
+              '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
+            }}
+          >
+            <ChevronRight size={16} color={theme.text.muted} />
+          </Box>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: '16px 12px' }}>
-          <IconButton onClick={goToPreviousMonth} size="small" sx={{ color: theme.text.secondary, '&:hover': { bgcolor: `${theme.brand.primary}15`, color: theme.brand.primary } }}>
-            <ChevronLeftIcon />
-          </IconButton>
-          <Typography sx={{ fontSize: 18, fontWeight: 500, color: theme.brand.primary, letterSpacing: 0.5 }}>
-            {currentDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}
+        <Box sx={{ width: 1, height: 16, bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
+
+        {/* Type filter — segmented control */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center',
+          bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.025)',
+          borderRadius: '8px', p: '2px',
+        }}>
+          {FILTERS.map((f) => (
+            <Box
+              key={f.key}
+              onClick={() => setEventFilter(f.key)}
+              sx={{
+                px: 1.25, py: 0.35, borderRadius: '6px', cursor: 'pointer',
+                bgcolor: eventFilter === f.key ? (isDark ? 'rgba(255,255,255,0.08)' : '#fff') : 'transparent',
+                boxShadow: eventFilter === f.key ? (isDark ? 'none' : '0 1px 2px rgba(0,0,0,0.06)') : 'none',
+                transition: 'all 0.15s',
+              }}
+            >
+              <Typography sx={{
+                fontSize: 11, fontWeight: eventFilter === f.key ? 600 : 400,
+                color: eventFilter === f.key ? theme.text.primary : theme.text.muted,
+                whiteSpace: 'nowrap',
+              }}>
+                {f.label}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+
+        <Box sx={{ width: 1, height: 16, bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
+
+        {/* Importance filter */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 0.25,
+          bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.025)',
+          borderRadius: '8px', p: '2px',
+        }}>
+          <Box sx={{ px: 0.5, display: 'flex', alignItems: 'center' }}>
+            <Filter size={11} color={theme.text.disabled} />
+          </Box>
+          {IMPORTANCE_FILTERS.map((f) => (
+            <Box
+              key={f.key}
+              onClick={() => setMinImportance(f.key)}
+              sx={{
+                px: 1, py: 0.3, borderRadius: '6px', cursor: 'pointer',
+                bgcolor: minImportance === f.key ? (isDark ? 'rgba(255,255,255,0.08)' : '#fff') : 'transparent',
+                boxShadow: minImportance === f.key ? (isDark ? 'none' : '0 1px 2px rgba(0,0,0,0.06)') : 'none',
+                transition: 'all 0.15s',
+              }}
+            >
+              <Typography sx={{
+                fontSize: 10, fontWeight: minImportance === f.key ? 600 : 400,
+                color: minImportance === f.key ? theme.text.primary : theme.text.muted,
+              }}>
+                {f.label}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+
+        {!isLoading && currentData && (
+          <Typography sx={{ fontSize: 11, color: theme.text.disabled, ml: 'auto' }}>
+            {currentData.total} 条
           </Typography>
-          <IconButton onClick={goToNextMonth} size="small" sx={{ color: theme.text.secondary, '&:hover': { bgcolor: `${theme.brand.primary}15`, color: theme.brand.primary } }}>
-            <ChevronRightIcon />
-          </IconButton>
-        </Box>
-
-        {renderCalendar()}
-
-        <Divider sx={{ borderColor: theme.border.subtle }} />
-
-        <Box
-          sx={{
-            flex: 1,
-            overflowY: 'auto',
-            p: 1.5,
-            '&::-webkit-scrollbar': { width: 6 },
-            '&::-webkit-scrollbar-track': { background: 'transparent' },
-            '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}50`, borderRadius: 3 },
-          }}
-        >
-          {renderEventList()}
-        </Box>
+        )}
       </Box>
 
-      {/* Right Panel: Timeline */}
-      <Box sx={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <Box sx={{ p: '20px 24px', bgcolor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)', borderBottom: `1px solid ${theme.border.default}` }}>
-          <Typography sx={{ fontSize: 24, fontWeight: 600, color: theme.text.primary, mb: 1 }}>
-            Economic Events Timeline
-          </Typography>
-          <Typography sx={{ fontSize: 14, color: theme.text.muted, mb: 2 }}>
-            Track FOMC meetings, company earnings, and key economic data releases
-          </Typography>
-
-          <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
-            {[
-              { key: 'all', label: '全部 All', icon: <AssessmentIcon size={18} /> },
-              { key: 'fomc', label: 'FOMC会议', icon: <StarIcon size={18} /> },
-              { key: 'employment', label: '就业数据', icon: <TrendingUpIcon size={18} /> },
-              { key: 'inflation', label: '通胀数据', icon: <TrendingUpIcon size={18} /> },
-              { key: 'consumption,gdp', label: '消费&GDP', icon: <AssessmentIcon size={18} /> },
-            ].map((filter) => (
-              <Chip
-                key={filter.key}
-                label={filter.label}
-                onClick={() => setSelectedFilter(filter.key as EventFilterType)}
-                icon={filter.icon}
+      {/* ─── Timeline ─── */}
+      <Box
+        sx={{
+          flex: 1, overflowY: 'auto',
+          '&::-webkit-scrollbar': { width: 4 },
+          '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+          '&::-webkit-scrollbar-thumb': { bgcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', borderRadius: 4 },
+        }}
+      >
+        <Box sx={{ maxWidth: 720, mx: 'auto', px: isCompact ? 1.5 : 3, py: 3 }}>
+          {isLoading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 12, gap: 1.5 }}>
+              <CircularProgress size={18} sx={{ color: theme.text.muted }} />
+              <Typography sx={{ fontSize: 12, color: theme.text.muted }}>加载中...</Typography>
+            </Box>
+          ) : sortedDates.length === 0 ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 12, gap: 1.5 }}>
+              <Calendar size={24} color={theme.text.disabled} strokeWidth={1.5} />
+              <Typography sx={{ fontSize: 13, color: theme.text.muted }}>本周无符合条件的事件</Typography>
+            </Box>
+          ) : (
+            <Box sx={{ position: 'relative' }}>
+              {/* Main vertical timeline line */}
+              <Box
                 sx={{
-                  bgcolor: selectedFilter === filter.key ? `${theme.brand.primary}30` : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                  color: selectedFilter === filter.key ? theme.brand.primary : theme.text.secondary,
-                  border: `1px solid ${selectedFilter === filter.key ? `${theme.brand.primary}50` : theme.border.subtle}`,
-                  '&:hover': {
-                    bgcolor: `${theme.brand.primary}20`,
-                    borderColor: `${theme.brand.primary}30`,
-                  },
+                  position: 'absolute',
+                  left: `${TL_LEFT - 1}px`,
+                  top: 18,
+                  bottom: 18,
+                  width: '2px',
+                  bgcolor: lineColor,
+                  zIndex: 0,
                 }}
               />
-            ))}
-          </Box>
-
-          {stats && (
-            <Box sx={{ display: 'flex', gap: 2, mt: 2, flexWrap: 'wrap' }}>
-              <Box sx={{ flex: 1, minWidth: 150, p: '12px 16px', bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: `1px solid ${theme.border.subtle}`, borderRadius: 1 }}>
-                <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5 }}>Total Events</Typography>
-                <Typography sx={{ fontSize: 24, fontWeight: 500, color: theme.brand.primary }}>{stats.total || 0}</Typography>
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 150, p: '12px 16px', bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: `1px solid ${theme.border.subtle}`, borderRadius: 1 }}>
-                <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5 }}>FOMC Meetings</Typography>
-                <Typography sx={{ fontSize: 24, fontWeight: 500, color: theme.brand.primary }}>{stats.by_type?.fomc || 0}</Typography>
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 150, p: '12px 16px', bgcolor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: `1px solid ${theme.border.subtle}`, borderRadius: 1 }}>
-                <Typography sx={{ fontSize: 12, color: theme.text.muted, mb: 0.5 }}>Earnings Reports</Typography>
-                <Typography sx={{ fontSize: 24, fontWeight: 500, color: theme.brand.primary }}>{stats.by_type?.earnings || 0}</Typography>
-              </Box>
+              {sortedDates.map((date) => (
+                <DaySection key={date} date={date} events={eventsByDate[date]} theme={theme} isDark={isDark} />
+              ))}
             </Box>
           )}
-        </Box>
-
-        <Box
-          ref={timelineRef}
-          sx={{
-            flex: 1,
-            overflowY: 'auto',
-            p: 3,
-            '&::-webkit-scrollbar': { width: 8 },
-            '&::-webkit-scrollbar-track': { background: 'transparent' },
-            '&::-webkit-scrollbar-thumb': { background: `${theme.brand.primary}30`, borderRadius: 4 },
-          }}
-        >
-          {renderTimeline()}
         </Box>
       </Box>
     </Box>

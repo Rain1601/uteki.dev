@@ -58,6 +58,37 @@ export async function getEventStatistics(): Promise<StatisticsResponse> {
 }
 
 /**
+ * Get weekly events with importance/country filtering (paginated)
+ */
+export async function getWeeklyEvents(
+  start: string,
+  end: string,
+  minImportance: string = 'medium',
+  country: string = 'US',
+  eventType?: string,
+): Promise<MonthlyEventsResponse & { total?: number }> {
+  try {
+    const params: Record<string, string> = {
+      start,
+      end,
+      min_importance: minImportance,
+      country,
+    };
+    if (eventType && eventType !== 'all') {
+      params.event_type = eventType;
+    }
+    const data = await get<MonthlyEventsResponse & { total?: number }>(
+      '/api/economic-calendar/events/weekly',
+      { params },
+    );
+    return data;
+  } catch (error) {
+    console.error('Failed to fetch weekly events:', error);
+    return { success: false, data: {} };
+  }
+}
+
+/**
  * Get events for a specific date from pre-fetched data
  */
 export function getEventsForDate(

@@ -609,34 +609,73 @@ export default function AgentChatPage() {
   return (
     <Box
       sx={{
-        height: 'calc(100vh - 48px)',
+        height: '100vh',
         m: -3,
+        width: 'calc(100% + 48px)',
         display: 'flex',
         flexDirection: 'column',
-        bgcolor: theme.background.primary,
-        color: theme.text.primary,
+        // Editorial finance chrome — warm dark with paper-grain backdrop
+        bgcolor: '#15130F',
+        color: '#F4ECDF',
+        backgroundImage: `
+          radial-gradient(ellipse 1400px 700px at 8% -8%, rgba(168,137,110,0.06), transparent 60%),
+          radial-gradient(ellipse 900px 600px at 96% 108%, rgba(91,123,106,0.05), transparent 65%),
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.005) 0 1px, transparent 1px 3px)
+        `,
+        fontFamily: "'Newsreader', '宋体', Georgia, serif",
         position: 'relative',
         overflow: 'hidden',
       }}
     >
-      {/* Top bar — minimal, only when in chat */}
-      {!isEmpty && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            display: 'flex',
-            justifyContent: 'flex-end',
-            alignItems: 'center',
-            px: compact ? 1.5 : 3,
-            py: 1,
-            zIndex: 10,
-            pointerEvents: 'none',
-          }}
-        >
-          <Box sx={{ display: 'flex', gap: 0.75, pointerEvents: 'auto' }}>
+      {/* Editorial masthead — consistent with /dashboard, /news-timeline */}
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 3,
+          px: compact ? 3 : 6,
+          py: 3,
+          pb: 2,
+          borderBottom: `1px solid #2A262040`,
+          zIndex: 10,
+          pointerEvents: 'none',
+        }}
+      >
+        <Box sx={{ pointerEvents: 'none' }}>
+          <Typography
+            sx={{
+              fontFamily: "'Fraunces', 'Newsreader', '宋体', Georgia, serif",
+              fontStyle: 'italic',
+              fontWeight: 400,
+              fontSize: { xs: 28, md: 36 },
+              letterSpacing: '-0.025em',
+              lineHeight: 1,
+              color: '#F4ECDF',
+              fontVariationSettings: '"opsz" 144, "SOFT" 60',
+            }}
+          >
+            智能体助理
+          </Typography>
+          <Typography
+            sx={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: '0.32em',
+              textTransform: 'uppercase',
+              color: '#A8A097',
+              mt: 0.6,
+            }}
+          >
+            Agent Desk
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 0.75, pointerEvents: 'auto' }}>
+          {/* Original action buttons follow */}
             <IconButton
               onClick={() => setHistoryDrawerOpen(true)}
               size="small"
@@ -660,8 +699,7 @@ export default function AgentChatPage() {
               <AddIcon size={18} />
             </IconButton>
           </Box>
-        </Box>
-      )}
+      </Box>
 
       {/* Main content */}
       {isEmpty ? (
@@ -700,20 +738,35 @@ export default function AgentChatPage() {
             </IconButton>
           </Box>
 
-          {/* Welcome */}
-          <Typography
-            sx={{
-              fontSize: compact ? '1.5rem' : '1.75rem',
-              fontWeight: 400,
-              textAlign: 'center',
-              color: theme.text.secondary,
-              mb: 5,
-              letterSpacing: '-0.03em',
-              fontFamily: "'Times New Roman', Georgia, serif",
-            }}
-          >
-            What can I help with?
-          </Typography>
+          {/* Welcome — editorial masthead style */}
+          <Box sx={{ textAlign: 'center', mb: 5 }}>
+            <Typography
+              sx={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.32em',
+                textTransform: 'uppercase',
+                color: '#A8A097',
+                mb: 1.5,
+              }}
+            >
+              智能体助理 · Agent Desk
+            </Typography>
+            <Typography
+              sx={{
+                fontSize: compact ? '2rem' : '2.5rem',
+                fontWeight: 400,
+                fontStyle: 'italic',
+                color: '#F4ECDF',
+                letterSpacing: '-0.03em',
+                fontFamily: "'Fraunces', '宋体', Georgia, serif",
+                fontVariationSettings: '"opsz" 144, "SOFT" 60',
+                lineHeight: 1.1,
+              }}
+            >
+              今天想研究什么？
+            </Typography>
+          </Box>
 
           {renderComposer()}
         </Box>
