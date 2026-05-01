@@ -18,19 +18,31 @@ CACHE_KEY_PREFIX = "uteki:company:data:"
 CACHE_TTL = 7 * 24 * 3600  # 7 days
 
 
-async def fetch_company_data(symbol: str) -> dict:
-    """Async wrapper — uses cache, falls back to yfinance in thread pool."""
+async def fetch_company_data(symbol: str, as_of: Optional[str] = None) -> dict:
+    """Async wrapper — uses cache, falls back to yfinance in thread pool.
+
+    The cache key is namespaced by `as_of` so historical-backtest runs do not
+    pollute the live ("now") snapshot — and vice versa. Today's runs cache
+    under `:now`, while as_of=2025-11-01 caches under `:2025-11-01`.
+
+    NOTE: yfinance fundamentally only knows the *current* state of the world,
+    so a historical as_of run still gets today's values. The point-in-time
+    truth comes from the FMP/EDGAR seeders. Namespacing the cache only stops
+    cross-as_of pollution; see seed_from_company_data() for the published_at
+    tag that lets the catalog filter these DataPoints by as_of.
+    """
     symbol = symbol.upper()
     cache = get_cache_service()
-    cache_key = f"{CACHE_KEY_PREFIX}{symbol}"
+    as_of_tag = (as_of or "now")[:10]
+    cache_key = f"{CACHE_KEY_PREFIX}{symbol}:{as_of_tag}"
 
     cached = await cache.get(cache_key)
     if cached is not None:
-        logger.info(f"[financials] cache hit for {symbol}")
+        logger.info(f"[financials] cache hit for {symbol} (as_of={as_of_tag})")
         cached["_cache_meta"] = {"cached": True, "fetched_at": cached.get("_fetched_at", ""), "cache_ttl_hours": CACHE_TTL // 3600}
         return cached
 
-    logger.info(f"[financials] cache miss for {symbol}, fetching from yfinance")
+    logger.info(f"[financials] cache miss for {symbol} (as_of={as_of_tag}), fetching from yfinance")
     loop = asyncio.get_event_loop()
     try:
         data = await loop.run_in_executor(None, _fetch_sync, symbol)
@@ -39,6 +51,7 @@ async def fetch_company_data(symbol: str) -> dict:
         return {"symbol": symbol, "error": str(e)}
 
     data["_fetched_at"] = datetime.now(timezone.utc).isoformat()
+    data["_as_of_tag"] = as_of_tag
     try:
         await cache.set(cache_key, data, ttl=CACHE_TTL)
     except Exception as e:
@@ -47,12 +60,26 @@ async def fetch_company_data(symbol: str) -> dict:
     return data
 
 
-async def invalidate_company_cache(symbol: str) -> None:
-    """Delete cached company data for a symbol."""
+async def invalidate_company_cache(symbol: str, as_of: Optional[str] = None) -> None:
+    """Delete cached company data for a symbol.
+
+    With `as_of=None`, removes ALL cache entries for the symbol (both the live
+    `:now` and any historical `:YYYY-MM-DD` namespaces). Pass an explicit
+    `as_of` to only flush one namespace.
+    """
     cache = get_cache_service()
-    cache_key = f"{CACHE_KEY_PREFIX}{symbol.upper()}"
-    await cache.delete(cache_key)
-    logger.info(f"[financials] cache invalidated for {symbol.upper()}")
+    sym = symbol.upper()
+    if as_of is None:
+        # Best-effort: try to delete all known namespaces. CacheService doesn't
+        # expose a key-pattern delete, so we delete the common ones.
+        for tag in ("now",):
+            await cache.delete(f"{CACHE_KEY_PREFIX}{sym}:{tag}")
+        # Legacy un-namespaced key (pre-as_of cache layout)
+        await cache.delete(f"{CACHE_KEY_PREFIX}{sym}")
+        logger.info(f"[financials] cache invalidated for {sym} (all namespaces)")
+    else:
+        await cache.delete(f"{CACHE_KEY_PREFIX}{sym}:{as_of[:10]}")
+        logger.info(f"[financials] cache invalidated for {sym} (as_of={as_of[:10]})")
 
 
 def _fetch_sync(symbol: str) -> dict:
@@ -417,9 +444,17 @@ def _safe_number(v) -> Optional[float]:
 
 # ── Prompt Formatting ────────────────────────────────────────────────────────
 
-def format_company_data_for_prompt(d: dict) -> str:
+def format_company_data_for_prompt(d: dict, as_of: Optional[str] = None) -> str:
     """Render company data as structured text for LLM prompt injection.
-    Organized by analytical framework with [数据缺失] markers for missing data."""
+
+    Organized by analytical framework with [数据缺失] markers for missing data.
+
+    When `as_of` is provided (historical backtest), prepends a SNAPSHOT header
+    that warns the model: yfinance is a "today" source, so the values below
+    may be temporally inconsistent with the FMP/EDGAR period-anchored data.
+    The model should weight period-anchored sources more heavily for the
+    historical view.
+    """
     profile = d.get("profile", {})
     price = d.get("price_data", {})
     prof = d.get("profitability", {})
@@ -464,6 +499,28 @@ def format_company_data_for_prompt(d: dict) -> str:
         return f"{v}/10"
 
     lines = []
+
+    # ── Section 0: SNAPSHOT header (only when historical / as_of given) ────
+    if as_of:
+        lines += [
+            f"=== ⧗ DATA SNAPSHOT · 时间锚点 = {as_of} ===",
+            (
+                "⚠ 重要：以下 yfinance 字段（价格、市值、利润率、机构持股等）是从"
+                f" yahoo finance 当前快照取得，但分析的目标时间锚点为 {as_of}。"
+                "这些字段对历史回测属于「best-effort proxy」，**不是真正的"
+                f" point-in-time 数据**。"
+            ),
+            (
+                "→ 财务报表（FMP）和 SEC 10-K/Q（EDGAR）按 filing_date ≤"
+                f" {as_of} 严格过滤，是该时间点的真实数据，引用时优先使用。"
+            ),
+            (
+                "→ 当前价、市值、PE、margin 等 yfinance 快照在历史回测里"
+                "**confidence 已降为 low**，仅作背景参考；估值判断必须基于"
+                "FMP 财报数据 + 当时新闻（Google CSE）的综合推理。"
+            ),
+            "",
+        ]
 
     # ── Section 1: 公司概况 (Profile + Management) ────────────────────────
     lines += [

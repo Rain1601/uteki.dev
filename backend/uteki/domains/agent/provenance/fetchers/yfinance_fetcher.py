@@ -78,11 +78,18 @@ def seed_from_company_data(
     """
     fetched_at = company_data.get("_fetched_at") or datetime.now(timezone.utc).isoformat()
     symbol = (company_data.get("profile") or {}).get("symbol", "")
-    # Best-effort fiscal anchor: yfinance ticker.info sometimes carries
-    # `mostRecentQuarter` as a unix timestamp. We don't have it in this dict
-    # (only inside info), so we fall back to None — Phase β.5 (FMP) will
-    # provide proper period_end timestamps.
-    fiscal_anchor: Optional[str] = None
+
+    # Each yfinance metric is a "snapshot at fetch time". Stamp it with the
+    # caller's as_of when one is given (historical backtest), or with today's
+    # date otherwise. This lets the catalog's as_of filter actually screen
+    # these DataPoints — without it, every yfinance DP has published_at=None
+    # and silently passes any time-window check.
+    snapshot_anchor = (as_of or fetched_at[:10]) if isinstance(fetched_at, str) else as_of
+
+    # When as_of is set (historical mode), yfinance is fundamentally a "today"
+    # source, so the snapshot is at best a proxy. Drop confidence accordingly
+    # so the model can weight these less than FMP/EDGAR filings.
+    historical_mode = as_of is not None
 
     ids: list[int] = []
     for (bucket, field), (key, label) in _METRIC_KEYS.items():
@@ -97,9 +104,14 @@ def seed_from_company_data(
         # - high for symbol-identifying fields (sector, industry) — these
         #   are reasonably stable
         # - medium otherwise (yfinance is reliable but lacks fresh timestamps)
-        confidence = "medium"
+        # - low in historical mode for any non-profile field (price/margin
+        #   snapshots are fundamentally not point-in-time)
         if bucket == "profile":
             confidence = "high"
+        elif historical_mode:
+            confidence = "low"
+        else:
+            confidence = "medium"
 
         sid = catalog.add({
             "key": f"yf:{symbol}:{key}",
@@ -107,7 +119,7 @@ def seed_from_company_data(
             "source_type": "yfinance",
             "source_url": f"https://finance.yahoo.com/quote/{symbol}" if symbol else None,
             "publisher": "Yahoo Finance",
-            "published_at": fiscal_anchor,
+            "published_at": snapshot_anchor,
             "fetched_at": fetched_at,
             "confidence": confidence,
             "excerpt": f"{label} ({field}): {value}",

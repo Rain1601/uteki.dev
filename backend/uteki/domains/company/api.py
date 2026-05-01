@@ -142,9 +142,9 @@ async def _resolve_model(
     return None
 
 
-async def _fetch_and_validate(symbol: str) -> dict:
+async def _fetch_and_validate(symbol: str, as_of: str | None = None) -> dict:
     """Fetch company data and validate it."""
-    company_data = await fetch_company_data(symbol)
+    company_data = await fetch_company_data(symbol, as_of=as_of)
     if "error" in company_data:
         raise HTTPException(
             status_code=400,
@@ -249,7 +249,7 @@ async def analyze_company(
             detail="未找到可用的 LLM 配置。请在 Admin > Models 中添加 API Key。",
         )
 
-    company_data = await _fetch_and_validate(req.symbol)
+    company_data = await _fetch_and_validate(req.symbol, as_of=req.as_of)
 
     logger.info(
         f"[company] starting pipeline: symbol={req.symbol} "
@@ -281,7 +281,7 @@ async def analyze_company_stream(
             detail="未找到可用的 LLM 配置。请在 Admin > Models 中添加 API Key。",
         )
 
-    company_data = await _fetch_and_validate(req.symbol)
+    company_data = await _fetch_and_validate(req.symbol, as_of=req.as_of)
     user_id = user.get("user_id", "default")
 
     queue: asyncio.Queue = asyncio.Queue()

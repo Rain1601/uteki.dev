@@ -1604,7 +1604,7 @@ class CompanySkillRunner:
         self.as_of = as_of
 
     async def run_pipeline(self) -> dict:
-        data_text = format_company_data_for_prompt(self.company_data)
+        data_text = format_company_data_for_prompt(self.company_data, as_of=self.as_of)
         symbol = self.company_data.get("profile", {}).get("symbol", "")
 
         # ── Provenance: build catalog and seed authoritative sources ──
